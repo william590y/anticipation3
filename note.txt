@@ -1,0 +1,2 @@
+convert.py -> midi_to_compound: converts midi object to tokens
+midi-preprocess.py -> convert_midi: converts midi file to midi object and passes to midi_to_compound
