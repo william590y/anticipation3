@@ -1,4 +1,11 @@
-created annotation_mapping.py to map between beat and downbeat times in score and performance
+1. created annotation_mapping.compare_annotations to map between beat and downbeat times in score and performance
+2. this is used by ops.anticipate2 which implements the interleave between controls and events using the interpolated mapping.
+   this also omits events and controls that happen before the first beat or after the last beat, in which the interpolant is not defined.
+3. tokenize.tokenize2 then converts a given list of files (MIDI score/performance and annotations) to interleaved sequences of length 1024,
+   also making sure to pad the events (add rests so that the desired density is reached) 
+4. finally, define tokenize-asap.py which passes all the ASAP data to tokenize2 and outputs into one file data/output.txt.
 
-convert.py -> midi_to_compound: converts midi object to tokens
-midi-preprocess.py -> convert_midi: converts midi file to midi object and passes to midi_to_compound
+Potential problems:
+- there are 31 annotation files between score and performance that don't match. 
+- My solution was to choose the one with smaller length n and match together the first n many beats. But it's possible that the mismatch happens
+in between, not at the end. If needed, I can manually remove these files later on.

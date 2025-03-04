@@ -214,7 +214,7 @@ def anticipate2(events, controls, map, delta=DELTA*TIME_RESOLUTION):
                        if domain_min <= t[0]/TIME_RESOLUTION <= domain_max]
     
     filtered_controls = [t for t in list(zip(controls[0::3], controls[1::3], controls[2::3])) \
-                       if range_min <= t[0]/TIME_RESOLUTION <= range_max]
+                       if range_min <= (t[0]-CONTROL_OFFSET)/TIME_RESOLUTION <= range_max]
     
     tokens = []
     control_time = filtered_controls[0][0] - ATIME_OFFSET
