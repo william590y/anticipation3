@@ -9,7 +9,8 @@ import numpy as np
 from anticipation import ops
 from anticipation.config import *
 from anticipation.vocab import *
-from anticipation.convert import compound_to_events, midi_to_interarrival
+from anticipation.convert import compound_to_events, midi_to_interarrival, midi_to_compound
+from annotation_mapping import compare_annotations
 
 
 def extract_spans(all_events, rate):
@@ -73,6 +74,10 @@ def extract_instruments(all_events, instruments):
 
 
 def maybe_tokenize(compound_tokens):
+    """
+    Tokenizes a sequence of compound tokens if the length is appropriate.
+    Returns the list of events and truncations (number of notes above 10s that were truncated)
+    """
     # skip sequences with very few events
     if len(compound_tokens) < COMPOUND_SIZE*MIN_TRACK_EVENTS:
         return None, None, 1 # short track
@@ -136,6 +141,15 @@ def tokenize_ia(datafiles, output, augment_factor, idx=0, debug=False):
 
 
 def tokenize(datafiles, output, augment_factor, idx=0, debug=False):
+    """
+    Applies anticipatory tokenization to a list of datafiles, writing the results to output.
+    1. These datafiles should be .txt files containing compound tokenizations, which are converted
+       to events via maybe_tokenize.
+    2. Creates controls out of the events via augment_factor, or no augmentation (pure autoregression)
+       if augment_factor == 1.
+    3. Calls anticipate() to interleave controls and events
+    4. Splits the tokens into sequences of length 1023, which are written to the output
+    """
     tokens = []
     all_truncations = 0
     seqcount = rest_count = 0
@@ -211,6 +225,73 @@ def tokenize(datafiles, output, augment_factor, idx=0, debug=False):
 
                     # grab the current augmentation controls if we didn't already
                     z = ANTICIPATE if k % 10 != 0 else AUTOREGRESS
+
+    if debug:
+        fmt = 'Processed {} sequences (discarded {} tracks, discarded {} seqs, added {} rest tokens)'
+        print(fmt.format(seqcount, stats[0]+stats[1]+stats[2], stats[3], rest_count))
+
+    return (seqcount, rest_count, stats[0], stats[1], stats[2], stats[3], all_truncations)
+
+
+def tokenize2(datafiles, output, idx=0, debug=False):
+    """
+    Applies anticipatory tokenization to a list of datafiles where each is a tuple
+    (file1, file2, file3, file4) with 
+    1. file1 being the path to the performance MIDI file
+    2. file2 being the path to the score MIDI file
+    3. file3 being the path to the performance annotation file
+    4. file4 being the path to the score annotation file
+    """
+    tokens = []
+    all_truncations = 0
+    seqcount = rest_count = 0
+    stats = 4*[0] # (short, long, too many instruments, inexpressible)
+    np.random.seed(0)
+
+    with open(output, 'w') as outfile:
+        concatenated_tokens = []
+        for j, filegroup in tqdm(list(enumerate(datafiles)), desc=f'#{idx}', position=idx+1, leave=True):
+
+            file1, file2 = midi_to_compound(filegroup[0]), midi_to_compound(filegroup[1])
+            file3, file4 = filegroup[2], filegroup[3]
+
+            controls, truncations_c, _ = maybe_tokenize(file1)
+            all_events, truncations_e, _ = maybe_tokenize(file2)
+
+            z = ANTICIPATE
+
+            all_truncations += truncations_c + truncations_e
+
+            # only need to pad the events 
+            events = ops.pad(all_events, end_time=ops.max_time(all_events, seconds=False))
+
+            rest_count += sum(1 if tok == REST else 0 for tok in events[2::3])
+
+            map = compare_annotations(file4, file3) # create mapping from score to performance
+            tokens, controls = ops.anticipate2(events, controls, map)
+
+            assert len(controls) == 0 # should have consumed all controls (because of padding)
+            tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+            concatenated_tokens.extend(tokens)
+
+            # write sequences of length EVENT_SIZE*M = 1023 to the output file,
+            # any extra remain in concatenated_tokens for the next input file.      
+            while len(concatenated_tokens) >= EVENT_SIZE*M:
+                seq = concatenated_tokens[0:EVENT_SIZE*M]
+                concatenated_tokens = concatenated_tokens[EVENT_SIZE*M:]
+
+                # make sure each sequence starts at time 0
+                seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
+                assert ops.min_time(seq, seconds=False) == 0
+                if ops.max_time(seq, seconds=False) >= MAX_TIME:
+                    stats[3] += 1
+                    continue
+
+                # if seq contains SEPARATOR, global controls describe the first sequence
+                seq.insert(0, z)
+
+                outfile.write(' '.join([str(tok) for tok in seq]) + '\n')
+                seqcount += 1
 
     if debug:
         fmt = 'Processed {} sequences (discarded {} tracks, discarded {} seqs, added {} rest tokens)'

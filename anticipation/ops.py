@@ -119,6 +119,10 @@ def split(tokens):
 
 
 def pad(tokens, end_time=None, density=TIME_RESOLUTION):
+    """
+    Pads tokens up to end_time (if given) with REST (a special token value defined in vocab.py) 
+    up to a desired density. see Definition 3.5 and Example 3.6 in the paper.
+    """
     end_time = TIME_OFFSET+(end_time if end_time else max_time(tokens, seconds=False))
     new_tokens = []
     previous_time = TIME_OFFSET+0
@@ -182,6 +186,49 @@ def anticipate(events, controls, delta=DELTA*TIME_RESOLUTION):
         tokens.extend([time, dur, note])
 
     return tokens, controls
+
+
+def anticipate2(events, controls, map, delta=DELTA*TIME_RESOLUTION):
+    """
+    Interleave a sequence of events with anticipated controls, where controls represent
+    the performance of a piece and events represent the score, and map is a mapping from 
+    score beats and downbeats to performance beats and downbeats.
+
+    Note that ATIME_OFFSET, CONTROL_OFFSET, TIME_OFFSET offset the arrival times of 
+    controls and events to differentiate between them. But they are subtracted to retrieve
+    the actual time of the event or control.
+
+    Also, our map interpolates from the first to last beats in the score/performance, so we need
+    to throw away tokens that are not in the domain and range of the map.
+    """
+
+    if len(controls) == 0:
+        return events, controls
+
+    domain_min = map.x.min()
+    domain_max = map.x.max()
+    range_min = map.y.min()
+    range_max = map.y.max()
+
+    filtered_events = [t for t in list(zip(events[0::3], events[1::3], events[2::3])) \
+                       if domain_min <= t[0]/TIME_RESOLUTION <= domain_max]
+    
+    filtered_controls = [t for t in list(zip(controls[0::3], controls[1::3], controls[2::3])) \
+                       if range_min <= t[0]/TIME_RESOLUTION <= range_max]
+    
+    tokens = []
+    control_time = filtered_controls[0][0] - ATIME_OFFSET
+
+    for time, dur, note in filtered_events:
+        while map(time / TIME_RESOLUTION)*TIME_RESOLUTION >= control_time - delta:
+            tokens.extend(filtered_controls[0])
+            filtered_controls = filtered_controls[1:] # consume this control
+            control_time = filtered_controls[0][0] - ATIME_OFFSET if len(filtered_controls) > 0 else float('inf')
+
+        assert note < CONTROL_OFFSET
+        tokens.extend([time, dur, note])
+
+    return tokens, list(zip(*filtered_controls))
 
 
 def sparsity(tokens):

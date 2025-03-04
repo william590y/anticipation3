@@ -126,6 +126,13 @@ def interarrival_to_midi(tokens, debug=False):
 
 
 def midi_to_compound(midifile, debug=False):
+    """
+    Converts midi file to a compound tokenization that stores each note as
+    a 5-tuple of (time, duration, note, instrument, velocity).
+
+    Note that mido measures the time of a midi message in seconds, which we multiply by 
+    TIME_RESOLUTION = 10ms to get a time in 10ms ticks.
+    """
     if type(midifile) == str:
         midi = mido.MidiFile(midifile)
     else:
@@ -260,6 +267,11 @@ def compound_to_midi(tokens, debug=False):
 
 
 def compound_to_events(tokens, stats=False):
+    """
+    Converts a compound tokenization to a sequence of events according to Definition 2.2
+    in the anticipation paper, removing velocity and instrument and combining note as a pitch
+    and instrument.
+    """
     assert len(tokens) % 5 == 0
     tokens = tokens.copy()
 
@@ -275,7 +287,7 @@ def compound_to_events(tokens, stats=False):
     del tokens[3::4]
 
     # max duration cutoff and set unknown durations to 250ms
-    truncations = sum([1 for tok in tokens[1::3] if tok >= MAX_DUR])
+    truncations = sum([1 for tok in tokens[1::3] if tok >= MAX_DUR]) # number of note durations exceeding 10s
     tokens[1::3] = [TIME_RESOLUTION//4 if tok == -1 else min(tok, MAX_DUR-1)
                     for tok in tokens[1::3]]
     tokens[1::3] = [DUR_OFFSET + tok for tok in tokens[1::3]]
