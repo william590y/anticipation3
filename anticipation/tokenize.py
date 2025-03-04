@@ -256,6 +256,7 @@ def tokenize2(datafiles, output, idx=0, debug=False):
             file3, file4 = filegroup[2], filegroup[3]
 
             controls, truncations_c, _ = maybe_tokenize(file1)
+            controls = [CONTROL_OFFSET+token for token in controls] # mark these tokens as controls
             all_events, truncations_e, _ = maybe_tokenize(file2)
 
             z = ANTICIPATE
