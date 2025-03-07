@@ -278,3 +278,125 @@ def generate_ar(model, start_time, end_time, inputs=None, controls=None, top_p=1
         tokens.extend([atime, adur, anote])
 
     return ops.sort(ops.unpad(tokens) + controls)
+
+def generate2(model, start_time, end_time, inputs=None, controls=None, map=None, top_p=1.0, debug=False, delta=DELTA*TIME_RESOLUTION):
+    """
+    Note that in this generate function (and the original one) the controls should already be offset by CONTROL_OFFSET.
+    Otherwise anticipate functions will not work correctly.
+
+    This function is just for testing; in reality we wouldn't be able to generate with a map.
+    """
+    if inputs is None:
+        inputs = []
+
+    if controls is None:
+        controls = []
+
+    start_time = int(TIME_RESOLUTION*start_time)
+    end_time = int(TIME_RESOLUTION*end_time)
+
+    # prompt is events up to start_time
+    prompt = ops.pad(ops.clip(inputs, 0, start_time, clip_duration=False, seconds=False), start_time)
+
+    # treat events beyond start_time as controls
+    future = ops.clip(inputs, start_time+1, ops.max_time(inputs, seconds=False), clip_duration=False, seconds=False)
+    if debug:
+        print('Future')
+        ops.print_tokens(future)
+
+    # clip controls that preceed the sequence
+    # start controls at anticipated time delta so that control_time - delta is non-negative
+    controls = ops.clip(controls, DELTA, ops.max_time(controls, seconds=False), clip_duration=False, seconds=False)
+
+    if debug:
+        print('Controls')
+        ops.print_tokens(controls)
+
+    z = [ANTICIPATE] if len(controls) > 0 or len(future) > 0 else [AUTOREGRESS]
+    if debug:
+        print('AR Mode' if z[0] == AUTOREGRESS else 'AAR Mode')
+
+    # interleave the controls with the events
+    # this shouldn't do anything if I'm only passing in controls; prompt is empty
+    # so tokens remains empty, controls remains the same
+    tokens, controls = ops.anticipate2(prompt, ops.sort(controls + [CONTROL_OFFSET+token for token in future]), map)
+
+    if debug:
+        print('Prompt')
+        ops.print_tokens(tokens)
+
+    current_time = ops.max_time(prompt, seconds=False) # should be 0 if prompt is empty
+    if debug:
+        print('Current time:', current_time)
+
+
+
+
+    # make sure the event time begins inside the domain of the map
+    domain_min = map.x.min()
+    domain_max = map.x.max()
+    range_min = map.y.min()
+    range_max = map.y.max()
+
+    if current_time/TIME_RESOLUTION < domain_min:
+        current_time = domain_min*TIME_RESOLUTION
+    
+    if start_time/TIME_RESOLUTION < domain_min:
+        start_time = int(domain_min*TIME_RESOLUTION)
+
+    if end_time/TIME_RESOLUTION > domain_max:
+        end_time = int(domain_max*TIME_RESOLUTION)
+
+    # make sure the control time begins inside the range of the map, i.e. 
+    # the score is only controlled by performance notes occurring within the first and last beats
+    filtered_controls = [t for t in list(zip(controls[0::3], controls[1::3], controls[2::3])) \
+                    if range_min <= (t[0]-CONTROL_OFFSET)/TIME_RESOLUTION <= range_max]
+    controls = [item for tup in filtered_controls for item in tup]
+
+
+
+
+    with tqdm(range(end_time-start_time)) as progress:
+        if controls:
+            atime, adur, anote = controls[0:3]
+            anticipated_tokens = controls[3:]
+            anticipated_time = atime - ATIME_OFFSET
+        else:
+            # nothing to anticipate
+            anticipated_time = math.inf
+
+        while True:
+            while map(current_time/TIME_RESOLUTION)*TIME_RESOLUTION >= anticipated_time - delta:
+                tokens.extend([atime, adur, anote])
+                if debug:
+                    note = anote - ANOTE_OFFSET
+                    instr = note//2**7
+                    print('A', atime - ATIME_OFFSET, adur - ADUR_OFFSET, instr, note - (2**7)*instr)
+
+                if len(anticipated_tokens) > 0:
+                    atime, adur, anote = anticipated_tokens[0:3]
+                    anticipated_tokens = anticipated_tokens[3:]
+                    anticipated_time = atime - ATIME_OFFSET
+                else:
+                    # nothing more to anticipate
+                    anticipated_time = math.inf
+
+            new_token = add_token(model, z, tokens, top_p, max(start_time,current_time))
+            new_time = new_token[0] - TIME_OFFSET
+            if new_time >= end_time:
+                break
+
+            if debug:
+                new_note = new_token[2] - NOTE_OFFSET
+                new_instr = new_note//2**7
+                new_pitch = new_note - (2**7)*new_instr
+                print('C', new_time, new_token[1] - DUR_OFFSET, new_instr, new_pitch)
+
+            tokens.extend(new_token)
+            dt = new_time - current_time
+            assert dt >= 0
+            current_time = new_time
+            progress.update(dt)
+
+    events, _ = ops.split(tokens)
+    return ops.sort(ops.unpad(events) + future)

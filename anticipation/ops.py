@@ -228,7 +228,8 @@ def anticipate2(events, controls, map, delta=DELTA*TIME_RESOLUTION):
         assert note < CONTROL_OFFSET
         tokens.extend([time, dur, note])
 
-    return tokens, list(zip(*filtered_controls))
+    controls = [item for tup in filtered_controls for item in tup]
+    return tokens, controls
 
 
 def sparsity(tokens):
