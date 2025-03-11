@@ -368,6 +368,7 @@ def generate2(model, start_time, end_time, inputs=None, controls=None, map=None,
         while True:
             while map(current_time/TIME_RESOLUTION)*TIME_RESOLUTION >= anticipated_time - delta:
                 tokens.extend([atime, adur, anote])
+                # print(f'inserted a control at time {(atime-ATIME_OFFSET)/TIME_RESOLUTION}')
                 if debug:
                     note = anote - ANOTE_OFFSET
                     instr = note//2**7
@@ -384,7 +385,10 @@ def generate2(model, start_time, end_time, inputs=None, controls=None, map=None,
             new_token = add_token(model, z, tokens, top_p, max(start_time,current_time))
             new_time = new_token[0] - TIME_OFFSET
             if new_time >= end_time:
+                # print(f'new time was {new_time/TIME_RESOLUTION} and end time was {end_time/TIME_RESOLUTION} so we are breaking')
                 break
+
+            # print(f'generated an event at time {new_time/TIME_RESOLUTION} with performance time {map(new_time/TIME_RESOLUTION)}')
 
             if debug:
                 new_note = new_token[2] - NOTE_OFFSET
