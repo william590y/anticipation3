@@ -125,7 +125,7 @@ def interarrival_to_midi(tokens, debug=False):
     return mid
 
 
-def midi_to_compound(midifile, debug=False):
+def midi_to_compound(midifile, debug=False, quantize=True):
     """
     Converts midi file to a compound tokenization that stores each note as
     a 5-tuple of (time, duration, note, instrument, velocity).
@@ -160,7 +160,10 @@ def midi_to_compound(midifile, debug=False):
 
             if message.type == 'note_on' and message.velocity > 0: # onset
                 # time quantization
-                time_in_ticks = round(TIME_RESOLUTION*time)
+                if quantize:
+                    time_in_ticks = round(TIME_RESOLUTION*time) # with rounding
+                else:
+                    time_in_ticks = TIME_RESOLUTION*time # without rounding
 
                 # Our compound word is: (time, duration, note, instr, velocity)
                 tokens.append(time_in_ticks) # 5ms resolution
@@ -350,5 +353,5 @@ def events_to_compound(tokens, debug=False):
 def events_to_midi(tokens, debug=False):
     return compound_to_midi(events_to_compound(tokens, debug=debug), debug=debug)
 
-def midi_to_events(midifile, debug=False):
-    return compound_to_events(midi_to_compound(midifile, debug=debug))
+def midi_to_events(midifile, debug=False, quantize=True):
+    return compound_to_events(midi_to_compound(midifile, debug=debug, quantize=quantize))

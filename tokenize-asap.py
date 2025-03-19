@@ -7,7 +7,7 @@ from glob import glob
 from tqdm import tqdm
 
 from anticipation.config import *
-from anticipation.tokenize import tokenize2
+from anticipation.tokenize import tokenize2, tokenize3
 
 def main():
     print('Tokenization parameters:')
@@ -31,8 +31,10 @@ def main():
 
     print('Tokenizing data; will be written to output.txt')
 
+    # seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations \
+    #         = tokenize2(datafiles, output='./data/output.txt')
     seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations \
-            = tokenize2(datafiles, output='./data/output.txt')
+            = tokenize3(datafiles, output='./data/output.txt',skip_Nones=True)
     rest_ratio = round(100*float(rest_count)/(seq_count*M),2)
 
     trunc_type = 'duration' #'interarrival' if args.interarrival else 'duration'

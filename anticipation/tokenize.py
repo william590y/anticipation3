@@ -10,7 +10,7 @@ from anticipation import ops
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.convert import compound_to_events, midi_to_interarrival, midi_to_compound
-from annotation_mapping import compare_annotations
+from alignment import *
 
 
 def extract_spans(all_events, rate):
@@ -241,6 +241,8 @@ def tokenize2(datafiles, output, idx=0, debug=False):
     2. file2 being the path to the score MIDI file
     3. file3 being the path to the performance annotation file
     4. file4 being the path to the score annotation file
+
+    Note: This is the old tokenization process that uses anticipation with mapping
     """
     tokens = []
     all_truncations = 0
@@ -274,6 +276,97 @@ def tokenize2(datafiles, output, idx=0, debug=False):
             assert len(controls) == 0 # should have consumed all controls (because of padding)
             tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
             concatenated_tokens.extend(tokens)
+
+            # write sequences of length EVENT_SIZE*M = 1023 to the output file,
+            # any extra remain in concatenated_tokens for the next input file.      
+            while len(concatenated_tokens) >= EVENT_SIZE*M:
+                seq = concatenated_tokens[0:EVENT_SIZE*M]
+                concatenated_tokens = concatenated_tokens[EVENT_SIZE*M:]
+
+                # make sure each sequence starts at time 0
+                seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
+                assert ops.min_time(seq, seconds=False) == 0
+                if ops.max_time(seq, seconds=False) >= MAX_TIME:
+                    stats[3] += 1
+                    continue
+
+                # if seq contains SEPARATOR, global controls describe the first sequence
+                seq.insert(0, z)
+
+                outfile.write(' '.join([str(tok) for tok in seq]) + '\n')
+                seqcount += 1
+
+    if debug:
+        fmt = 'Processed {} sequences (discarded {} tracks, discarded {} seqs, added {} rest tokens)'
+        print(fmt.format(seqcount, stats[0]+stats[1]+stats[2], stats[3], rest_count))
+
+    return (seqcount, rest_count, stats[0], stats[1], stats[2], stats[3], all_truncations)
+
+def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
+    """
+    Applies anticipatory tokenization to a list of datafiles where each is a tuple
+    (file1, file2, file3, file4) with 
+    1. file1 being the path to the performance MIDI file
+    2. file2 being the path to the score MIDI file
+    3. file3 being the path to the performance annotation file
+    4. file4 being the path to the score annotation file
+
+    Note: This is the new tokenization process that alternates score and perf tokens and inserts 
+          None,None,None tokens whenver a corresponding score token cannot be found.
+    """
+    tokens = []
+    all_truncations = 0
+    seqcount = rest_count = 0
+    stats = 4*[0] # (short, long, too many instruments, inexpressible)
+    np.random.seed(0)
+
+    with open(output, 'w') as outfile:
+        concatenated_tokens = []
+        for j, filegroup in tqdm(list(enumerate(datafiles)), desc=f'#{idx}', position=idx+1, leave=True):
+
+            file1,file2,file3,file4 = filegroup
+
+            print(f'Now aligning {file1} and {file2}')
+            matched_tuples = align_tokens(file1,file2,file3,file4,skip_Nones=skip_Nones)
+
+            # interleave the tokens via alternation
+            interleaved_tokens = []
+
+            for i, l in enumerate(matched_tuples):
+                if l[0][0] <= DELTA*TIME_RESOLUTION:
+                    interleaved_tokens.extend(l[0])
+
+            prefix_len = int(len(interleaved_tokens)/3)
+
+            for i, l in enumerate(matched_tuples):
+                if i < len(matched_tuples)-prefix_len:
+                    interleaved_tokens.extend(l[2])
+                    interleaved_tokens.extend(matched_tuples[i+prefix_len][0])
+                else:
+                    interleaved_tokens.extend(l[2])
+
+            # because we already have a sequence of interleaved tokens, don't want to make any truncations
+            # controls, truncations_c, _ = maybe_tokenize(file1)
+            # controls = [CONTROL_OFFSET+token for token in controls] # mark these tokens as controls
+            # all_events, truncations_e, _ = maybe_tokenize(file2)
+
+            z = ANTICIPATE
+
+            # all_truncations += truncations_c + truncations_e
+
+            # only need to pad the events 
+            # events = ops.pad(all_events, end_time=ops.max_time(all_events, seconds=False))
+
+            # rest_count += sum(1 if tok == REST else 0 for tok in events[2::3])
+
+            # map = compare_annotations(file4, file3) # create mapping from score to performance
+            # tokens, controls = ops.anticipate2(events, controls, map)
+
+            # assert len(controls) == 0 # should have consumed all controls (because of padding)
+
+            # separator is a special token with value 55025
+            tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+            concatenated_tokens.extend(interleaved_tokens)
 
             # write sequences of length EVENT_SIZE*M = 1023 to the output file,
             # any extra remain in concatenated_tokens for the next input file.      
