@@ -158,11 +158,12 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
 
     # revert back to token format and remove beat indices
     for i, l in enumerate(matched_tuples):
+        # performance tokens should have control offset
         l[0] = [round(l[0][0]*TIME_RESOLUTION), l[0][1]+DUR_OFFSET, l[0][2]+NOTE_OFFSET]
+        l[0] = [CONTROL_OFFSET + t for t in l[0]]
 
         if l[2][0] != None:
             l[2] = [round(l[2][0]*TIME_RESOLUTION), l[2][1]+DUR_OFFSET, l[2][2]+NOTE_OFFSET]
-            l[2] = [CONTROL_OFFSET + t for t in l[2]]
         matched_tuples[i] = l
 
     return matched_tuples
