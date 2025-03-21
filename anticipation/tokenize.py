@@ -333,7 +333,7 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
             interleaved_tokens = []
 
             for i, l in enumerate(matched_tuples):
-                if l[0][0] <= DELTA*TIME_RESOLUTION:
+                if l[0][0]-CONTROL_OFFSET <= DELTA*TIME_RESOLUTION:
                     interleaved_tokens.extend(l[0])
 
             prefix_len = int(len(interleaved_tokens)/3)
@@ -344,6 +344,8 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
                     interleaved_tokens.extend(matched_tuples[i+prefix_len][0])
                 else:
                     interleaved_tokens.extend(l[2])
+
+            print(interleaved_tokens)
 
             # because we already have a sequence of interleaved tokens, don't want to make any truncations
             # controls, truncations_c, _ = maybe_tokenize(file1)
@@ -374,7 +376,8 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
                 seq = concatenated_tokens[0:EVENT_SIZE*M]
                 concatenated_tokens = concatenated_tokens[EVENT_SIZE*M:]
 
-                # make sure each sequence starts at time 0
+                # make sure each sequence starts at time 0 (shifts each token's arrival time by the 
+                # min time of the sequence, accounting for control offsets)
                 seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
                 assert ops.min_time(seq, seconds=False) == 0
                 if ops.max_time(seq, seconds=False) >= MAX_TIME:
