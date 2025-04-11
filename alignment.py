@@ -49,9 +49,10 @@ def compare_annotations(file1_path, file2_path, interpolate=True):
     else:
         return x,y
     
-def power_set(lst):
+def power_set(lst, min_length=2, max_length=6):
     result = []
-    for i in range(len(lst) + 1):
+    # Only iterate from min_length to max_length (inclusive)
+    for i in range(min_length, min(max_length + 1, len(lst) + 1)):
         result.extend(combinations(lst, i))
     return result
     
@@ -110,7 +111,7 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
 
         success = False
         for subset in power_set(candidates):
-            if len(subset) in range(2,6) and np.abs(np.average(subset) - beat) <= tol:
+            if np.abs(np.average(subset) - beat) <= tol:
                 for time in subset:
                     k = p_times.index(time)
                     p_tuples_b[k] = (p_tuples_b[k][0], p_tuples_b[k][1], p_tuples_b[k][2], j)
