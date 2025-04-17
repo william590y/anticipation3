@@ -168,3 +168,68 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
         matched_tuples[i] = l
 
     return matched_tuples
+
+def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
+    # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
+    perf = midi_to_events(file1, quantize=False)
+    score = midi_to_events(file2, quantize=False)
+
+    p_beats, s_beats = compare_annotations(file3,file4,interpolate=False)
+    s_beats = np.array(s_beats)
+    p_beats = np.array(p_beats)
+    map = compare_annotations(file3, file4)
+
+    # create tuples, scaling arrival time back to seconds, which is the unit the annotation mapping uses
+    p_tuples = [[perf[3*i]/TIME_RESOLUTION, perf[3*i+1] - DUR_OFFSET, perf[3*i+2] - NOTE_OFFSET] for i in range(int(len(perf)/3))]
+    s_tuples = [[score[3*i]/TIME_RESOLUTION, score[3*i+1] - DUR_OFFSET, score[3*i+2] - NOTE_OFFSET] for i in range(int(len(score)/3))]
+
+    matched_tuples = []
+
+    s_tuples_copy = s_tuples.copy()
+
+    p_min = map.x.min()
+    p_max = map.x.max()
+
+    for i, p_tuple in enumerate(p_tuples):
+        best_dist = np.inf
+        best_match = [None, None, None]
+        best_index = None
+
+        p_time, p_note = p_tuple[0], p_tuple[2]
+
+        if p_min <= p_time <= p_max:
+
+            for j, s_tuple in enumerate(s_tuples_copy):
+
+                s_time, s_note = s_tuple[0], s_tuple[2] 
+
+                k = s_tuples.index(s_tuple)
+
+                dist = np.abs(map(p_time) - s_time)
+
+                if p_note != s_note:
+                    continue # not a match (wrong pitch)
+
+                if dist <= thres and dist <= best_dist: # found a possible match
+                    best_dist = dist
+                    best_match = s_tuple
+                    best_index = k
+
+        if best_index is not None:
+            matched_tuples.append([p_tuple,i,best_match,best_index])
+            s_tuples_copy.remove(best_match)
+        elif not skip_Nones:
+            matched_tuples.append([p_tuple,i,best_match,best_index])
+
+
+    # revert back to token format and remove beat indices
+    for i, l in enumerate(matched_tuples):
+        # performance tokens should have control offset
+        l[0] = [round(l[0][0]*TIME_RESOLUTION), l[0][1]+DUR_OFFSET, l[0][2]+NOTE_OFFSET]
+        l[0] = [CONTROL_OFFSET + t for t in l[0]]
+
+        if l[2][0] != None:
+            l[2] = [round(l[2][0]*TIME_RESOLUTION), l[2][1]+DUR_OFFSET, l[2][2]+NOTE_OFFSET]
+        matched_tuples[i] = l
+
+    return matched_tuples
