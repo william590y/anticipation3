@@ -327,7 +327,7 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
             file1,file2,file3,file4 = filegroup
 
             print(f'Now aligning {file1} and {file2}')
-            matched_tuples = align_tokens(file1,file2,file3,file4,skip_Nones=skip_Nones)
+            matched_tuples = align_tokens2(file1,file2,file3,file4,skip_Nones=skip_Nones)
 
             # interleave the tokens via alternation
             interleaved_tokens = []
