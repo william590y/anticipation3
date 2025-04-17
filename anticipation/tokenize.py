@@ -345,7 +345,7 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
                 else:
                     interleaved_tokens.extend(l[2])
 
-            print(interleaved_tokens)
+            # print(interleaved_tokens)
 
             # because we already have a sequence of interleaved tokens, don't want to make any truncations
             # controls, truncations_c, _ = maybe_tokenize(file1)
