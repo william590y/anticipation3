@@ -85,8 +85,11 @@ def add_token(model, z, tokens, top_p, current_time, debug=False):
     new_token = []
     with torch.no_grad():
         for i in range(3):
+            print(history, new_token)
             input_tokens = torch.tensor(z + history + new_token).unsqueeze(0).to(model.device)
+            print(input_tokens)
             logits = model(input_tokens).logits[0,-1]
+            print(min(logits),max(logits))
 
             idx = input_tokens.shape[1]-1
             logits = safe_logits(logits, idx)
@@ -404,3 +407,42 @@ def generate2(model, start_time, end_time, inputs=None, controls=None, map=None,
 
     events, _ = ops.split(tokens)
     return ops.sort(ops.unpad(events) + future)
+
+def generate3(model, controls, top_p=1.0):
+    # assuming controls are already shifted by CONTROL_OFFSET
+
+    z = [ANTICIPATE]
+
+    total = len(controls)
+
+    first_arrival = controls[0] - CONTROL_OFFSET
+
+    controls_shifted = controls.copy()
+    for i in range(0,len(controls),3):
+        controls_shifted[i] = controls[i] - first_arrival
+
+    tokens = []
+
+    controls_shifted_zipped = [[controls_shifted[i],controls_shifted[i+1],controls_shifted[i+2]] for i in range(0,len(controls_shifted),3)]
+
+    for t in controls_shifted_zipped:
+        if t[0]-CONTROL_OFFSET <= DELTA*TIME_RESOLUTION:
+            tokens.extend(t)
+
+    pre = len(tokens)
+    controls_shifted = controls_shifted[pre:]
+
+    events = []
+
+    for i in tqdm(range(total)):
+        current_time = tokens[-3] # this should be the most recent event time.
+        new_token = add_token(model, z, tokens, top_p, current_time)
+        tokens.extend(new_token)
+        events.extend(new_token)
+        try:
+            tokens.extend(controls_shifted[0:3])
+            controls_shifted = controls_shifted[3:]
+        except:
+            pass
+
+    return events, tokens
