@@ -93,11 +93,13 @@ def add_token(model, z, tokens, top_p, current_time, debug=False):
 
             idx = input_tokens.shape[1]-1
             logits = safe_logits(logits, idx)
+            print(min(logits),max(logits))
             if i == 0:
                 logits = future_logits(logits, current_time - offset)
             elif i == 2:
                 logits = instr_logits(logits, tokens)
             logits = nucleus(logits, top_p)
+            print(min(logits),max(logits))
 
             probs = F.softmax(logits, dim=-1)
             token = torch.multinomial(probs, 1)
@@ -435,7 +437,12 @@ def generate3(model, controls, top_p=1.0):
     events = []
 
     for i in tqdm(range(total)):
-        current_time = tokens[-3] # this should be the most recent event time.
+        # set current time to the most recent event time, or 0 if there haven't been any events yete
+        if len(events)==0:
+            current_time=0
+        else:
+            current_time=events[-3]
+            
         new_token = add_token(model, z, tokens, top_p, current_time)
         tokens.extend(new_token)
         events.extend(new_token)
