@@ -7,7 +7,7 @@ from glob import glob
 from tqdm import tqdm
 
 from anticipation.config import *
-from anticipation.tokenize import tokenize2, tokenize3
+from anticipation.tokenize import tokenize2, tokenize3, tokenize4
 
 def main():
     print('Tokenization parameters:')
@@ -29,12 +29,15 @@ def main():
 
         datafiles.append((file1, file2, file3, file4))
 
-    print('Tokenizing data; will be written to output.txt')
+    print('Tokenizing data; will be written to newoutput.txt')
 
     # seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations \
     #         = tokenize2(datafiles, output='./data/output.txt')
-    seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations \
-            = tokenize3(datafiles, output='./data/output.txt',skip_Nones=True)
+    # Old/new variants for reference:
+    # seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations = tokenize3(datafiles, output='./data/output.txt', skip_Nones=True)
+    seq_count, rest_count, too_short, too_long, too_manyinstr, discarded_seqs, truncations = tokenize4(
+        datafiles, output='./data/newoutput.txt', skip_Nones=True
+    )
     rest_ratio = round(100*float(rest_count)/(seq_count*M),2)
 
     trunc_type = 'duration' #'interarrival' if args.interarrival else 'duration'

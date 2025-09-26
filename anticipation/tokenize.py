@@ -367,7 +367,8 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
             # assert len(controls) == 0 # should have consumed all controls (because of padding)
 
             # separator is a special token with value 55025
-            tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+            # NOTE: prepend separators to the actual interleaved stream
+            interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
             concatenated_tokens.extend(interleaved_tokens)
 
             # write sequences of length EVENT_SIZE*M = 1023 to the output file,
@@ -385,6 +386,85 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
                     continue
 
                 # if seq contains SEPARATOR, global controls describe the first sequence
+                seq.insert(0, z)
+
+                outfile.write(' '.join([str(tok) for tok in seq]) + '\n')
+                seqcount += 1
+
+    if debug:
+        fmt = 'Processed {} sequences (discarded {} tracks, discarded {} seqs, added {} rest tokens)'
+        print(fmt.format(seqcount, stats[0]+stats[1]+stats[2], stats[3], rest_count))
+
+    return (seqcount, rest_count, stats[0], stats[1], stats[2], stats[3], all_truncations)
+
+
+def tokenize4(datafiles, output, idx=0, debug=False, skip_Nones=True, prefix_controls=33):
+    """
+    Like tokenize3, but instead of taking ~5 seconds of control tokens up front, it
+    uses the first `prefix_controls` control triples as a bootstrap prefix and
+    alternates each control with a REST padding event. After that, it alternates
+    score and (future) control tokens with a fixed offset of `prefix_controls`.
+
+    This makes the initial conditioning period a fixed length by count rather than time.
+    """
+    tokens = []
+    all_truncations = 0
+    seqcount = rest_count = 0
+    stats = 4*[0] # (short, long, too many instruments, inexpressible)
+    np.random.seed(0)
+
+    with open(output, 'w') as outfile:
+        concatenated_tokens = []
+        for j, filegroup in tqdm(list(enumerate(datafiles)), desc=f'#{idx}', position=idx+1, leave=True):
+            file1, file2, file3, file4 = filegroup
+
+            print(f'Now aligning {file1} and {file2}')
+            matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones)
+
+            # Build the interleaved stream with a fixed-length control+padding prefix
+            interleaved_tokens = []
+
+            # prefix of control tokens by count (not time), alternating with REST pads
+            k = min(prefix_controls, len(matched_tuples))
+            for t in matched_tuples[:k]:
+                cc = t[0]  # control triple (ATIME/ADUR/ANOTE with CONTROL offsets)
+                interleaved_tokens.extend(cc)
+                # Create a REST event at the same absolute time as control (duration=0)
+                cc_time = cc[0] - CONTROL_OFFSET
+                interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+
+            prefix_len = k
+
+            # Main alternation: score_i followed by control_{i+prefix_len}
+            for i, t in enumerate(matched_tuples):
+                score = t[2]
+                if score[0] is not None:
+                    interleaved_tokens.extend(score)
+                # Append future control with fixed offset when in range
+                ii = i + prefix_len
+                if ii < len(matched_tuples):
+                    interleaved_tokens.extend(matched_tuples[ii][0])
+
+            # Prepend separators to delineate a new sequence
+            interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+
+            z = ANTICIPATE
+
+            concatenated_tokens.extend(interleaved_tokens)
+
+            # Chunk into fixed-length sequences
+            while len(concatenated_tokens) >= EVENT_SIZE*M:
+                seq = concatenated_tokens[0:EVENT_SIZE*M]
+                concatenated_tokens = concatenated_tokens[EVENT_SIZE*M:]
+
+                # Translate times so the minimum time in the slice is zero
+                seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
+                assert ops.min_time(seq, seconds=False) == 0
+                if ops.max_time(seq, seconds=False) >= MAX_TIME:
+                    stats[3] += 1
+                    continue
+
+                # Insert the global mode flag at the start to get 1024 tokens total
                 seq.insert(0, z)
 
                 outfile.write(' '.join([str(tok) for tok in seq]) + '\n')
