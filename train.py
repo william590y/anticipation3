@@ -247,8 +247,8 @@ def main():
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_output.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-small-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_full'))
-    parser.add_argument('--batch_size', type=int, default=512) 
-    parser.add_argument('--val_batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=256) 
+    parser.add_argument('--val_batch_size', type=int, default=256)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)  # No gradient accumulation
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
