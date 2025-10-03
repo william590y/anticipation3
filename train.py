@@ -13,6 +13,9 @@ import traceback
 import matplotlib.pyplot as plt
 from anticipation.vocab import ANTICIPATE, AUTOREGRESS  # Import the flag token constants
 
+# Set CUDA memory allocator configuration for better memory management
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
     if torch.cuda.is_available():
@@ -247,7 +250,7 @@ def main():
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_output.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-small-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_full'))
-    parser.add_argument('--batch_size', type=int, default=8) 
+    parser.add_argument('--batch_size', type=int, default=128) 
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=32)  # For effective batch size 256
     parser.add_argument('--learning_rate', type=float, default=3e-5)
