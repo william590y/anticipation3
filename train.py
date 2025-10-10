@@ -257,8 +257,9 @@ def main():
         print("GPU memory after loading model:")
         print_gpu_memory_stats()
         
-        # Don't manually move model to device - accelerator will handle it
-        # (Removed model.to(device) for multi-GPU compatibility)
+        # Explicitly move model to our device before creating optimizer
+        model = model.to(device)
+        print(f"Model moved to: {next(model.parameters()).device}")
         
         # Setup optimizer with gradient clipping to prevent exploding gradients
         # Using a lower learning rate and better epsilon value for numerical stability
