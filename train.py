@@ -155,12 +155,12 @@ def main():
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_full_new'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4)  # For effective batch size 128 with 4 GPUs
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=32)  # For effective batch size 1024 with 4 GPUs (8*32*4=1024)
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
     parser.add_argument('--save_steps', type=int, default=500)
     parser.add_argument('--eval_steps', type=int, default=100)
-    parser.add_argument('--warmup_steps', type=int, default=500)
+    parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
     args = parser.parse_args()
@@ -276,30 +276,17 @@ def main():
         val_dataloader = accelerator.prepare_data_loader(val_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
         
-        # Learning rate scheduler - cosine decay from 3e-5 to 3e-6
-        # num_cycles=0.5 gives one half of a cosine curve (decay from max to min)
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer=optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=args.max_steps,
-            num_cycles=0.5,  # Half cosine for smooth decay
-        )
-        
-        # Manually adjust to decay to 3e-6 instead of 0
-        # We'll modify the learning rate calculation
+        # Learning rate scheduler - cosine decay from 3e-5 to 3e-6 (no warmup)
         initial_lr = args.learning_rate  # 3e-5
         final_lr = 3e-6
         
-        # Override scheduler with custom lambda that decays to final_lr
+        # Custom cosine decay without warmup
         from torch.optim.lr_scheduler import LambdaLR
         import math
         
         def lr_lambda(current_step):
-            if current_step < args.warmup_steps:
-                # Warmup phase
-                return float(current_step) / float(max(1, args.warmup_steps))
-            # Cosine decay phase
-            progress = float(current_step - args.warmup_steps) / float(max(1, args.max_steps - args.warmup_steps))
+            # Pure cosine decay from start to finish
+            progress = float(current_step) / float(max(1, args.max_steps))
             # Cosine annealing from 1.0 to (final_lr / initial_lr)
             cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
             return (final_lr / initial_lr) + (1.0 - final_lr / initial_lr) * cosine_decay
@@ -357,8 +344,8 @@ def main():
                             
                             # Only update optimizer and scheduler when gradients are synchronized
                             if accelerator.sync_gradients:
-                                # Gradient clipping
-                                accelerator.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                                # Gradient clipping - industry standard value
+                                accelerator.clip_grad_norm_(model.parameters(), max_norm=2.0)
                                 
                                 # Check for NaN in gradients
                                 has_nan_grads = False
