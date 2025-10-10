@@ -5,16 +5,13 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from accelerate import Accelerator
-from transformers import AutoModelForCausalLM, get_linear_schedule_with_warmup
+from transformers import AutoModelForCausalLM, get_cosine_schedule_with_warmup
 from torch.optim import AdamW
 from tqdm import tqdm
 import gc
 import traceback
 import matplotlib.pyplot as plt
 from anticipation.vocab import ANTICIPATE, AUTOREGRESS  # Import the flag token constants
-
-# Set CUDA memory allocator configuration for better memory management
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -52,143 +49,38 @@ print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA version: {torch.version.cuda}")
 
-class SequencePackedDataset(Dataset):
-    def __init__(self, file_path, context_length=1024, max_packed_sequences=4):
-        """Load data from tokenized file and implement sequence packing
-        
-        Args:
-            file_path: Path to the tokenized data file
-            context_length: Maximum context length (default 1024)
-            max_packed_sequences: Maximum number of sequences to pack together (default 4)
-        
-        Note: The new tokenization format already includes:
-        - 3 SEPARATOR tokens at the start of each sequence
-        - Control flag (ANTICIPATE) as the 4th token
-        - The rest of the sequence content
-        """
-        from anticipation.vocab import SEPARATOR, AUTOREGRESS, ANTICIPATE
-        
-        # Read all individual sequences
-        individual_sequences = []
+class TokenizedDataset(Dataset):
+    """Simple dataset that loads pre-tokenized sequences.
+    
+    Sequences are already packed and formatted by tokenize-asap.py:
+    - Each sequence is exactly 1024 tokens
+    - Format: [SEP, SEP, SEP, control_flag, ...tokens...]
+    """
+    def __init__(self, file_path):
+        self.sequences = []
         with open(file_path, 'r') as f:
             for line in f:
                 tokens = list(map(int, line.strip().split()))
-                individual_sequences.append(tokens)
+                self.sequences.append(torch.tensor(tokens, dtype=torch.long))
         
-        print(f"Loaded {len(individual_sequences)} individual sequences")
+        self.sequence_length = len(self.sequences[0]) if self.sequences else 0
+        print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
         
-        # Validate new format: each sequence should start with 3 SEPARATORs + control flag
-        if individual_sequences:
-            sample = individual_sequences[0]
+        # Validate format
+        if self.sequences:
+            from anticipation.vocab import SEPARATOR, AUTOREGRESS, ANTICIPATE
+            sample = self.sequences[0].tolist()
             if len(sample) >= 4:
                 if sample[0] == SEPARATOR and sample[1] == SEPARATOR and sample[2] == SEPARATOR:
                     if sample[3] in [AUTOREGRESS, ANTICIPATE]:
-                        print(f"✓ New tokenization format detected (3 SEPARATORs + control flag)")
-                    else:
-                        print(f"⚠ Warning: Expected control flag at position 3, got {sample[3]}")
-                else:
-                    print(f"⚠ Warning: Expected 3 SEPARATORs at start, got {sample[:3]}")
-        
-        # Create packed sequences
-        self.packed_sequences = []
-        self.attention_masks = []
-        
-        # Keep track of statistics
-        self.total_packed = 0
-        self.avg_sequences_per_pack = 0
-        sequences_per_pack = []
-        
-        # Process sequences in random order for better mixing
-        import random
-        random.shuffle(individual_sequences)
-        
-        # Pack sequences
-        current_packed = []
-        current_positions = []  # Track positions for creating attention masks
-        
-        for sequence in individual_sequences:
-            # New format: sequences already have 3 SEPARATORs at the start
-            # Just use them as-is
-            
-            # If adding this sequence would exceed context length, start a new packed sequence
-            if len(current_packed) > 0 and (len(current_packed) + len(sequence) > context_length or 
-                                           len(current_positions) >= max_packed_sequences):
-                # Finalize current packed sequence
-                if len(current_packed) > 0:
-                    # Create attention mask (1 for tokens to attend to, 0 for tokens to ignore)
-                    attention_mask = torch.zeros(context_length, dtype=torch.long)
-                    for start, end in current_positions:
-                        attention_mask[start:end] = 1
-                    
-                    # Pad to context length if needed
-                    if len(current_packed) < context_length:
-                        padding_length = context_length - len(current_packed)
-                        current_packed.extend([SEPARATOR] * padding_length)
-                    
-                    # Convert to tensor and store
-                    self.packed_sequences.append(torch.tensor(current_packed[:context_length], dtype=torch.long))
-                    self.attention_masks.append(attention_mask)
-                    sequences_per_pack.append(len(current_positions))
-                    self.total_packed += 1
-                
-                # Start a new packed sequence
-                current_packed = []
-                current_positions = []
-            
-            # Record start position
-            start_pos = len(current_packed)
-            
-            # Add the entire sequence (which already has separators and control flag)
-            current_packed.extend(sequence)
-            end_pos = len(current_packed)
-            
-            # Record the position of this sequence for attention masking
-            current_positions.append((start_pos, end_pos))
-        
-        # Add the final packed sequence if not empty
-        if len(current_packed) > 0:
-            attention_mask = torch.zeros(context_length, dtype=torch.long)
-            for start, end in current_positions:
-                attention_mask[start:end] = 1
-                
-            # Pad to context length if needed
-            if len(current_packed) < context_length:
-                padding_length = context_length - len(current_packed)
-                current_packed.extend([SEPARATOR] * padding_length)
-            
-            # Convert to tensor and store
-            self.packed_sequences.append(torch.tensor(current_packed[:context_length], dtype=torch.long))
-            self.attention_masks.append(attention_mask)
-            sequences_per_pack.append(len(current_positions))
-            self.total_packed += 1
-        
-        # Calculate statistics
-        if sequences_per_pack:
-            self.avg_sequences_per_pack = sum(sequences_per_pack) / len(sequences_per_pack)
-        
-        print(f"Created {len(self.packed_sequences)} packed sequences")
-        print(f"Average sequences per pack: {self.avg_sequences_per_pack:.2f}")
-        
+                        print(f"✓ Tokenization format validated (3 SEPARATORs + control flag)")
+    
     def __len__(self):
-        return len(self.packed_sequences)
+        return len(self.sequences)
     
     def __getitem__(self, idx):
-        return {
-            "input_ids": self.packed_sequences[idx],
-            "attention_mask": self.attention_masks[idx],
-            "labels": self.packed_sequences[idx],
-        }
-
-def collate_packed_sequences(batch):
-    """Collate function for packed sequences that includes attention masks"""
-    input_ids = torch.stack([item["input_ids"] for item in batch])
-    attention_masks = torch.stack([item["attention_mask"] for item in batch])
-    labels = torch.stack([item["labels"] for item in batch])
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_masks,
-        "labels": labels
-    }
+        tokens = self.sequences[idx]
+        return {"input_ids": tokens, "labels": tokens}
 
 def evaluate_model(model, dataloader, accelerator):
     """Calculate validation loss on a dataset"""
@@ -213,46 +105,57 @@ def evaluate_model(model, dataloader, accelerator):
 
 def plot_losses(train_losses, val_losses, validation_steps, output_dir):
     """
-    Plot training and validation losses and save the figure
+    Plot training and validation losses and save the figures (both linear and log-log)
     
     Args:
         train_losses (list): Training loss history
         val_losses (list): Validation loss history
         validation_steps (list): Steps at which validation was performed
-        output_dir (Path): Directory to save the plot
+        output_dir (Path): Directory to save the plots
     """
-    plt.figure(figsize=(10, 6))
-    
-    # Plot all training losses
     steps = list(range(1, len(train_losses) + 1))
-    plt.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     
-    # Plot validation losses at specific steps
+    # Linear plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     plt.plot(validation_steps, val_losses, label='Validation Loss', 
              linestyle='--', marker='o', markersize=5, color='red')
-    
     plt.xlabel('Steps (x10)')
     plt.ylabel('Loss')
     plt.title('Training and Validation Loss')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    
-    # Save the figure
     plot_path = output_dir / "loss_plot.png"
     plt.savefig(plot_path)
     plt.close()
+    print(f"Linear loss plot saved to {plot_path}")
     
-    print(f"Loss plot saved to {plot_path}")
+    # Log-log plot
+    plt.figure(figsize=(10, 6))
+    plt.loglog(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
+    plt.loglog(validation_steps, val_losses, label='Validation Loss', 
+               linestyle='--', marker='o', markersize=5, color='red')
+    plt.xlabel('Steps (x10) [log scale]')
+    plt.ylabel('Loss [log scale]')
+    plt.title('Training and Validation Loss (Log-Log Scale)')
+    plt.legend()
+    plt.grid(True, alpha=0.3, which='both')
+    plt.grid(True, alpha=0.1, which='minor')
+    loglog_path = output_dir / "loss_plot_loglog.png"
+    plt.savefig(loglog_path)
+    plt.close()
+    print(f"Log-log loss plot saved to {loglog_path}")
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_output.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_output.txt'))
-    parser.add_argument('--model_name', type=str, default='stanford-crfm/music-small-800k')
+    parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_full'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=16)  # For effective batch size 256
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=16)  # For effective batch size 128
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
     parser.add_argument('--save_steps', type=int, default=500)
@@ -260,9 +163,6 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=500)
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--context_length', type=int, default=1024, help='Maximum context length')
-    parser.add_argument('--max_packed_sequences', type=int, default=4, 
-                       help='Maximum number of sequences to pack together (set to 1 to disable packing)')
     args = parser.parse_args()
     
     # Override device if requested
@@ -295,78 +195,31 @@ def main():
         
         # Load training dataset
         print(f"Loading training dataset from {args.data_file}...")
-        if args.max_packed_sequences > 1:
-            print(f"Using sequence packing with max {args.max_packed_sequences} sequences per pack")
-            train_dataset = SequencePackedDataset(
-                args.data_file, 
-                context_length=args.context_length,
-                max_packed_sequences=args.max_packed_sequences
-            )
-            collate_fn_train = collate_packed_sequences
-        else:
-            print("Sequence packing disabled - using single sequences")
-            # Original dataset class for backward compatibility
-            from anticipation.vocab import SEPARATOR
-            individual_sequences = []
-            with open(args.data_file, 'r') as f:
-                for line in f:
-                    tokens = list(map(int, line.strip().split()))
-                    individual_sequences.append(torch.tensor(tokens, dtype=torch.long))
-            
-            class TokenizedDataset(Dataset):
-                def __init__(self, sequences):
-                    self.sequences = sequences
-                    self.sequence_length = len(self.sequences[0]) if self.sequences else 0
-                    print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
-                
-                def __len__(self):
-                    return len(self.sequences)
-                
-                def __getitem__(self, idx):
-                    tokens = self.sequences[idx]
-                    return {"input_ids": tokens, "labels": tokens}
-            
-            train_dataset = TokenizedDataset(individual_sequences)
-            
-            def collate_fn_train(batch):
-                input_ids = torch.stack([item["input_ids"] for item in batch])
-                labels = torch.stack([item["labels"] for item in batch])
-                return {"input_ids": input_ids, "labels": labels}
+        train_dataset = TokenizedDataset(args.data_file)
+        
+        def collate_fn(batch):
+            input_ids = torch.stack([item["input_ids"] for item in batch])
+            labels = torch.stack([item["labels"] for item in batch])
+            return {"input_ids": input_ids, "labels": labels}
             
         train_dataloader = DataLoader(
             train_dataset, 
             batch_size=args.batch_size, 
             shuffle=True,
-            collate_fn=collate_fn_train,
+            collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
             num_workers=0,  # Avoid multiprocessing issues
         )
         
         # Load validation dataset
         print(f"Loading validation dataset from {args.val_file}...")
-        if args.max_packed_sequences > 1:
-            val_dataset = SequencePackedDataset(
-                args.val_file, 
-                context_length=args.context_length,
-                max_packed_sequences=args.max_packed_sequences
-            )
-            collate_fn_val = collate_packed_sequences
-        else:
-            # Load validation sequences
-            val_sequences = []
-            with open(args.val_file, 'r') as f:
-                for line in f:
-                    tokens = list(map(int, line.strip().split()))
-                    val_sequences.append(torch.tensor(tokens, dtype=torch.long))
-            
-            val_dataset = TokenizedDataset(val_sequences)
-            collate_fn_val = collate_fn_train
+        val_dataset = TokenizedDataset(args.val_file)
         
         val_dataloader = DataLoader(
             val_dataset, 
             batch_size=args.val_batch_size,
             shuffle=False,  # No need to shuffle validation data
-            collate_fn=collate_fn_val,
+            collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
             num_workers=0,
         )
@@ -423,12 +276,35 @@ def main():
         val_dataloader = accelerator.prepare_data_loader(val_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
         
-        # Learning rate scheduler
-        scheduler = get_linear_schedule_with_warmup(
+        # Learning rate scheduler - cosine decay from 3e-5 to 3e-6
+        # num_cycles=0.5 gives one half of a cosine curve (decay from max to min)
+        scheduler = get_cosine_schedule_with_warmup(
             optimizer=optimizer,
             num_warmup_steps=args.warmup_steps,
             num_training_steps=args.max_steps,
+            num_cycles=0.5,  # Half cosine for smooth decay
         )
+        
+        # Manually adjust to decay to 3e-6 instead of 0
+        # We'll modify the learning rate calculation
+        initial_lr = args.learning_rate  # 3e-5
+        final_lr = 3e-6
+        
+        # Override scheduler with custom lambda that decays to final_lr
+        from torch.optim.lr_scheduler import LambdaLR
+        import math
+        
+        def lr_lambda(current_step):
+            if current_step < args.warmup_steps:
+                # Warmup phase
+                return float(current_step) / float(max(1, args.warmup_steps))
+            # Cosine decay phase
+            progress = float(current_step - args.warmup_steps) / float(max(1, args.max_steps - args.warmup_steps))
+            # Cosine annealing from 1.0 to (final_lr / initial_lr)
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return (final_lr / initial_lr) + (1.0 - final_lr / initial_lr) * cosine_decay
+        
+        scheduler = LambdaLR(optimizer, lr_lambda)
         
         # Check memory before training
         print("GPU memory before training:")
