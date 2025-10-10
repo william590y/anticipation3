@@ -152,7 +152,7 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_output.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_output.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_full_new'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_no_clip'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=32)  # For effective batch size 1024 with 4 GPUs (8*32*4=1024)
