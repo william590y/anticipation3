@@ -1,0 +1,106 @@
+Model Accuracy Evaluation (Flexible Timing)
+Time window: ±20 ticks
+============================================================
+
+Sequences evaluated: 13
+
+AGGREGATE METRICS:
+  Average Match Rate: 75.77%
+  Average Note Accuracy (of matched): 10.80%
+  Average Duration Accuracy: 10.33%
+  Average Time Accuracy (exact): 7.52%
+  Average Exact Match: 0.00%
+  Average Time Error: 11.37 ticks
+  Average Duration Error: 9.08 ticks
+
+
+Sequence 0:
+  Events (GT/Gen/Matched): 136/171/114
+  Match rate: 83.82%
+  Note accuracy: 21.93%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.88%
+
+Sequence 1:
+  Events (GT/Gen/Matched): 136/171/116
+  Match rate: 85.29%
+  Note accuracy: 6.90%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+
+Sequence 2:
+  Events (GT/Gen/Matched): 137/170/107
+  Match rate: 78.10%
+  Note accuracy: 5.61%
+  Duration accuracy: 85.98%
+  Time accuracy: 7.48%
+
+Sequence 3:
+  Events (GT/Gen/Matched): 137/170/91
+  Match rate: 66.42%
+  Note accuracy: 15.38%
+  Duration accuracy: 2.20%
+  Time accuracy: 1.10%
+
+Sequence 4:
+  Events (GT/Gen/Matched): 134/173/91
+  Match rate: 67.91%
+  Note accuracy: 14.29%
+  Duration accuracy: 0.00%
+  Time accuracy: 1.10%
+
+Sequence 5:
+  Events (GT/Gen/Matched): 137/170/98
+  Match rate: 71.53%
+  Note accuracy: 8.16%
+  Duration accuracy: 0.00%
+  Time accuracy: 5.10%
+
+Sequence 6:
+  Events (GT/Gen/Matched): 137/170/100
+  Match rate: 72.99%
+  Note accuracy: 6.00%
+  Duration accuracy: 0.00%
+  Time accuracy: 8.00%
+
+Sequence 7:
+  Events (GT/Gen/Matched): 137/170/107
+  Match rate: 78.10%
+  Note accuracy: 12.15%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+
+Sequence 8:
+  Events (GT/Gen/Matched): 137/170/102
+  Match rate: 74.45%
+  Note accuracy: 0.98%
+  Duration accuracy: 45.10%
+  Time accuracy: 65.69%
+
+Sequence 10:
+  Events (GT/Gen/Matched): 137/170/90
+  Match rate: 65.69%
+  Note accuracy: 13.33%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+
+Sequence 11:
+  Events (GT/Gen/Matched): 136/171/116
+  Match rate: 85.29%
+  Note accuracy: 1.72%
+  Duration accuracy: 0.00%
+  Time accuracy: 2.59%
+
+Sequence 12:
+  Events (GT/Gen/Matched): 137/170/98
+  Match rate: 71.53%
+  Note accuracy: 10.20%
+  Duration accuracy: 1.02%
+  Time accuracy: 4.08%
+
+Sequence 13:
+  Events (GT/Gen/Matched): 136/171/114
+  Match rate: 83.82%
+  Note accuracy: 23.68%
+  Duration accuracy: 0.00%
+  Time accuracy: 1.75%

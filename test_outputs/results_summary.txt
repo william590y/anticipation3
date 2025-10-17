@@ -1,0 +1,14 @@
+Test Results Summary
+============================================================
+Model: hf-ckpt-3500\checkpoint-3500
+Test Data: data\test_output.txt
+Total sequences: 3
+Successful: 3 (100.0%)
+Failed: 0 (0.0%)
+
+
+Detailed Results:
+------------------------------------------------------------
+Seq 0000: SUCCESS - Controls: 171, Generated: 171
+Seq 0001: SUCCESS - Controls: 171, Generated: 171
+Seq 0002: SUCCESS - Controls: 170, Generated: 170

@@ -112,6 +112,75 @@ def add_token(model, z, tokens, top_p, current_time, debug=False):
     return new_token
 
 
+def generate4(model, controls, top_p=1.0, prefix_controls=33):
+    """
+    Generate performance given controls that match tokenize-asap format.
+    
+    This function mirrors the exact training format from _interleave_tokenize4_single:
+    1. Prefix: first k=33 controls, each followed by a rest triplet
+    2. Body: alternating [generated_performance, future_control] pattern
+    
+    Args:
+        model: The trained model
+        controls: Performance tokens WITH CONTROL_OFFSET already applied
+                  These should be extracted from test sequences via extract_controls_from_sequence
+        top_p: Nucleus sampling parameter (default 1.0)
+        prefix_controls: Number of controls to use in prefix with rests (default 33)
+    
+    Returns:
+        events: Generated performance tokens (without CONTROL_OFFSET, TIME_OFFSET, etc.)
+        tokens: Full sequence including controls and rests (for debugging)
+    """
+    z = [ANTICIPATE]
+    
+    # Shift controls to start from time 0, keeping CONTROL_OFFSET in place
+    first_arrival = controls[0] - CONTROL_OFFSET
+    controls_shifted = controls.copy()
+    for i in range(0, len(controls), 3):
+        controls_shifted[i] = controls[i] - first_arrival
+    
+    tokens = []
+    
+    # Step 1: Build prefix with k control+rest pairs (matching training format exactly)
+    # Each control is followed by a rest at the same time: [ctrl_time, ctrl_dur, ctrl_note, rest_time, 0, REST]
+    k = min(prefix_controls, len(controls) // 3)
+    for i in range(k):
+        ctrl = controls_shifted[i*3:i*3+3]
+        tokens.extend(ctrl)
+        # Add rest triplet: time (without CONTROL_OFFSET), duration 0, REST token
+        cc_time = ctrl[0] - CONTROL_OFFSET
+        tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+    
+    # Step 2: Prepare remaining controls for alternating pattern
+    remaining_controls = controls_shifted[k*3:]
+    
+    events = []
+    
+    # Step 3: Generate performance events, alternating with future controls
+    # We need to generate for all controls, but the pattern depends on position
+    num_controls = len(controls) // 3
+    
+    for i in tqdm(range(num_controls), desc="Generating performance"):
+        # Determine current time from most recent generated event
+        if len(events) == 0:
+            current_time = 0
+        else:
+            current_time = events[-3] - TIME_OFFSET
+        
+        # Generate a performance event
+        new_token = add_token(model, z, tokens, top_p, current_time)
+        tokens.extend(new_token)
+        events.extend(new_token)
+        
+        # Add next future control if available
+        if len(remaining_controls) >= 3:
+            tokens.extend(remaining_controls[0:3])
+            remaining_controls = remaining_controls[3:]
+    
+    # Return events without offsets (for MIDI conversion) and full token sequence
+    return events, tokens
+
+
 def generate(model, start_time, end_time, inputs=None, controls=None, top_p=1.0, debug=False, delta=DELTA*TIME_RESOLUTION):
     if inputs is None:
         inputs = []

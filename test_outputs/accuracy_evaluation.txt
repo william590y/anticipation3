@@ -1,0 +1,133 @@
+Model Accuracy Evaluation
+============================================================
+
+Sequences evaluated: 13
+
+AGGREGATE METRICS:
+  Average Note Accuracy: 24.56%
+  Average Duration Accuracy: 4.10%
+  Average Time Accuracy: 0.73%
+  Average Exact Match: 0.00%
+  Average Time Error: 141.42 ticks
+  Average Duration Error: 9.34 ticks
+
+
+PER-SEQUENCE DETAILS:
+------------------------------------------------------------
+
+Sequence 0:
+  Events (GT/Gen/Compared): 136/171/136
+  Note accuracy: 4.41%
+  Duration accuracy: 0.00%
+  Time accuracy: 1.47%
+  Exact match: 0.00%
+  Mean time error: 80.36 ticks
+  Mean duration error: 7.55 ticks
+
+Sequence 1:
+  Events (GT/Gen/Compared): 136/171/136
+  Note accuracy: 4.41%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.74%
+  Exact match: 0.00%
+  Mean time error: 106.55 ticks
+  Mean duration error: 11.68 ticks
+
+Sequence 2:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 100.00%
+  Duration accuracy: 3.65%
+  Time accuracy: 0.73%
+  Exact match: 0.00%
+  Mean time error: 89.51 ticks
+  Mean duration error: 5.04 ticks
+
+Sequence 3:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 0.73%
+  Duration accuracy: 0.00%
+  Time accuracy: 1.46%
+  Exact match: 0.00%
+  Mean time error: 221.64 ticks
+  Mean duration error: 8.77 ticks
+
+Sequence 4:
+  Events (GT/Gen/Compared): 134/173/134
+  Note accuracy: 22.39%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.75%
+  Exact match: 0.00%
+  Mean time error: 110.04 ticks
+  Mean duration error: 10.25 ticks
+
+Sequence 5:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 0.00%
+  Duration accuracy: 0.00%
+  Time accuracy: 1.46%
+  Exact match: 0.00%
+  Mean time error: 89.50 ticks
+  Mean duration error: 7.50 ticks
+
+Sequence 6:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 2.92%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.73%
+  Exact match: 0.00%
+  Mean time error: 226.07 ticks
+  Mean duration error: 17.53 ticks
+
+Sequence 7:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 12.41%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+  Exact match: 0.00%
+  Mean time error: 94.46 ticks
+  Mean duration error: 17.63 ticks
+
+Sequence 8:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 3.65%
+  Duration accuracy: 48.91%
+  Time accuracy: 0.00%
+  Exact match: 0.00%
+  Mean time error: 235.85 ticks
+  Mean duration error: 14.07 ticks
+
+Sequence 10:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 100.00%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+  Exact match: 0.00%
+  Mean time error: 243.40 ticks
+  Mean duration error: 6.33 ticks
+
+Sequence 11:
+  Events (GT/Gen/Compared): 136/171/136
+  Note accuracy: 2.94%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.00%
+  Exact match: 0.00%
+  Mean time error: 163.28 ticks
+  Mean duration error: 4.42 ticks
+
+Sequence 12:
+  Events (GT/Gen/Compared): 137/170/137
+  Note accuracy: 9.49%
+  Duration accuracy: 0.73%
+  Time accuracy: 1.46%
+  Exact match: 0.00%
+  Mean time error: 86.60 ticks
+  Mean duration error: 6.13 ticks
+
+Sequence 13:
+  Events (GT/Gen/Compared): 136/171/136
+  Note accuracy: 55.88%
+  Duration accuracy: 0.00%
+  Time accuracy: 0.74%
+  Exact match: 0.00%
+  Mean time error: 91.16 ticks
+  Mean duration error: 4.53 ticks
