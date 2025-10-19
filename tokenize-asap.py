@@ -13,7 +13,7 @@ from anticipation import ops
 from alignment import align_tokens2
 
 
-def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33):
+def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33, perturb_std_ms=0.0):
     """Worker: process a single (perf, score, perf_ann, score_ann) tuple.
 
     Returns a tuple: (seq_lines: List[str], stats: dict)
@@ -21,7 +21,7 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33)
     """
     file1, file2, file3, file4 = filegroup
     try:
-        matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones)
+        matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones, perturb_std_ms=perturb_std_ms)
     except Exception as e:
         return [], {"seq": 0, "discarded": 1, "err": str(e)}
 
@@ -71,23 +71,24 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33)
 def _worker_split(payload):
     """Top-level wrapper to keep Windows spawn picklable.
 
-    payload = (filegroup, split, skip_Nones, prefix_controls)
+    payload = (filegroup, split, skip_Nones, prefix_controls, perturb_std_ms)
     Returns (split, lines, stats)
     """
-    fg, split, skip_Nones, prefix_controls = payload
-    lines, stats = _interleave_tokenize4_single(fg, skip_Nones=skip_Nones, prefix_controls=prefix_controls)
+    fg, split, skip_Nones, prefix_controls, perturb_std_ms = payload
+    lines, stats = _interleave_tokenize4_single(fg, skip_Nones=skip_Nones, prefix_controls=prefix_controls, perturb_std_ms=perturb_std_ms)
     return split, lines, stats
 
 def main():
     ap = argparse.ArgumentParser(description='Parallel ASAP tokenization with producer-consumer and dataset split by score')
     ap.add_argument('--asap-root', default='./asap-dataset-master', help='Path to ASAP dataset root')
-    ap.add_argument('--workers', type=int, default=max(os.cpu_count() or 1, 1), help='Number of parallel workers')
+    ap.add_argument('--workers', type=int, default=128, help='Number of parallel workers')
     ap.add_argument('--test-frac', type=float, default=0.2, help='Fraction of unique scores to reserve for test split')
     ap.add_argument('--prefix-controls', type=int, default=33, help='Fixed number of control tokens for t4 prefix')
-    ap.add_argument('--skip-nones', action='store_true', help='Drop unmatched performance notes')
+    ap.add_argument('--skip-nones', action='store_true', default=True, help='Drop unmatched performance notes')
     ap.add_argument('--seed', type=int, default=0, help='Random seed for split reproducibility')
-    ap.add_argument('--out-train', default='./data/train_output.txt')
-    ap.add_argument('--out-test', default='./data/test_output.txt')
+    ap.add_argument('--perturb-std-ms', type=float, default=50.0, help='Standard deviation of time perturbation in milliseconds for control/performance tokens')
+    ap.add_argument('--out-train', default='./data/train_perturbed.txt')
+    ap.add_argument('--out-test', default='./data/test_perturbed.txt')
     args = ap.parse_args()
 
     print('Tokenization parameters:')
@@ -96,6 +97,7 @@ def main():
     print(f'  min track length = {MIN_TRACK_TIME_IN_SECONDS}s')
     print(f'  min track events = {MIN_TRACK_EVENTS}')
     print(f'  workers = {args.workers}')
+    print(f'  time perturbation std = {args.perturb_std_ms}ms')
 
     meta_csv = os.path.join(args.asap_root, 'metadata.csv')
     df = pd.read_csv(meta_csv)
@@ -140,8 +142,8 @@ def main():
     with open(args.out_train, 'w') as f_train, open(args.out_test, 'w') as f_test:
         with Pool(processes=args.workers) as pool:
             # Chain test and train with split tags
-            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls) for fg in tasks_test] + \
-                       [(fg, 'train', args.skip_nones, args.prefix_controls) for fg in tasks_train]
+            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls, args.perturb_std_ms) for fg in tasks_test] + \
+                       [(fg, 'train', args.skip_nones, args.prefix_controls, args.perturb_std_ms) for fg in tasks_train]
 
             # Submit work and consume results with a giant progress bar
             with tqdm(total=len(payloads), desc='Tokenizing pieces', unit='piece') as pbar:

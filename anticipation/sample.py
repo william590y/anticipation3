@@ -73,7 +73,22 @@ def instr_logits(logits, full_history):
     return logits
 
 
-def add_token(model, z, tokens, top_p, current_time, debug=False):
+def add_token(model, z, tokens, top_p, current_time, debug=False, force_pitch=None):
+    """
+    Generate a new token triplet [time, duration, note].
+    
+    Args:
+        model: The model to use for generation
+        z: Mode token (e.g., ANTICIPATE)
+        tokens: History of tokens
+        top_p: Nucleus sampling parameter
+        current_time: Current time for constraining future logits
+        debug: Whether to print debug info
+        force_pitch: If provided, force the note (position 2) to be this value
+    
+    Returns:
+        List of 3 tokens [time, duration, note]
+    """
     assert len(tokens) % 3 == 0
 
     history = tokens.copy()
@@ -85,21 +100,32 @@ def add_token(model, z, tokens, top_p, current_time, debug=False):
     new_token = []
     with torch.no_grad():
         for i in range(3):
-            print(history, new_token)
+            if debug:
+                print(history, new_token)
             input_tokens = torch.tensor(z + history + new_token).unsqueeze(0).to(model.device)
-            print(input_tokens)
+            if debug:
+                print(input_tokens)
             logits = model(input_tokens).logits[0,-1]
-            print(min(logits),max(logits))
+            if debug:
+                print(min(logits),max(logits))
 
             idx = input_tokens.shape[1]-1
             logits = safe_logits(logits, idx)
-            print(min(logits),max(logits))
+            if debug:
+                print(min(logits),max(logits))
             if i == 0:
                 logits = future_logits(logits, current_time - offset)
             elif i == 2:
                 logits = instr_logits(logits, tokens)
+                # Force specific pitch if requested
+                if force_pitch is not None:
+                    # Zero out all logits except the forced pitch
+                    forced_logits = torch.full_like(logits, -float('inf'))
+                    forced_logits[force_pitch] = logits[force_pitch]
+                    logits = forced_logits
             logits = nucleus(logits, top_p)
-            print(min(logits),max(logits))
+            if debug:
+                print(min(logits),max(logits))
 
             probs = F.softmax(logits, dim=-1)
             token = torch.multinomial(probs, 1)
@@ -151,14 +177,16 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
         cc_time = ctrl[0] - CONTROL_OFFSET
         tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
     
-    # Step 2: Prepare remaining controls for alternating pattern
-    remaining_controls = controls_shifted[k*3:]
+    # Step 2: Generate performance for all controls
+    # Training adds: score_i, then (if i+k < N) ctrl_(i+k)
+    # So we generate in this order: score_0, score_1, ..., score_{N-1}
+    # And interleave with: ctrl_33, ctrl_34, ..., ctrl_{N-1}
+    
+    num_controls = len(controls) // 3
+    k = min(prefix_controls, num_controls)
     
     events = []
-    
-    # Step 3: Generate performance events, alternating with future controls
-    # We need to generate for all controls, but the pattern depends on position
-    num_controls = len(controls) // 3
+    future_controls = controls_shifted[k*3:]  # ctrl_k, ctrl_{k+1}, ...
     
     for i in tqdm(range(num_controls), desc="Generating performance"):
         # Determine current time from most recent generated event
@@ -167,17 +195,112 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
         else:
             current_time = events[-3] - TIME_OFFSET
         
-        # Generate a performance event
+        # Generate performance event for control_i
         new_token = add_token(model, z, tokens, top_p, current_time)
         tokens.extend(new_token)
         events.extend(new_token)
         
-        # Add next future control if available
-        if len(remaining_controls) >= 3:
-            tokens.extend(remaining_controls[0:3])
-            remaining_controls = remaining_controls[3:]
+        # Add future control ctrl_(i+k) if available
+        # This happens for i=0 to num_controls-k-1
+        if i < num_controls - k and len(future_controls) >= 3:
+            tokens.extend(future_controls[0:3])
+            future_controls = future_controls[3:]
     
     # Return events without offsets (for MIDI conversion) and full token sequence
+    return events, tokens
+
+
+def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_controls=33, max_attempts=100):
+    """
+    Generate performance with REJECTION SAMPLING for pitch matching.
+    Keeps regenerating each triplet until the note matches ground truth.
+    This allows us to evaluate timing and duration prediction when the model
+    is constrained to produce the correct pitch.
+    
+    Args:
+        model: The trained model
+        controls: Performance tokens WITH CONTROL_OFFSET already applied
+        ground_truth_scores: Ground truth score tokens [time+TIME, dur+DUR, note+NOTE]
+        top_p: Nucleus sampling parameter (default 1.0)
+        prefix_controls: Number of controls to use in prefix with rests (default 33)
+        max_attempts: Maximum regeneration attempts per triplet (default 100)
+    
+    Returns:
+        events: Generated performance tokens with forced pitches
+        tokens: Full sequence including controls and rests
+    """
+    z = [ANTICIPATE]
+    
+    # Shift controls to start from time 0, keeping CONTROL_OFFSET in place
+    first_arrival = controls[0] - CONTROL_OFFSET
+    controls_shifted = controls.copy()
+    for i in range(0, len(controls), 3):
+        controls_shifted[i] = controls[i] - first_arrival
+    
+    tokens = []
+    
+    # Step 1: Build prefix with k control+rest pairs
+    k = min(prefix_controls, len(controls) // 3)
+    for i in range(k):
+        ctrl = controls_shifted[i*3:i*3+3]
+        tokens.extend(ctrl)
+        cc_time = ctrl[0] - CONTROL_OFFSET
+        tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+    
+    # Step 2: Generate performance with rejection sampling for correct pitch
+    num_controls = len(controls) // 3
+    k = min(prefix_controls, num_controls)
+    
+    events = []
+    future_controls = controls_shifted[k*3:]
+    
+    total_attempts = 0
+    failed_to_match = 0
+    
+    for i in tqdm(range(num_controls), desc="Generating (rejection sampling)"):
+        # Determine current time
+        if len(events) == 0:
+            current_time = 0
+        else:
+            current_time = events[-3] - TIME_OFFSET
+        
+        # Get ground truth pitch for this position
+        if i * 3 + 2 < len(ground_truth_scores):
+            target_pitch = ground_truth_scores[i * 3 + 2]  # Ground truth note token
+            
+            # Rejection sampling: keep generating until we get the right pitch
+            attempts = 0
+            while attempts < max_attempts:
+                new_token = add_token(model, z, tokens, top_p, current_time)
+                attempts += 1
+                
+                # Check if pitch matches
+                if new_token[2] == target_pitch:
+                    break
+            
+            total_attempts += attempts
+            
+            # If we exhausted attempts without finding the pitch, use last generated
+            if new_token[2] != target_pitch:
+                failed_to_match += 1
+            
+        else:
+            # No ground truth, generate normally
+            new_token = add_token(model, z, tokens, top_p, current_time)
+            total_attempts += 1
+        
+        tokens.extend(new_token)
+        events.extend(new_token)
+        
+        # Add future control if available
+        if i < num_controls - k and len(future_controls) >= 3:
+            tokens.extend(future_controls[0:3])
+            future_controls = future_controls[3:]
+    
+    # Print stats
+    avg_attempts = total_attempts / num_controls if num_controls > 0 else 0
+    print(f"\n  Rejection sampling stats: avg {avg_attempts:.1f} attempts/note, {failed_to_match} failed to match (out of {num_controls})")
+    
     return events, tokens
 
 

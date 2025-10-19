@@ -1,0 +1,13 @@
+Generation Quality Test Results
+================================================================================
+
+Checkpoint: hf-ckpt-3500/checkpoint-3500
+Test sequences: 5
+Overall pitch match rate: 39.53%
+
+Per-sequence results:
+Seq   0:   0.58% (1/171 matches, 171 generated vs 171 controls)
+Seq   1:  84.21% (144/171 matches, 171 generated vs 171 controls)
+Seq   2:  81.18% (138/170 matches, 170 generated vs 170 controls)
+Seq   3:   1.18% (2/170 matches, 170 generated vs 170 controls)
+Seq   4:  30.64% (53/173 matches, 173 generated vs 173 controls)
