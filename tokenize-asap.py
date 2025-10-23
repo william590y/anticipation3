@@ -28,6 +28,11 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
     
     # Generate multiple augmented versions
     for aug_idx in range(num_augmentations):
+        # Re-seed RNG for each augmentation to ensure different random values
+        # Use hash of filename + augmentation index for reproducible but unique seeds
+        seed = hash((file1, aug_idx)) % (2**32)
+        np.random.seed(seed)
+        
         try:
             # Each augmentation gets different random perturbations and masks
             matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones, 
