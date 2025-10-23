@@ -26,19 +26,49 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
     total_seqs = 0
     total_discards = 0
     
-    # Generate multiple augmented versions
+    # DO ALIGNMENT ONCE (expensive - MIDI parsing, annotation loading, matching)
+    try:
+        # Get matched tuples WITHOUT perturbation/masking (we'll apply that per augmentation)
+        matched_tuples_base = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones, 
+                                           perturb_std_ms=0.0, mask_prob=0.0)
+    except Exception as e:
+        return [], {"seq": 0, "discarded": 1, "err": str(e)}
+    
+    # Generate multiple augmented versions (cheap - just noise and masking)
     for aug_idx in range(num_augmentations):
         # Re-seed RNG for each augmentation to ensure different random values
-        # Use hash of filename + augmentation index for reproducible but unique seeds
         seed = hash((file1, aug_idx)) % (2**32)
         np.random.seed(seed)
         
-        try:
-            # Each augmentation gets different random perturbations and masks
-            matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones, 
-                                          perturb_std_ms=perturb_std_ms, mask_prob=mask_prob)
-        except Exception as e:
-            return [], {"seq": 0, "discarded": 1, "err": str(e)}
+        # VECTORIZED augmentation: generate all random values at once
+        n_tuples = len(matched_tuples_base)
+        
+        # Generate mask decisions for all tuples at once (vectorized)
+        mask_decisions = np.random.random(n_tuples) < mask_prob if mask_prob > 0 else np.zeros(n_tuples, dtype=bool)
+        
+        # Generate time perturbations for all tuples at once (vectorized)
+        if perturb_std_ms > 0:
+            from anticipation.config import TIME_RESOLUTION
+            perturb_std_units = (perturb_std_ms / 1000.0) * TIME_RESOLUTION
+            time_perturbations = np.random.normal(0, perturb_std_units, n_tuples).astype(int)
+        else:
+            time_perturbations = np.zeros(n_tuples, dtype=int)
+        
+        # Apply augmentation using the pre-generated random values
+        matched_tuples = []
+        for i, match in enumerate(matched_tuples_base):
+            perf_tuple = list(match[0])  # Copy to avoid modifying base
+            
+            if mask_decisions[i]:
+                # Replace control triplet with MASK
+                perf_tuple = [MASK, MASK, MASK]
+            elif time_perturbations[i] != 0:
+                # Apply time perturbation
+                base_time = perf_tuple[0] - CONTROL_OFFSET
+                perturbed_time = max(0, base_time + time_perturbations[i])
+                perf_tuple = [CONTROL_OFFSET + perturbed_time, perf_tuple[1], perf_tuple[2]]
+            
+            matched_tuples.append([perf_tuple, match[1], match[2], match[3]])
 
         # Build interleaved stream: fixed-length control+pad prefix, then alternate score/control
         interleaved_tokens = []
@@ -113,7 +143,7 @@ def main():
     ap.add_argument('--seed', type=int, default=0, help='Random seed for split reproducibility')
     ap.add_argument('--perturb-std-ms', type=float, default=50.0, help='Standard deviation of time perturbation in milliseconds for control/performance tokens')
     ap.add_argument('--mask-prob', type=float, default=0.5, help='Probability of masking each control/performance token triplet')
-    ap.add_argument('--num-augmentations', type=int, default=5, help='Number of augmented versions to create per piece')
+    ap.add_argument('--num-augmentations', type=int, default=20, help='Number of augmented versions to create per piece')
     ap.add_argument('--out-train', default='./data/train_perturbed.txt')
     ap.add_argument('--out-test', default='./data/test_perturbed.txt')
     args = ap.parse_args()
