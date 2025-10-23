@@ -78,7 +78,6 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
             cc = t[0]
             interleaved_tokens.extend(cc)
             # Handle MASK tokens (they don't have CONTROL_OFFSET)
-            from anticipation.vocab import MASK
             if cc[0] == MASK:
                 # For masked tokens, use a placeholder time of 0
                 interleaved_tokens.extend([TIME_OFFSET + 0, DUR_OFFSET + 0, REST])
