@@ -54,7 +54,7 @@ class TokenizedDataset(Dataset):
     
     Sequences are already packed and formatted by tokenize-asap.py:
     - Each sequence is exactly 1024 tokens
-    - Format: [SEP, SEP, SEP, control_flag, ...tokens...]
+    - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
     """
     def __init__(self, file_path):
         self.sequences = []
@@ -68,12 +68,17 @@ class TokenizedDataset(Dataset):
         
         # Validate format
         if self.sequences:
-            from anticipation.vocab import SEPARATOR, AUTOREGRESS, ANTICIPATE
+            from anticipation.vocab import ANTICIPATE, MASK, VOCAB_SIZE
             sample = self.sequences[0].tolist()
-            if len(sample) >= 4:
-                if sample[0] == SEPARATOR and sample[1] == SEPARATOR and sample[2] == SEPARATOR:
-                    if sample[3] in [AUTOREGRESS, ANTICIPATE]:
-                        print(f"✓ Tokenization format validated (3 SEPARATORs + control flag)")
+            if len(sample) >= 1:
+                if sample[0] == ANTICIPATE:
+                    print(f"✓ Tokenization format validated (starts with ANTICIPATE token)")
+                    # Check if MASK tokens are present (from augmentation)
+                    mask_count = sum(1 for t in sample if t == MASK)
+                    if mask_count > 0:
+                        print(f"✓ Found {mask_count} MASK tokens in first sequence (augmented data)")
+                else:
+                    print(f"⚠ Warning: First token is {sample[0]}, expected ANTICIPATE ({ANTICIPATE})")
     
     def __len__(self):
         return len(self.sequences)
@@ -149,8 +154,8 @@ def plot_losses(train_losses, val_losses, validation_steps, output_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_output.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_output.txt'))
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_perturbed.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_perturbed.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_no_clip'))
     parser.add_argument('--batch_size', type=int, default=8) 
@@ -252,6 +257,16 @@ def main():
                 trust_remote_code=True,
                 use_cache=False
             )
+        
+        # Resize model embeddings to accommodate MASK token (VOCAB_SIZE=55029)
+        from anticipation.vocab import VOCAB_SIZE
+        current_vocab_size = model.config.vocab_size
+        if current_vocab_size != VOCAB_SIZE:
+            print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE} (added MASK token)")
+            model.resize_token_embeddings(VOCAB_SIZE)
+            print(f"✓ Model embeddings resized successfully")
+        else:
+            print(f"✓ Model vocabulary size matches tokenization ({VOCAB_SIZE})")
         
         # Check memory after loading model
         print("GPU memory after loading model:")
