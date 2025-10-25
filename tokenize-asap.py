@@ -194,13 +194,31 @@ def main():
     print(f'Total pieces: {total_tasks} (train: {len(tasks_train)}, test: {len(tasks_test)})')
     print(f'Writing to: {args.out_train} and {args.out_test}')
 
+    # Save train/test split information
+    split_info_path = os.path.join(os.path.dirname(args.out_train), 'train_test_split.txt')
+    with open(split_info_path, 'w') as f_split:
+        f_split.write(f"# Train/Test Split (seed={args.seed}, test_frac={args.test_frac})\n")
+        f_split.write(f"# Total pieces: {total_tasks} (train: {len(tasks_train)}, test: {len(tasks_test)})\n")
+        f_split.write(f"# Split by unique scores to prevent data leakage\n\n")
+        
+        f_split.write("=== TRAINING PIECES ===\n")
+        for fg in tasks_train:
+            f_split.write(f"{fg[0]}\n")  # Performance MIDI path
+        
+        f_split.write(f"\n=== TEST PIECES ===\n")
+        for fg in tasks_test:
+            f_split.write(f"{fg[0]}\n")  # Performance MIDI path
+    
+    print(f'Split information saved to: {split_info_path}')
+
     seq_train = seq_test = 0
     disc_train = disc_test = 0
 
     with open(args.out_train, 'w') as f_train, open(args.out_test, 'w') as f_test:
         with Pool(processes=args.workers) as pool:
             # Chain test and train with split tags
-            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls, args.perturb_std_ms, args.mask_prob, args.num_augmentations) for fg in tasks_test] + \
+            # Test set: NO augmentation, perturbation, or masking (clean data for evaluation)
+            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls, 0.0, 0.0, 1) for fg in tasks_test] + \
                        [(fg, 'train', args.skip_nones, args.prefix_controls, args.perturb_std_ms, args.mask_prob, args.num_augmentations) for fg in tasks_train]
 
             # Submit work and consume results with a giant progress bar
