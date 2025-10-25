@@ -401,8 +401,9 @@ def main():
                                     if completed_steps % 100 == 0:
                                         print_gpu_memory_stats()
                                 
-                                # Run validation periodically
-                                if completed_steps % args.eval_steps == 0:
+                                # Run validation periodically (but skip if we're about to checkpoint, which also validates)
+                                is_checkpoint_step = (completed_steps % args.save_steps == 0)
+                                if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                                     print(f"\nRunning validation at step {completed_steps}...")
                                     val_loss = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
@@ -417,8 +418,18 @@ def main():
                                         torch.cuda.empty_cache()
                                         gc.collect()
                                 
-                                # Save checkpoint
-                                if completed_steps % args.save_steps == 0:
+                                # Save checkpoint (with validation)
+                                if is_checkpoint_step:
+                                    # Run validation before saving checkpoint
+                                    print(f"\nRunning validation at checkpoint step {completed_steps}...")
+                                    val_loss = evaluate_model(model, val_dataloader, accelerator)
+                                    validation_steps.append(completed_steps // 10)
+                                    val_losses.append(val_loss)
+                                    print(f"Validation Loss: {val_loss:.4f}")
+                                    
+                                    # Return to training mode
+                                    model.train()
+                                    
                                     checkpoint_dir = args.output_dir / f"checkpoint-{completed_steps}"
                                     os.makedirs(checkpoint_dir, exist_ok=True)
                                     
