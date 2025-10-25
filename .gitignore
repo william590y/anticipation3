@@ -1,2 +1,4 @@
 # Ignore all safetensors files
 *.safetensors
+data/*.txt
+*.safetensors
