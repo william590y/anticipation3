@@ -2,3 +2,5 @@
 *.safetensors
 data/*.txt
 *.safetensors
+__pycache__/
+*.pyc
