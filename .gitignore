@@ -4,3 +4,8 @@ data/*.txt
 *.safetensors
 __pycache__/
 *.pyc
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
