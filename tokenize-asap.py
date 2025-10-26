@@ -19,6 +19,9 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
     Returns a tuple: (seq_lines: List[str], stats: dict)
     Mirrors tokenize4 logic but within a single piece (no cross-piece concatenation).
     Creates multiple augmented versions of the same piece.
+    
+    Now outputs sequences as: "token1 token2 ... tokenN | mask_idx1 mask_idx2 ..."
+    where mask indices indicate which positions should be masked in attention.
     """
     file1, file2, file3, file4 = filegroup
     
@@ -59,42 +62,55 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
         for i, match in enumerate(matched_tuples_base):
             perf_tuple = list(match[0])  # Copy to avoid modifying base
             
-            if mask_decisions[i]:
-                # Replace control triplet with MASK
-                perf_tuple = [MASK, MASK, MASK]
-            elif time_perturbations[i] != 0:
-                # Apply time perturbation
+            # Apply time perturbation (no longer replacing with MASK tokens)
+            if time_perturbations[i] != 0:
                 base_time = perf_tuple[0] - CONTROL_OFFSET
                 perturbed_time = max(0, base_time + time_perturbations[i])
                 perf_tuple = [CONTROL_OFFSET + perturbed_time, perf_tuple[1], perf_tuple[2]]
             
-            matched_tuples.append([perf_tuple, match[1], match[2], match[3]])
+            matched_tuples.append([perf_tuple, match[1], match[2], match[3], mask_decisions[i]])
 
         # Build interleaved stream: fixed-length control+pad prefix, then alternate score/control
         interleaved_tokens = []
+        mask_indices = []  # Track which token positions should be masked
+        token_idx = 0  # Current position in the token stream
 
         k = min(prefix_controls, len(matched_tuples))
-        for t in matched_tuples[:k]:
+        for i, t in enumerate(matched_tuples[:k]):
             cc = t[0]
+            should_mask = t[4]  # mask decision
+            
+            # Add control triplet
             interleaved_tokens.extend(cc)
-            # Handle MASK tokens (they don't have CONTROL_OFFSET)
-            if cc[0] == MASK:
-                # For masked tokens, use a placeholder time of 0
-                interleaved_tokens.extend([TIME_OFFSET + 0, DUR_OFFSET + 0, REST])
-            else:
-                cc_time = cc[0] - CONTROL_OFFSET
-                interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+            if should_mask:
+                # Mark these 3 positions for masking
+                mask_indices.extend([token_idx, token_idx + 1, token_idx + 2])
+            token_idx += 3
+            
+            # Add rest triplet
+            cc_time = cc[0] - CONTROL_OFFSET
+            interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+            token_idx += 3
 
         for i, t in enumerate(matched_tuples):
             sc = t[2]
             if sc[0] is not None:
                 interleaved_tokens.extend(sc)
+                token_idx += 3
             ii = i + k
             if ii < len(matched_tuples):
-                interleaved_tokens.extend(matched_tuples[ii][0])
+                cc = matched_tuples[ii][0]
+                should_mask = matched_tuples[ii][4]
+                
+                interleaved_tokens.extend(cc)
+                if should_mask:
+                    mask_indices.extend([token_idx, token_idx + 1, token_idx + 2])
+                token_idx += 3
 
         # Prepend separators
         interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+        # Adjust mask indices for the 3 prepended separators
+        mask_indices = [idx + 3 for idx in mask_indices]
 
         # Chunk into sequences of 1023 body tokens and add global mode token
         concatenated_tokens = interleaved_tokens
@@ -103,6 +119,12 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
         while len(concatenated_tokens) >= EVENT_SIZE * M:
             seq = concatenated_tokens[0:EVENT_SIZE * M]
             concatenated_tokens = concatenated_tokens[EVENT_SIZE * M:]
+            
+            # Filter mask indices to only those in this sequence
+            seq_mask_indices = [idx for idx in mask_indices if idx < EVENT_SIZE * M]
+            # Adjust remaining mask indices
+            mask_indices = [idx - EVENT_SIZE * M for idx in mask_indices if idx >= EVENT_SIZE * M]
+            
             seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
             if ops.min_time(seq, seconds=False) != 0:
                 # safety
@@ -112,7 +134,13 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
                 stats_discards += 1
                 continue
             seq.insert(0, z)
-            all_lines.append(' '.join(str(tok) for tok in seq))
+            # Adjust mask indices for the prepended mode token
+            seq_mask_indices = [idx + 1 for idx in seq_mask_indices]
+            
+            # Output format: "token1 token2 ... | mask_idx1 mask_idx2 ..."
+            token_str = ' '.join(str(tok) for tok in seq)
+            mask_str = ' '.join(str(idx) for idx in seq_mask_indices)
+            all_lines.append(f"{token_str} | {mask_str}")
             total_seqs += 1
         
         total_discards += stats_discards
@@ -140,11 +168,8 @@ def main():
     ap.add_argument('--prefix-controls', type=int, default=33, help='Fixed number of control tokens for t4 prefix')
     ap.add_argument('--skip-nones', action='store_true', default=True, help='Drop unmatched performance notes')
     ap.add_argument('--seed', type=int, default=0, help='Random seed for split reproducibility')
-    ap.add_argument('--perturb-std-ms', type=float, default=50.0, help='Standard deviation of time perturbation in milliseconds for control/performance tokens')
-    ap.add_argument('--mask-prob', type=float, default=0.5, help='Probability of masking each control/performance token triplet')
-    ap.add_argument('--num-augmentations', type=int, default=20, help='Number of augmented versions to create per piece')
-    ap.add_argument('--out-train', default='./data/train_perturbed.txt')
-    ap.add_argument('--out-test', default='./data/test_perturbed.txt')
+    ap.add_argument('--out-train', default='./data/train_clean.txt')
+    ap.add_argument('--out-test', default='./data/test_clean.txt')
     args = ap.parse_args()
 
     print('Tokenization parameters:')
@@ -153,9 +178,7 @@ def main():
     print(f'  min track length = {MIN_TRACK_TIME_IN_SECONDS}s')
     print(f'  min track events = {MIN_TRACK_EVENTS}')
     print(f'  workers = {args.workers}')
-    print(f'  time perturbation std = {args.perturb_std_ms}ms')
-    print(f'  mask probability = {args.mask_prob}')
-    print(f'  augmentations per piece = {args.num_augmentations}')
+    print(f'  NOTE: Augmentation (perturbation/masking) now done during training, not tokenization')
 
     meta_csv = os.path.join(args.asap_root, 'metadata.csv')
     df = pd.read_csv(meta_csv)
@@ -217,9 +240,9 @@ def main():
     with open(args.out_train, 'w') as f_train, open(args.out_test, 'w') as f_test:
         with Pool(processes=args.workers) as pool:
             # Chain test and train with split tags
-            # Test set: NO augmentation, perturbation, or masking (clean data for evaluation)
+            # Both train and test: clean data (no augmentation at tokenization time)
             payloads = [(fg, 'test', args.skip_nones, args.prefix_controls, 0.0, 0.0, 1) for fg in tasks_test] + \
-                       [(fg, 'train', args.skip_nones, args.prefix_controls, args.perturb_std_ms, args.mask_prob, args.num_augmentations) for fg in tasks_train]
+                       [(fg, 'train', args.skip_nones, args.prefix_controls, 0.0, 0.0, 1) for fg in tasks_train]
 
             # Submit work and consume results with a giant progress bar
             with tqdm(total=len(payloads), desc='Tokenizing pieces', unit='piece') as pbar:

@@ -50,112 +50,259 @@ print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA version: {torch.version.cuda}")
 
 class TokenizedDataset(Dataset):
-    """Simple dataset that loads pre-tokenized sequences.
+    """Dataset that loads clean sequences and applies augmentation on-the-fly.
     
-    Sequences are already packed and formatted by tokenize-asap.py:
+    Sequences are packed and formatted by tokenize-asap.py:
     - Each sequence is exactly 1024 tokens
     - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
+    - Augmentation (perturbation + masking) applied during training, not tokenization
     """
-    def __init__(self, file_path):
+    def __init__(self, file_path, perturb_std_ms=0.0, mask_prob=0.0, is_training=True):
         self.sequences = []
+        self.perturb_std_ms = perturb_std_ms if is_training else 0.0
+        self.mask_prob = mask_prob if is_training else 0.0
+        self.is_training = is_training
+        
         with open(file_path, 'r') as f:
             for line in f:
-                tokens = list(map(int, line.strip().split()))
+                line = line.strip()
+                if '|' in line:
+                    # New format: "token1 token2 ... | mask_idx1 mask_idx2 ..." (ignored, we augment on-the-fly)
+                    token_str, _ = line.split('|')
+                    tokens = list(map(int, token_str.strip().split()))
+                else:
+                    # Old format: just tokens
+                    tokens = list(map(int, line.split()))
+                
                 self.sequences.append(torch.tensor(tokens, dtype=torch.long))
         
         self.sequence_length = len(self.sequences[0]) if self.sequences else 0
         print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
+        if self.is_training:
+            print(f"  Training mode: perturb_std={self.perturb_std_ms}ms, mask_prob={self.mask_prob}")
+        else:
+            print(f"  Validation mode: no augmentation")
         
         # Validate format
         if self.sequences:
-            from anticipation.vocab import ANTICIPATE, MASK, VOCAB_SIZE
+            from anticipation.vocab import ANTICIPATE
             sample = self.sequences[0].tolist()
             if len(sample) >= 1:
                 if sample[0] == ANTICIPATE:
                     print(f"✓ Tokenization format validated (starts with ANTICIPATE token)")
-                    # Check if MASK tokens are present (from augmentation)
-                    mask_count = sum(1 for t in sample if t == MASK)
-                    if mask_count > 0:
-                        print(f"✓ Found {mask_count} MASK tokens in first sequence (augmented data)")
                 else:
                     print(f"⚠ Warning: First token is {sample[0]}, expected ANTICIPATE ({ANTICIPATE})")
     
     def __len__(self):
         return len(self.sequences)
     
+    def _augment_sequence(self, tokens):
+        """Apply on-the-fly augmentation: time perturbation + masking.
+        
+        Only augments CONTROL triplets, not score triplets or special tokens.
+        Control triplets have all 3 tokens >= CONTROL_OFFSET.
+        Score triplets have all 3 tokens < CONTROL_OFFSET.
+        
+        Returns:
+            augmented_tokens: Perturbed tokens
+            mask_indices: Indices to mask in loss (list of ints)
+        """
+        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST
+        from anticipation.config import TIME_RESOLUTION
+        
+        if not self.is_training or (self.perturb_std_ms == 0 and self.mask_prob == 0):
+            # No augmentation for validation or if disabled
+            return tokens.clone(), []
+        
+        augmented = tokens.clone()
+        mask_indices = []
+        
+        # Convert perturbation std from ms to time resolution units
+        perturb_std_units = (self.perturb_std_ms / 1000.0) * TIME_RESOLUTION if self.perturb_std_ms > 0 else 0
+        
+        # Iterate through sequence in triplets
+        # Skip first token (ANTICIPATE mode token)
+        i = 1
+        while i < len(augmented) - 2:
+            # Check if this is a control triplet:
+            # - All 3 tokens must be >= CONTROL_OFFSET
+            # - First token must not be SEPARATOR or ANTICIPATE (these are also >= CONTROL_OFFSET)
+            if (augmented[i] >= CONTROL_OFFSET and 
+                augmented[i+1] >= CONTROL_OFFSET and 
+                augmented[i+2] >= CONTROL_OFFSET and
+                augmented[i] != SEPARATOR and 
+                augmented[i] != ANTICIPATE):
+                
+                # This is a control triplet (time, dur, pitch) with CONTROL_OFFSET added
+                
+                # Decide whether to mask this triplet
+                if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
+                    # Mark these 3 positions for masking in loss
+                    mask_indices.extend([i, i+1, i+2])
+                
+                # Apply time perturbation to time and duration (NOT pitch)
+                if perturb_std_units > 0:
+                    # Perturb time (first token)
+                    base_time = augmented[i].item() - CONTROL_OFFSET
+                    time_perturbation = int(torch.randn(1).item() * perturb_std_units)
+                    perturbed_time = max(0, base_time + time_perturbation)
+                    augmented[i] = CONTROL_OFFSET + perturbed_time
+                    
+                    # Perturb duration (second token)
+                    base_dur = augmented[i+1].item() - CONTROL_OFFSET
+                    dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
+                    perturbed_dur = max(0, base_dur + dur_perturbation)
+                    augmented[i+1] = CONTROL_OFFSET + perturbed_dur
+                    
+                    # Leave pitch (third token) unchanged
+                
+                i += 3  # Skip to next triplet
+            else:
+                # Not a control triplet - could be score, rest, separator, etc.
+                # Don't augment, just move to next token
+                i += 1
+        
+        return augmented, mask_indices
+    
     def __getitem__(self, idx):
         tokens = self.sequences[idx]
-        return {"input_ids": tokens, "labels": tokens}
+        
+        # Apply on-the-fly augmentation
+        augmented_tokens, mask_idxs = self._augment_sequence(tokens)
+        
+        # Create labels (same as input, but with masked positions set to -100)
+        labels = augmented_tokens.clone()
+        if mask_idxs:
+            labels[mask_idxs] = -100
+        
+        return {"input_ids": augmented_tokens, "labels": labels}
 
 def evaluate_model(model, dataloader, accelerator):
-    """Calculate validation loss on a dataset"""
+    """Calculate validation loss and pitch accuracy on a dataset
+    
+    Returns:
+        tuple: (avg_loss, pitch_accuracy)
+    """
     model.eval()
     total_loss = 0
     total_samples = 0
+    
+    # For pitch accuracy: track predictions on score note tokens
+    correct_pitches = 0
+    total_pitches = 0
+    
+    from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", leave=False):
             outputs = model(**batch)
             loss = outputs.loss
+            logits = outputs.logits
+            
+            input_ids = batch["input_ids"]
+            labels = batch["labels"]
             
             # Get batch size from the input shape
-            batch_size = batch["input_ids"].size(0)
+            batch_size = input_ids.size(0)
             
             # Accumulate loss (weighted by batch size)
             total_loss += loss.item() * batch_size
             total_samples += batch_size
+            
+            # Calculate pitch accuracy on score note tokens (position 2 of score triplets)
+            # Score triplets have all tokens < CONTROL_OFFSET
+            # We need to find triplets where all 3 tokens < CONTROL_OFFSET and position is %3==2
+            for b in range(batch_size):
+                seq_input = input_ids[b]
+                seq_labels = labels[b]
+                seq_logits = logits[b]
+                
+                # Skip first token (mode token), start from position 1
+                i = 1
+                while i < len(seq_input) - 2:
+                    # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET)
+                    if (seq_input[i] < CONTROL_OFFSET and 
+                        seq_input[i+1] < CONTROL_OFFSET and 
+                        seq_input[i+2] < CONTROL_OFFSET):
+                        # This is a score triplet
+                        # Position i+2 is the note token
+                        note_pos = i + 2
+                        
+                        # Only count if not masked in labels
+                        if seq_labels[note_pos] != -100:
+                            predicted_token = seq_logits[note_pos - 1].argmax().item()  # Predict next token
+                            true_token = seq_labels[note_pos].item()
+                            
+                            # Check if prediction matches ground truth
+                            if predicted_token == true_token:
+                                correct_pitches += 1
+                            total_pitches += 1
+                        
+                        i += 3  # Move to next triplet
+                    else:
+                        i += 1  # Not a score triplet, move forward
     
-    # Return average loss
-    return total_loss / total_samples
+    avg_loss = total_loss / total_samples
+    pitch_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
+    
+    return avg_loss, pitch_accuracy
 
-def plot_losses(train_losses, val_losses, validation_steps, output_dir):
+def plot_losses(train_losses, val_losses, val_accuracies, validation_steps, output_dir):
     """
-    Plot training and validation losses and save the figures (both linear and log-log)
+    Plot training/validation losses and validation pitch accuracy, save figures
     
     Args:
         train_losses (list): Training loss history
         val_losses (list): Validation loss history
+        val_accuracies (list): Validation pitch accuracy history
         validation_steps (list): Steps at which validation was performed
         output_dir (Path): Directory to save the plots
     """
     steps = list(range(1, len(train_losses) + 1))
     
-    # Linear plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
-    plt.plot(validation_steps, val_losses, label='Validation Loss', 
-             linestyle='--', marker='o', markersize=5, color='red')
-    plt.xlabel('Steps (x10)')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plot_path = output_dir / "loss_plot.png"
-    plt.savefig(plot_path)
-    plt.close()
-    print(f"Linear loss plot saved to {plot_path}")
+    # Create figure with 3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
     
-    # Log-log plot
-    plt.figure(figsize=(10, 6))
-    plt.loglog(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
-    plt.loglog(validation_steps, val_losses, label='Validation Loss', 
-               linestyle='--', marker='o', markersize=5, color='red')
-    plt.xlabel('Steps (x10) [log scale]')
-    plt.ylabel('Loss [log scale]')
-    plt.title('Training and Validation Loss (Log-Log Scale)')
-    plt.legend()
-    plt.grid(True, alpha=0.3, which='both')
-    plt.grid(True, alpha=0.1, which='minor')
-    loglog_path = output_dir / "loss_plot_loglog.png"
-    plt.savefig(loglog_path)
+    # Plot 1: Linear loss plot
+    ax1.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
+    ax1.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
+    ax1.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
+    ax1.set_xlabel('Step')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training and Validation Loss (Linear Scale)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Log-log loss plot
+    ax2.loglog(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
+    ax2.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
+    ax2.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
+    ax2.set_xlabel('Step (log scale)')
+    ax2.set_ylabel('Loss (log scale)')
+    ax2.set_title('Training and Validation Loss (Log-Log Scale)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, which='both')
+    
+    # Plot 3: Validation pitch accuracy
+    ax3.plot(validation_steps, val_accuracies, label='Validation Pitch Accuracy', color='green', marker='o')
+    ax3.set_xlabel('Step')
+    ax3.set_ylabel('Pitch Accuracy (%)')
+    ax3.set_title('Validation Pitch Accuracy')
+    ax3.set_ylim([0, 100])
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"Log-log loss plot saved to {loglog_path}")
+    
+    print(f"Training metrics plot saved to {output_dir / 'training_metrics.png'}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_perturbed.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_perturbed.txt'))
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_clean.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_clean.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_augmented'))
     parser.add_argument('--batch_size', type=int, default=8) 
@@ -168,6 +315,8 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
+    parser.add_argument('--perturb_std_ms', type=float, default=50.0, help='Standard deviation of time perturbation in milliseconds (training only)')
+    parser.add_argument('--mask_prob', type=float, default=0.5, help='Probability of masking each control triplet (training only)')
     args = parser.parse_args()
     
     # Override device if requested
@@ -200,7 +349,12 @@ def main():
         
         # Load training dataset
         print(f"Loading training dataset from {args.data_file}...")
-        train_dataset = TokenizedDataset(args.data_file)
+        train_dataset = TokenizedDataset(
+            args.data_file, 
+            perturb_std_ms=args.perturb_std_ms,
+            mask_prob=args.mask_prob,
+            is_training=True
+        )
         
         def collate_fn(batch):
             input_ids = torch.stack([item["input_ids"] for item in batch])
@@ -216,9 +370,14 @@ def main():
             num_workers=0,  # Avoid multiprocessing issues
         )
         
-        # Load validation dataset
+        # Load validation dataset (NO augmentation)
         print(f"Loading validation dataset from {args.val_file}...")
-        val_dataset = TokenizedDataset(args.val_file)
+        val_dataset = TokenizedDataset(
+            args.val_file,
+            perturb_std_ms=0.0,
+            mask_prob=0.0,
+            is_training=False
+        )
         
         val_dataloader = DataLoader(
             val_dataset, 
@@ -258,11 +417,11 @@ def main():
                 use_cache=False
             )
         
-        # Resize model embeddings to accommodate MASK token (VOCAB_SIZE=55029)
+        # Resize model embeddings to match our vocabulary (VOCAB_SIZE=55028)
         from anticipation.vocab import VOCAB_SIZE
         current_vocab_size = model.config.vocab_size
         if current_vocab_size != VOCAB_SIZE:
-            print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE} (added MASK token)")
+            print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE}")
             model.resize_token_embeddings(VOCAB_SIZE)
             print(f"✓ Model embeddings resized successfully")
         else:
@@ -330,9 +489,10 @@ def main():
         completed_steps = 0
         step = 0
         
-        # Lists to track losses
+        # Lists to track losses and metrics
         train_losses = []
         val_losses = []
+        val_accuracies = []
         validation_steps = []
         
         # Use standard tqdm with disable=False to ensure it always displays
@@ -405,10 +565,11 @@ def main():
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                                     print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
                                     val_losses.append(val_loss)
-                                    print(f"Validation Loss: {val_loss:.4f}")
+                                    val_accuracies.append(val_acc * 100)  # Store as percentage
+                                    print(f"Validation Loss: {val_loss:.4f}, Pitch Accuracy: {val_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -422,10 +583,11 @@ def main():
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
                                     print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)
                                     val_losses.append(val_loss)
-                                    print(f"Validation Loss: {val_loss:.4f}")
+                                    val_accuracies.append(val_acc * 100)
+                                    print(f"Validation Loss: {val_loss:.4f}, Pitch Accuracy: {val_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -442,16 +604,17 @@ def main():
                                     )
                                     print(f"Saved checkpoint to {checkpoint_dir}")
                                     
-                                    # Save the losses so far
+                                    # Save the losses and metrics so far
                                     np.savez(
                                         checkpoint_dir / "losses.npz",
                                         train_losses=np.array(train_losses),
                                         val_losses=np.array(val_losses),
+                                        val_accuracies=np.array(val_accuracies),
                                         validation_steps=np.array(validation_steps)
                                     )
                                     
                                     # Create and save loss plot
-                                    plot_losses(train_losses, val_losses, validation_steps, checkpoint_dir)
+                                    plot_losses(train_losses, val_losses, val_accuracies, validation_steps, checkpoint_dir)
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
@@ -521,7 +684,7 @@ def main():
                 )
                 
                 # Create and save final loss plot
-                plot_losses(train_losses, val_losses, validation_steps, final_dir)
+                plot_losses(train_losses, val_losses, val_accuracies, validation_steps, final_dir)
                 
             except Exception as save_error:
                 print(f"Error saving final model or generating plot: {save_error}")
