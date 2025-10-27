@@ -60,18 +60,27 @@ with torch.no_grad():
         if len(score_positions) == 0:
             continue
         
-        # Generate autoregressively - build up the sequence token by token
-        generated = []
+        # Generate autoregressively using KV cache for efficiency
+        past_key_values = None
         
+        # Process all tokens up to first score position
+        first_score_pos = score_positions[0] if score_positions else len(ground_truth)
+        if first_score_pos > 0:
+            init_context = torch.tensor([ground_truth[:first_score_pos]]).to(device)
+            outputs = model(init_context, past_key_values=None, use_cache=True)
+            past_key_values = outputs.past_key_values
+        
+        # Now process each score position autoregressively with KV cache
+        last_pos = first_score_pos
         for pos in tqdm(score_positions, desc=f"  Seq {seq_idx+1}", leave=False):
-            # Context is: all ground truth tokens before this position
-            # PLUS any tokens we've generated so far
-            context = ground_truth[:pos]
+            # If there are tokens between last_pos and pos, process them with cache
+            if pos > last_pos:
+                intermediate = torch.tensor([ground_truth[last_pos:pos]]).to(device)
+                outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
+                past_key_values = outputs.past_key_values
             
-            # Generate the next token (the pitch at position pos)
-            input_ids = torch.tensor([context]).to(device)
-            outputs = model(input_ids)
-            logits = outputs.logits[0, -1]  # Last position's logits
+            # Get prediction for current position
+            logits = outputs.logits[0, -1]
             predicted_token = logits.argmax().item()
             
             # Check if prediction matches ground truth
@@ -79,6 +88,12 @@ with torch.no_grad():
             if predicted_token == true_token:
                 correct_pitches += 1
             total_pitches += 1
+            
+            # Add ground truth token and update cache for next iteration
+            next_token = torch.tensor([[true_token]]).to(device)
+            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+            last_pos = pos + 1
         
         seq_accuracy = (correct_pitches / total_pitches * 100) if total_pitches > 0 else 0
         print(f"  Cumulative accuracy so far: {seq_accuracy:.2f}%")
