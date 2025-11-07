@@ -230,7 +230,9 @@ print("="*80)
 if train_success > 0:
     with open(TRAIN_OUTPUT, 'r') as f:
         first_line = f.readline().strip()
-        first_seq = [int(x) for x in first_line.split()]
+        # Split and take only tokens before the | separator
+        tokens_part = first_line.split('|')[0].strip()
+        first_seq = [int(x) for x in tokens_part.split()]
     
     print(f"First training sequence length: {len(first_seq)} tokens")
     print(f"Mode token: {first_seq[0]} (expected {ANTICIPATE})")
