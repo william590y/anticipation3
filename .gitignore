@@ -9,8 +9,3 @@ __pycache__/
 *.class
 *.so
 .Python
-
-# Ignore checkpoint folders
-hf-ckpt-*/
-fine_tuned*/
-checkpoint-*/
