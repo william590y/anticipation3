@@ -32,7 +32,7 @@ TEST_OUTPUT = 'data/test_openings.txt'
 print(f"Tokenization configuration:")
 print(f"  Workers: {NUM_WORKERS}")
 print(f"  Context size: {CONTEXT_SIZE}")
-print(f"  Anticipation interval: {DELTA}s")
+print(f"  Prefix controls: 33 (fixed)")
 print(f"  Output format: space-separated tokens (one sequence per line)")
 print()
 
@@ -94,11 +94,8 @@ def tokenize_opening(filegroup, prefix_controls=33):
     file1, file2, file3, file4 = filegroup
     
     try:
-        # Align the performance and score (no augmentation)
-        matched_tuples = align_tokens2(file1, file2, file3, file4, 
-                                      skip_Nones=True, 
-                                      perturb_std_ms=0.0, 
-                                      mask_prob=0.0)
+        # Align the performance and score
+        matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=True)
         
         if len(matched_tuples) < 20:  # Need at least 20 matched pairs
             return None

@@ -13,15 +13,11 @@ from anticipation import ops
 from alignment import align_tokens2
 
 
-def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33, perturb_std_ms=0.0, mask_prob=0.0, num_augmentations=1):
+def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33):
     """Worker: process a single (perf, score, perf_ann, score_ann) tuple.
 
     Returns a tuple: (seq_lines: List[str], stats: dict)
     Mirrors tokenize4 logic but within a single piece (no cross-piece concatenation).
-    Creates multiple augmented versions of the same piece.
-    
-    Now outputs sequences as: "token1 token2 ... tokenN | mask_idx1 mask_idx2 ..."
-    where mask indices indicate which positions should be masked in attention.
     """
     file1, file2, file3, file4 = filegroup
     
@@ -29,121 +25,60 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
     total_seqs = 0
     total_discards = 0
     
-    # DO ALIGNMENT ONCE (expensive - MIDI parsing, annotation loading, matching)
+    # DO ALIGNMENT (expensive - MIDI parsing, annotation loading, matching)
     try:
-        # Get matched tuples WITHOUT perturbation/masking (we'll apply that per augmentation)
-        matched_tuples_base = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones, 
-                                           perturb_std_ms=0.0, mask_prob=0.0)
+        matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=skip_Nones)
     except Exception as e:
         return [], {"seq": 0, "discarded": 1, "err": str(e)}
     
-    # Generate multiple augmented versions (cheap - just noise and masking)
-    for aug_idx in range(num_augmentations):
-        # Re-seed RNG for each augmentation to ensure different random values
-        seed = hash((file1, aug_idx)) % (2**32)
-        np.random.seed(seed)
-        
-        # VECTORIZED augmentation: generate all random values at once
-        n_tuples = len(matched_tuples_base)
-        
-        # Generate mask decisions for all tuples at once (vectorized)
-        mask_decisions = np.random.random(n_tuples) < mask_prob if mask_prob > 0 else np.zeros(n_tuples, dtype=bool)
-        
-        # Generate time perturbations for all tuples at once (vectorized)
-        if perturb_std_ms > 0:
-            from anticipation.config import TIME_RESOLUTION
-            perturb_std_units = (perturb_std_ms / 1000.0) * TIME_RESOLUTION
-            time_perturbations = np.random.normal(0, perturb_std_units, n_tuples).astype(int)
-        else:
-            time_perturbations = np.zeros(n_tuples, dtype=int)
-        
-        # Apply augmentation using the pre-generated random values
-        matched_tuples = []
-        for i, match in enumerate(matched_tuples_base):
-            perf_tuple = list(match[0])  # Copy to avoid modifying base
-            
-            # Apply time perturbation (no longer replacing with MASK tokens)
-            if time_perturbations[i] != 0:
-                base_time = perf_tuple[0] - CONTROL_OFFSET
-                perturbed_time = max(0, base_time + time_perturbations[i])
-                perf_tuple = [CONTROL_OFFSET + perturbed_time, perf_tuple[1], perf_tuple[2]]
-            
-            matched_tuples.append([perf_tuple, match[1], match[2], match[3], mask_decisions[i]])
+    # Build interleaved stream: fixed-length control+pad prefix, then alternate score/control
+    interleaved_tokens = []
 
-        # Build interleaved stream: fixed-length control+pad prefix, then alternate score/control
-        interleaved_tokens = []
-        mask_indices = []  # Track which token positions should be masked
-        token_idx = 0  # Current position in the token stream
+    k = min(prefix_controls, len(matched_tuples))
+    for i, t in enumerate(matched_tuples[:k]):
+        cc = t[0]
+        
+        # Add control triplet
+        interleaved_tokens.extend(cc)
+        
+        # Add rest triplet
+        cc_time = cc[0] - CONTROL_OFFSET
+        interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
 
-        k = min(prefix_controls, len(matched_tuples))
-        for i, t in enumerate(matched_tuples[:k]):
-            cc = t[0]
-            should_mask = t[4]  # mask decision
-            
-            # Add control triplet
+    for i, t in enumerate(matched_tuples):
+        sc = t[2]
+        if sc[0] is not None:
+            interleaved_tokens.extend(sc)
+        ii = i + k
+        if ii < len(matched_tuples):
+            cc = matched_tuples[ii][0]
             interleaved_tokens.extend(cc)
-            if should_mask:
-                # Mark these 3 positions for masking
-                mask_indices.extend([token_idx, token_idx + 1, token_idx + 2])
-            token_idx += 3
-            
-            # Add rest triplet
-            cc_time = cc[0] - CONTROL_OFFSET
-            interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
-            token_idx += 3
 
-        for i, t in enumerate(matched_tuples):
-            sc = t[2]
-            if sc[0] is not None:
-                interleaved_tokens.extend(sc)
-                token_idx += 3
-            ii = i + k
-            if ii < len(matched_tuples):
-                cc = matched_tuples[ii][0]
-                should_mask = matched_tuples[ii][4]
-                
-                interleaved_tokens.extend(cc)
-                if should_mask:
-                    mask_indices.extend([token_idx, token_idx + 1, token_idx + 2])
-                token_idx += 3
+    # Prepend separators
+    interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
 
-        # Prepend separators
-        interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
-        # Adjust mask indices for the 3 prepended separators
-        mask_indices = [idx + 3 for idx in mask_indices]
-
-        # Chunk into sequences of 1023 body tokens and add global mode token
-        concatenated_tokens = interleaved_tokens
-        z = ANTICIPATE
-        stats_discards = 0
-        while len(concatenated_tokens) >= EVENT_SIZE * M:
-            seq = concatenated_tokens[0:EVENT_SIZE * M]
-            concatenated_tokens = concatenated_tokens[EVENT_SIZE * M:]
-            
-            # Filter mask indices to only those in this sequence
-            seq_mask_indices = [idx for idx in mask_indices if idx < EVENT_SIZE * M]
-            # Adjust remaining mask indices
-            mask_indices = [idx - EVENT_SIZE * M for idx in mask_indices if idx >= EVENT_SIZE * M]
-            
-            seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
-            if ops.min_time(seq, seconds=False) != 0:
-                # safety
-                dt = -ops.min_time(seq, seconds=False)
-                seq = ops.translate(seq, dt, seconds=False)
-            if ops.max_time(seq, seconds=False) >= MAX_TIME:
-                stats_discards += 1
-                continue
-            seq.insert(0, z)
-            # Adjust mask indices for the prepended mode token
-            seq_mask_indices = [idx + 1 for idx in seq_mask_indices]
-            
-            # Output format: "token1 token2 ... | mask_idx1 mask_idx2 ..."
-            token_str = ' '.join(str(tok) for tok in seq)
-            mask_str = ' '.join(str(idx) for idx in seq_mask_indices)
-            all_lines.append(f"{token_str} | {mask_str}")
-            total_seqs += 1
+    # Chunk into sequences of 1023 body tokens and add global mode token
+    concatenated_tokens = interleaved_tokens
+    z = ANTICIPATE
+    stats_discards = 0
+    while len(concatenated_tokens) >= EVENT_SIZE * M:
+        seq = concatenated_tokens[0:EVENT_SIZE * M]
+        concatenated_tokens = concatenated_tokens[EVENT_SIZE * M:]
         
-        total_discards += stats_discards
+        seq = ops.translate(seq, -ops.min_time(seq, seconds=False), seconds=False)
+        if ops.min_time(seq, seconds=False) != 0:
+            # safety
+            dt = -ops.min_time(seq, seconds=False)
+            seq = ops.translate(seq, dt, seconds=False)
+        if ops.max_time(seq, seconds=False) >= MAX_TIME:
+            stats_discards += 1
+            continue
+        seq.insert(0, z)
+        
+        # Output format: "token1 token2 ... | "
+        token_str = ' '.join(str(tok) for tok in seq)
+        all_lines.append(f"{token_str} | ")
+        total_seqs += 1
 
     return all_lines, {"seq": total_seqs, "discarded": total_discards}
 
@@ -151,13 +86,11 @@ def _interleave_tokenize4_single(filegroup, skip_Nones=True, prefix_controls=33,
 def _worker_split(payload):
     """Top-level wrapper to keep Windows spawn picklable.
 
-    payload = (filegroup, split, skip_Nones, prefix_controls, perturb_std_ms, mask_prob, num_augmentations)
+    payload = (filegroup, split, skip_Nones, prefix_controls)
     Returns (split, lines, stats)
     """
-    fg, split, skip_Nones, prefix_controls, perturb_std_ms, mask_prob, num_augmentations = payload
-    lines, stats = _interleave_tokenize4_single(fg, skip_Nones=skip_Nones, prefix_controls=prefix_controls, 
-                                                perturb_std_ms=perturb_std_ms, mask_prob=mask_prob, 
-                                                num_augmentations=num_augmentations)
+    fg, split, skip_Nones, prefix_controls = payload
+    lines, stats = _interleave_tokenize4_single(fg, skip_Nones=skip_Nones, prefix_controls=prefix_controls)
     return split, lines, stats
 
 def main():
@@ -173,12 +106,11 @@ def main():
     args = ap.parse_args()
 
     print('Tokenization parameters:')
-    print(f'  anticipation interval = {DELTA}s')
     print(f'  max track length = {MAX_TRACK_TIME_IN_SECONDS}s')
     print(f'  min track length = {MIN_TRACK_TIME_IN_SECONDS}s')
     print(f'  min track events = {MIN_TRACK_EVENTS}')
+    print(f'  prefix controls = {args.prefix_controls}')
     print(f'  workers = {args.workers}')
-    print(f'  NOTE: Augmentation (perturbation/masking) now done during training, not tokenization')
 
     meta_csv = os.path.join(args.asap_root, 'metadata.csv')
     df = pd.read_csv(meta_csv)
@@ -240,9 +172,8 @@ def main():
     with open(args.out_train, 'w') as f_train, open(args.out_test, 'w') as f_test:
         with Pool(processes=args.workers) as pool:
             # Chain test and train with split tags
-            # Both train and test: clean data (no augmentation at tokenization time)
-            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls, 0.0, 0.0, 1) for fg in tasks_test] + \
-                       [(fg, 'train', args.skip_nones, args.prefix_controls, 0.0, 0.0, 1) for fg in tasks_train]
+            payloads = [(fg, 'test', args.skip_nones, args.prefix_controls) for fg in tasks_test] + \
+                       [(fg, 'train', args.skip_nones, args.prefix_controls) for fg in tasks_train]
 
             # Submit work and consume results with a giant progress bar
             with tqdm(total=len(payloads), desc='Tokenizing pieces', unit='piece') as pbar:
