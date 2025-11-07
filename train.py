@@ -304,13 +304,13 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_openings.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_openings.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_perturbed'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_openings'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=64)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=32)  # For effective batch size 256
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
-    parser.add_argument('--save_steps', type=int, default=500)
+    parser.add_argument('--save_steps', type=int, default=250)
     parser.add_argument('--eval_steps', type=int, default=100)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
