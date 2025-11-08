@@ -448,9 +448,8 @@ def main():
         print("GPU memory after loading model:")
         print_gpu_memory_stats()
         
-        # Explicitly move model to our device before creating optimizer
-        model = model.to(device)
-        print(f"Model moved to: {next(model.parameters()).device}")
+        # DON'T manually move model to device - let accelerator handle it!
+        # This is critical for multi-GPU training
         
         # Setup optimizer with gradient clipping to prevent exploding gradients
         # Using a lower learning rate and better epsilon value for numerical stability
@@ -462,7 +461,7 @@ def main():
             betas=(0.9, 0.999),  # Stable default betas
         )
         
-        # Prepare for training with accelerate
+        # Prepare for training with accelerate - this handles device placement
         model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
         val_dataloader = accelerator.prepare_data_loader(val_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
