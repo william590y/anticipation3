@@ -305,9 +305,9 @@ def main():
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_sliding.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_sliding'))
-    parser.add_argument('--batch_size', type=int, default=32) 
-    parser.add_argument('--val_batch_size', type=int, default=32)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=16)  # For effective batch size 256
+    parser.add_argument('--batch_size', type=int, default=64) 
+    parser.add_argument('--val_batch_size', type=int, default=64)
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=16) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
     parser.add_argument('--save_steps', type=int, default=250)
