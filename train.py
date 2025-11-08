@@ -177,8 +177,14 @@ class TokenizedDataset(Dataset):
         
         return {"input_ids": augmented_tokens, "labels": labels}
 
-def evaluate_model(model, dataloader, accelerator):
+def evaluate_model(model, dataloader, accelerator, max_samples=500):
     """Calculate validation loss and pitch accuracy on a dataset
+    
+    Args:
+        model: The model to evaluate
+        dataloader: DataLoader with validation data
+        accelerator: Accelerator instance
+        max_samples: Maximum number of sequences to evaluate (default: 500)
     
     Returns:
         tuple: (avg_loss, pitch_accuracy)
@@ -192,9 +198,20 @@ def evaluate_model(model, dataloader, accelerator):
     total_pitches = 0
     
     from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET
+    import random
+    
+    # Randomly sample batches to get approximately max_samples sequences
+    all_batches = list(dataloader)
+    if len(all_batches) > 0:
+        # Calculate how many batches we need for max_samples
+        batch_size = all_batches[0]["input_ids"].size(0)
+        num_batches_needed = min(len(all_batches), (max_samples + batch_size - 1) // batch_size)
+        sampled_batches = random.sample(all_batches, num_batches_needed)
+    else:
+        sampled_batches = []
     
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating", leave=False):
+        for batch in tqdm(sampled_batches, desc="Evaluating", leave=False):
             outputs = model(**batch)
             loss = outputs.loss
             logits = outputs.logits
@@ -305,8 +322,8 @@ def main():
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_sliding.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_sliding'))
-    parser.add_argument('--batch_size', type=int, default=64) 
-    parser.add_argument('--val_batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=32) 
+    parser.add_argument('--val_batch_size', type=int, default=32)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=16) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=3500)
