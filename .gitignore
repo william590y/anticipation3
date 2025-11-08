@@ -1,3 +1,5 @@
 # Ignore all safetensors files
 *.safetensors
 data/
+__pycache__/
+*.py[cod]
