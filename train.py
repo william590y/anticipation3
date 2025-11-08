@@ -200,18 +200,29 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500):
     from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET
     import random
     
-    # Randomly sample batches to get approximately max_samples sequences
-    all_batches = list(dataloader)
-    if len(all_batches) > 0:
-        # Calculate how many batches we need for max_samples
-        batch_size = all_batches[0]["input_ids"].size(0)
-        num_batches_needed = min(len(all_batches), (max_samples + batch_size - 1) // batch_size)
-        sampled_batches = random.sample(all_batches, num_batches_needed)
+    # Randomly sample indices, then take only those batches from the dataloader
+    # We need to iterate through dataloader (not convert to list) to preserve device placement
+    total_batches = len(dataloader)
+    if total_batches > 0:
+        # Calculate how many batches we need for max_samples (estimate batch_size as 8)
+        estimated_batch_size = 8
+        num_batches_needed = min(total_batches, (max_samples + estimated_batch_size - 1) // estimated_batch_size)
+        
+        # Randomly select batch indices
+        selected_indices = set(random.sample(range(total_batches), num_batches_needed))
     else:
-        sampled_batches = []
+        selected_indices = set()
     
+    batches_processed = 0
     with torch.no_grad():
-        for batch in tqdm(sampled_batches, desc="Evaluating", leave=False):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating", leave=False)):
+            # Only process selected batches
+            if batch_idx not in selected_indices:
+                continue
+            
+            batches_processed += 1
+            if batches_processed > len(selected_indices):
+                break
             outputs = model(**batch)
             loss = outputs.loss
             logits = outputs.logits
