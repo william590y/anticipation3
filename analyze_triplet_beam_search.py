@@ -6,14 +6,96 @@ For each sequence:
 - Track log probabilities for each token prediction
 - Plot loss progression over generation
 - Show error distribution by token type
+- Save MIDI outputs for comparison
 """
 import torch
 from transformers import GPT2LMHeadModel
-from anticipation.vocab import CONTROL_OFFSET
+from anticipation.vocab import CONTROL_OFFSET, EVENT_OFFSET, TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET, REST, ANTICIPATE, SEPARATOR
+from anticipation.convert import events_to_midi
 from tqdm import tqdm
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+
+def extract_tokens_to_events(tokens):
+    """Extract events from tokens, combining performance and score."""
+    # Skip ANTICIPATE token if present
+    start_idx = 1 if (len(tokens) > 0 and tokens[0] == ANTICIPATE) else 0
+    
+    # Skip separator tokens (3 SEP tokens after ANTICIPATE)
+    if start_idx == 1 and len(tokens) > 4:
+        start_idx += 3
+    
+    events = []
+    for i in range(start_idx, len(tokens), 3):
+        if i+2 >= len(tokens):
+            break
+        
+        time_tok, dur_tok, note_tok = tokens[i], tokens[i+1], tokens[i+2]
+        
+        # Control triplet (performance) - remove CONTROL_OFFSET
+        if time_tok >= CONTROL_OFFSET and dur_tok >= CONTROL_OFFSET and note_tok >= CONTROL_OFFSET:
+            events.extend([time_tok - CONTROL_OFFSET, dur_tok - CONTROL_OFFSET, note_tok - CONTROL_OFFSET])
+        
+        # Score triplet (ground truth/predicted)
+        elif time_tok < CONTROL_OFFSET and dur_tok < CONTROL_OFFSET and note_tok < CONTROL_OFFSET:
+            if note_tok != REST:  # Skip rests
+                events.extend([time_tok, dur_tok, note_tok])
+    
+    return events
+
+def extract_performance_only(tokens):
+    """Extract only performance (control) tokens."""
+    # Skip ANTICIPATE token if present
+    start_idx = 1 if (len(tokens) > 0 and tokens[0] == ANTICIPATE) else 0
+    
+    # Skip separator tokens (3 SEP tokens after ANTICIPATE)
+    if start_idx == 1 and len(tokens) > 4:
+        start_idx += 3
+    
+    events = []
+    for i in range(start_idx, len(tokens), 3):
+        if i+2 >= len(tokens):
+            break
+        
+        time_tok, dur_tok, note_tok = tokens[i], tokens[i+1], tokens[i+2]
+        
+        # Control triplet (performance) - remove CONTROL_OFFSET
+        if time_tok >= CONTROL_OFFSET and dur_tok >= CONTROL_OFFSET and note_tok >= CONTROL_OFFSET:
+            events.extend([time_tok - CONTROL_OFFSET, dur_tok - CONTROL_OFFSET, note_tok - CONTROL_OFFSET])
+    
+    return events
+
+def save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx):
+    """Save MIDI files for input performance, ground truth, greedy, and beam outputs."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Extract performance (input)
+    perf_events = extract_performance_only(tokens)
+    perf_midi_path = os.path.join(output_dir, f'seq{seq_idx}_input_performance.mid')
+    perf_midi = events_to_midi(perf_events)
+    perf_midi.save(perf_midi_path)
+    
+    # Convert tokens to events
+    gt_events = extract_tokens_to_events(tokens)
+    greedy_events = extract_tokens_to_events(greedy_seq)
+    beam_events = extract_tokens_to_events(beam_seq)
+    
+    # Save as MIDI
+    gt_midi_path = os.path.join(output_dir, f'seq{seq_idx}_ground_truth.mid')
+    gt_midi = events_to_midi(gt_events)
+    gt_midi.save(gt_midi_path)
+    
+    greedy_midi_path = os.path.join(output_dir, f'seq{seq_idx}_greedy.mid')
+    greedy_midi = events_to_midi(greedy_events)
+    greedy_midi.save(greedy_midi_path)
+    
+    beam_midi_path = os.path.join(output_dir, f'seq{seq_idx}_beam.mid')
+    beam_midi = events_to_midi(beam_events)
+    beam_midi.save(beam_midi_path)
+    
+    return perf_midi_path, gt_midi_path, greedy_midi_path, beam_midi_path
 
 def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     """Greedy decoding with detailed tracking."""
@@ -30,10 +112,14 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     ground_truth = {'time': [], 'duration': [], 'pitch': []}
     correct = {'time': [], 'duration': [], 'pitch': []}
     
+    # Build generated sequence
+    generated_seq = list(tokens[:first_score_time_pos])
+    
     for time_pos, dur_pos, pitch_pos in score_triplet_positions:
         # Process intermediate control tokens
         if time_pos > last_pos:
             intermediate = torch.tensor([tokens[last_pos:time_pos]]).to(device)
+            generated_seq.extend(tokens[last_pos:time_pos])
             outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
             past_key_values = outputs.past_key_values
         
@@ -47,6 +133,7 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
         log_probs['time'].append(log_probs_tensor[pred_time].item())
         ground_truth['time'].append(gt_time)
         correct['time'].append(pred_time == gt_time)
+        generated_seq.append(pred_time)
         
         next_token = torch.tensor([[pred_time]]).to(device)
         outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
@@ -62,6 +149,7 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
         log_probs['duration'].append(log_probs_tensor[pred_dur].item())
         ground_truth['duration'].append(gt_dur)
         correct['duration'].append(pred_dur == gt_dur)
+        generated_seq.append(pred_dur)
         
         next_token = torch.tensor([[pred_dur]]).to(device)
         outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
@@ -77,6 +165,7 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
         log_probs['pitch'].append(log_probs_tensor[pred_pitch].item())
         ground_truth['pitch'].append(gt_pitch)
         correct['pitch'].append(pred_pitch == gt_pitch)
+        generated_seq.append(pred_pitch)
         
         next_token = torch.tensor([[pred_pitch]]).to(device)
         outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
@@ -84,7 +173,7 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
         
         last_pos = pitch_pos + 1
     
-    return predictions, log_probs, ground_truth, correct
+    return predictions, log_probs, ground_truth, correct, generated_seq
 
 def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, device):
     """Triplet-aware beam search with detailed tracking."""
@@ -99,6 +188,9 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
     log_probs = {'time': [], 'duration': [], 'pitch': []}
     ground_truth = {'time': [], 'duration': [], 'pitch': []}
     correct = {'time': [], 'duration': [], 'pitch': []}
+    
+    # Track generated sequence (from best beam at end)
+    generated_seq = None
     
     for triplet_idx, (time_pos, dur_pos, pitch_pos) in enumerate(tqdm(score_triplet_positions, desc="  Triplets", leave=False)):
         # Add intermediate control tokens
@@ -310,13 +402,16 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
         
         prev_pos = pitch_pos + 1
     
-    return predictions, log_probs, ground_truth, correct
+    # best_seq is the generated sequence
+    generated_seq = best_seq
+    
+    return predictions, log_probs, ground_truth, correct, generated_seq
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_path = '150_model'
     test_file = 'data/test_sliding.txt'
-    num_sequences = 15
+    num_sequences = 1000
     num_beams = 5
     
     print("="*80)
@@ -380,13 +475,13 @@ def main():
             
             # Run greedy
             print("Running greedy decoding...")
-            greedy_preds, greedy_lp, greedy_gt, greedy_corr = greedy_with_tracking(
+            greedy_preds, greedy_lp, greedy_gt, greedy_corr, greedy_seq = greedy_with_tracking(
                 model, tokens, score_triplet_positions, device
             )
             
             # Run beam search
             print(f"Running beam search (num_beams={num_beams})...")
-            beam_preds, beam_lp, beam_gt, beam_corr = beam_search_with_tracking(
+            beam_preds, beam_lp, beam_gt, beam_corr, beam_seq = beam_search_with_tracking(
                 model, tokens, score_triplet_positions, num_beams, device
             )
             
@@ -461,9 +556,16 @@ def main():
                 ax.text(0, greedy_acc + 5, f'{greedy_errors} errors', ha='center', fontsize=9)
                 ax.text(1, beam_acc + 5, f'{beam_errors} errors', ha='center', fontsize=9)
             
+            # Save MIDI outputs first to create directory
+            print("Saving MIDI outputs...")
+            output_dir = f'triplet_beam_seq{seq_idx + 1}'
+            save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx + 1)
+            
+            # Save plot to same directory
             plt.tight_layout()
-            plt.savefig(f'triplet_beam_analysis_seq{seq_idx + 1}.png', dpi=150, bbox_inches='tight')
-            print(f"Saved: triplet_beam_analysis_seq{seq_idx + 1}.png")
+            plot_path = os.path.join(output_dir, f'analysis.png')
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            print(f"Saved: {plot_path}")
             plt.close()
             
             # Print summary
@@ -534,6 +636,92 @@ def main():
         improvement = beam_acc - greedy_acc
         
         print(f"{tok_type.upper():<12} {mean_loss:>6.3f}{'':<9} {greedy_acc:>6.2f}%{'':<8} {beam_acc:>6.2f}%{'':<8} {improvement:>+6.2f}%")
+    
+    # Create aggregate accuracy comparison plot
+    print(f"\n{'='*80}")
+    print("Creating aggregate accuracy comparison plot...")
+    print(f"{'='*80}")
+    
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    fig.suptitle(f'Aggregate Accuracy Comparison - {len(all_sequences)} Sequences', fontsize=16)
+    
+    x = np.arange(len(token_types))
+    width = 0.35
+    
+    greedy_accs = [sum(all_greedy_correct[tok]) / len(all_greedy_correct[tok]) * 100 for tok in token_types]
+    beam_accs = [sum(all_beam_correct[tok]) / len(all_beam_correct[tok]) * 100 for tok in token_types]
+    
+    bars1 = ax.bar(x - width/2, greedy_accs, width, label='Greedy', alpha=0.8)
+    bars2 = ax.bar(x + width/2, beam_accs, width, label='Beam Search', alpha=0.8)
+    
+    # Add value labels on bars
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.1f}%', ha='center', va='bottom', fontsize=10)
+    
+    ax.set_ylabel('Accuracy (%)')
+    ax.set_title('Token Type Accuracy Comparison')
+    ax.set_xticks(x)
+    ax.set_xticklabels([tok.upper() for tok in token_types])
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim(0, 105)
+    
+    plt.tight_layout()
+    plt.savefig('triplet_beam_aggregate_accuracy.png', dpi=150, bbox_inches='tight')
+    print("Saved: triplet_beam_aggregate_accuracy.png")
+    plt.close()
+    
+    # Create error histogram by triplet index
+    print(f"\n{'='*80}")
+    print("Creating error histogram by triplet index...")
+    print(f"{'='*80}")
+    
+    # Count errors by triplet index for greedy and beam
+    # We need to restructure the data to track errors by triplet position within each sequence
+    # For simplicity, we'll create histograms across all concatenated triplets
+    
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+    fig.suptitle(f'Error Distribution by Triplet Index - {len(all_sequences)} Sequences', fontsize=16)
+    
+    for tok_idx, tok_type in enumerate(token_types):
+        ax = axes[tok_idx]
+        
+        # Create error indicators (1 = error, 0 = correct)
+        greedy_errors = [0 if c else 1 for c in all_greedy_correct[tok_type]]
+        beam_errors = [0 if c else 1 for c in all_beam_correct[tok_type]]
+        
+        # Compute cumulative errors by bins
+        num_triplets = len(greedy_errors)
+        bin_size = max(1, num_triplets // 50)  # 50 bins
+        num_bins = (num_triplets + bin_size - 1) // bin_size
+        
+        greedy_binned = []
+        beam_binned = []
+        bin_centers = []
+        
+        for i in range(num_bins):
+            start = i * bin_size
+            end = min(start + bin_size, num_triplets)
+            greedy_binned.append(sum(greedy_errors[start:end]))
+            beam_binned.append(sum(beam_errors[start:end]))
+            bin_centers.append((start + end) / 2)
+        
+        ax.plot(bin_centers, greedy_binned, 'o-', label='Greedy', alpha=0.7)
+        ax.plot(bin_centers, beam_binned, 's-', label='Beam Search', alpha=0.7)
+        
+        ax.set_xlabel('Triplet Index (binned)')
+        ax.set_ylabel(f'Errors per bin (bin size={bin_size})')
+        ax.set_title(f'{tok_type.upper()} Token')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('triplet_beam_error_histogram.png', dpi=150, bbox_inches='tight')
+    print("Saved: triplet_beam_error_histogram.png")
+    plt.close()
     
     print(f"\n{'='*80}")
     print("Analysis complete!")
