@@ -16,7 +16,7 @@ from anticipation.config import *
 from anticipation.vocab import *
 
 # Load the model
-MODEL_PATH = 'newest_model'
+MODEL_PATH = 'opening_model'
 print(f"Loading model from {MODEL_PATH}...")
 model = GPT2LMHeadModel.from_pretrained(MODEL_PATH)
 model.eval()
@@ -25,7 +25,7 @@ model = model.to(device)
 print(f"Model loaded on {device}")
 
 # Load test sequences
-TEST_FILE = 'data/test_clean.txt'
+TEST_FILE = 'data/test_openings.txt'
 print(f"\nLoading test sequences from {TEST_FILE}...")
 test_sequences = []
 with open(TEST_FILE, 'r') as f:
