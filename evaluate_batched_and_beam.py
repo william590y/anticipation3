@@ -246,19 +246,30 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                 new_beams = []
                 
                 if len(beams) > 0:
-                    # Ultra-conservative exploration budget to fit long sequences in memory
-                    # For long sequences (>500 tokens), memory usage explodes with batching
-                    seq_len = len(beams[0][1])  # Approximate current sequence length
+                    # Memory-aware exploration budget
+                    # The real memory issue is sequence length × batch size × hidden_dim
+                    # For long sequences, we must reduce batch size drastically
+                    seq_len = len(beams[0][1])
                     
-                    if seq_len > 500:
-                        # Very long sequences - use minimal exploration
+                    # Adjust k values based on how expensive batching will be
+                    if seq_len > 800:
+                        k_time, k_dur, k_pitch = 1, 1, 1  # Greedy for very long sequences
+                        chunk_size = 1  # Process one at a time
+                    elif seq_len > 500:
                         k_time, k_dur, k_pitch = 2, 1, 1
-                    elif num_beams <= 5:
-                        k_time, k_dur, k_pitch = 3, 2, 1  # 5*3*2*1 = 30 candidates
-                    elif num_beams <= 10:
-                        k_time, k_dur, k_pitch = 2, 2, 1  # 10*2*2*1 = 40 candidates
-                    else:  # num_beams <= 20
-                        k_time, k_dur, k_pitch = 2, 1, 1  # 20*2*1*1 = 40 candidates
+                        chunk_size = 5  # Very small batches
+                    elif seq_len > 300:
+                        k_time, k_dur, k_pitch = 2, 2, 1
+                        chunk_size = 10
+                    else:
+                        # Short sequences can handle more exploration
+                        if num_beams <= 5:
+                            k_time, k_dur, k_pitch = 3, 2, 1
+                        elif num_beams <= 10:
+                            k_time, k_dur, k_pitch = 2, 2, 1
+                        else:
+                            k_time, k_dur, k_pitch = 2, 1, 1
+                        chunk_size = 20
                     
                     # === STEP 1: Get TIME candidates (batched) ===
                     batch_seqs = [seq for _, seq in beams]
@@ -303,7 +314,6 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                     del top_k_time_log_probs, top_k_time_indices
                     
                     # === STEP 2: Get DURATION candidates (process in chunks to save memory) ===
-                    chunk_size = 50  # Process at most 50 sequences at a time
                     top_k_dur_log_probs_list = []
                     top_k_dur_indices_list = []
                     
@@ -357,7 +367,7 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                     del top_k_dur_log_probs, top_k_dur_indices, time_expanded_seqs, time_expanded_scores
                     
                     # === STEP 3: Get PITCH candidates (process in chunks to save memory) ===
-                    chunk_size = 50
+                    chunk_size = 12
                     top_k_pitch_log_probs_list = []
                     top_k_pitch_indices_list = []
                     
@@ -476,7 +486,7 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     test_file = 'data/test_sliding.txt'
-    num_sequences = 3  # Start small to test memory usage
+    num_sequences = 1  # Start small to test memory usage
     batch_size = 16
     
     # Test different beam widths on 150_model
