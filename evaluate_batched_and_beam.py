@@ -417,33 +417,33 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     test_file = 'data/test_sliding.txt'
-    num_sequences = 5
+    num_sequences = 20  # Increased for better statistics
     batch_size = 16
-    num_beams = 5
+    
+    # Test different beam widths on 150_model
+    beam_widths = [5, 20, 50, 100]
     
     models = [
-        ('50_model', '50-model'),
-        ('100_model', '100_model'),
         ('150_model', '150_model'),
     ]
     
     print("="*80)
-    print("COMPREHENSIVE MODEL EVALUATION")
+    print("COMPREHENSIVE BEAM WIDTH COMPARISON - 150_model")
     print("="*80)
     print(f"\nTest set: {test_file}")
     print(f"Sequences: {num_sequences}")
     print(f"Device: {device}")
     print(f"\nEvaluation modes:")
     print(f"  1. Greedy decoding (sequential with KV caching)")
-    print(f"  2. Beam search (num_beams={num_beams})")
+    print(f"  2. Beam search with varying beam widths: {beam_widths}")
     
     # Store all results
     greedy_results = {}
-    beam_results = {}
+    beam_results = {width: {} for width in beam_widths}
     
-    # Evaluate all models - Greedy
+    # Evaluate 150_model - Greedy (baseline)
     print("\n" + "="*80)
-    print("PHASE 1: GREEDY DECODING")
+    print("PHASE 1: GREEDY DECODING (baseline)")
     print("="*80)
     
     for model_name, model_path in models:
@@ -451,28 +451,32 @@ def main():
                                          num_sequences, batch_size, device)
         greedy_results[model_name] = results
     
-    # Evaluate all models - Beam Search
+    # Evaluate 150_model with different beam widths
     print("\n" + "="*80)
-    print("PHASE 2: BEAM SEARCH DECODING")
+    print("PHASE 2: BEAM SEARCH WITH VARYING BEAM WIDTHS")
     print("="*80)
     
-    for model_name, model_path in models:
-        results = evaluate_beam_search(model_path, model_name, test_file,
-                                      num_sequences, num_beams, device)
-        beam_results[model_name] = results
+    for num_beams in beam_widths:
+        print(f"\n{'='*80}")
+        print(f"Testing beam_width = {num_beams}")
+        print(f"{'='*80}")
+        for model_name, model_path in models:
+            results = evaluate_beam_search(model_path, model_name, test_file,
+                                          num_sequences, num_beams, device)
+            beam_results[num_beams][model_name] = results
     
     # Print comparison tables
     print("\n" + "="*80)
-    print("RESULTS SUMMARY")
+    print("RESULTS SUMMARY - BEAM WIDTH COMPARISON")
     print("="*80)
     
     print("\n" + "-"*80)
-    print("GREEDY DECODING RESULTS")
+    print("GREEDY DECODING (baseline)")
     print("-"*80)
     print(f"\n{'Model':<15} {'Time':<20} {'Duration':<20} {'Pitch':<20} {'Overall':<15}")
     print("-" * 80)
     
-    for model_name in ['50_model', '100_model', '150_model']:
+    for model_name in ['150_model']:
         if model_name in greedy_results:
             r = greedy_results[model_name]
             overall = (r['time'] + r['duration'] + r['pitch']) / 3
@@ -482,61 +486,66 @@ def main():
                   f"{r['pitch']:>6.2f}% ({r['counts']['pitch']['correct']:>4}/{r['counts']['pitch']['total']:<5}) "
                   f"{overall:>6.2f}%")
     
+    # Print results for each beam width
+    for num_beams in beam_widths:
+        print("\n" + "-"*80)
+        print(f"BEAM SEARCH (num_beams={num_beams})")
+        print("-"*80)
+        print(f"\n{'Model':<15} {'Time':<20} {'Duration':<20} {'Pitch':<20} {'Overall':<15}")
+        print("-" * 80)
+        
+        for model_name in ['150_model']:
+            if model_name in beam_results[num_beams]:
+                r = beam_results[num_beams][model_name]
+                overall = (r['time'] + r['duration'] + r['pitch']) / 3
+                print(f"{model_name:<15} "
+                      f"{r['time']:>6.2f}% ({r['counts']['time']['correct']:>4}/{r['counts']['time']['total']:<5}) "
+                      f"{r['duration']:>6.2f}% ({r['counts']['duration']['correct']:>4}/{r['counts']['duration']['total']:<5}) "
+                      f"{r['pitch']:>6.2f}% ({r['counts']['pitch']['correct']:>4}/{r['counts']['pitch']['total']:<5}) "
+                      f"{overall:>6.2f}%")
+    
     print("\n" + "-"*80)
-    print(f"BEAM SEARCH RESULTS (num_beams={num_beams})")
+    print("IMPROVEMENT vs GREEDY (Δ%)")
     print("-"*80)
-    print(f"\n{'Model':<15} {'Time':<20} {'Duration':<20} {'Pitch':<20} {'Overall':<15}")
+    print(f"\n{'Beam Width':<15} {'Time Δ':<15} {'Duration Δ':<15} {'Pitch Δ':<15} {'Overall Δ':<15}")
     print("-" * 80)
     
-    for model_name in ['50_model', '100_model', '150_model']:
-        if model_name in beam_results:
-            r = beam_results[model_name]
-            overall = (r['time'] + r['duration'] + r['pitch']) / 3
-            print(f"{model_name:<15} "
-                  f"{r['time']:>6.2f}% ({r['counts']['time']['correct']:>4}/{r['counts']['time']['total']:<5}) "
-                  f"{r['duration']:>6.2f}% ({r['counts']['duration']['correct']:>4}/{r['counts']['duration']['total']:<5}) "
-                  f"{r['pitch']:>6.2f}% ({r['counts']['pitch']['correct']:>4}/{r['counts']['pitch']['total']:<5}) "
-                  f"{overall:>6.2f}%")
-    
-    print("\n" + "-"*80)
-    print("IMPROVEMENT: Beam Search vs Greedy")
-    print("-"*80)
-    print(f"\n{'Model':<15} {'Time Δ':<15} {'Duration Δ':<15} {'Pitch Δ':<15} {'Overall Δ':<15}")
-    print("-" * 80)
-    
-    for model_name in ['50_model', '100_model', '150_model']:
-        if model_name in greedy_results and model_name in beam_results:
-            g = greedy_results[model_name]
-            b = beam_results[model_name]
-            time_delta = b['time'] - g['time']
-            dur_delta = b['duration'] - g['duration']
-            pitch_delta = b['pitch'] - g['pitch']
-            overall_delta = (time_delta + dur_delta + pitch_delta) / 3
-            
-            print(f"{model_name:<15} "
-                  f"{time_delta:>+6.2f}%{'':<8} "
-                  f"{dur_delta:>+6.2f}%{'':<8} "
-                  f"{pitch_delta:>+6.2f}%{'':<8} "
-                  f"{overall_delta:>+6.2f}%")
+    model_name = '150_model'
+    if model_name in greedy_results:
+        g = greedy_results[model_name]
+        for num_beams in beam_widths:
+            if model_name in beam_results[num_beams]:
+                b = beam_results[num_beams][model_name]
+                time_delta = b['time'] - g['time']
+                dur_delta = b['duration'] - g['duration']
+                pitch_delta = b['pitch'] - g['pitch']
+                overall_delta = (time_delta + dur_delta + pitch_delta) / 3
+                
+                print(f"{num_beams:<15} "
+                      f"{time_delta:>+6.2f}%{'':<8} "
+                      f"{dur_delta:>+6.2f}%{'':<8} "
+                      f"{pitch_delta:>+6.2f}%{'':<8} "
+                      f"{overall_delta:>+6.2f}%")
     
     print("\n" + "="*80)
     print("DETAILED RESULTS")
     print("="*80)
     
-    for model_name in ['50_model', '100_model', '150_model']:
-        print(f"\n{model_name}:")
-        
-        if model_name in greedy_results:
-            g = greedy_results[model_name]
-            print(f"  Greedy Decoding:")
-            print(f"    Time:     {g['time']:>6.2f}% ({g['counts']['time']['correct']}/{g['counts']['time']['total']})")
-            print(f"    Duration: {g['duration']:>6.2f}% ({g['counts']['duration']['correct']}/{g['counts']['duration']['total']})")
-            print(f"    Pitch:    {g['pitch']:>6.2f}% ({g['counts']['pitch']['correct']}/{g['counts']['pitch']['total']})")
-            overall_g = (g['time'] + g['duration'] + g['pitch']) / 3
-            print(f"    Overall:  {overall_g:>6.2f}%")
-        
-        if model_name in beam_results:
-            b = beam_results[model_name]
+    model_name = '150_model'
+    print(f"\n{model_name}:")
+    
+    if model_name in greedy_results:
+        g = greedy_results[model_name]
+        print(f"  Greedy Decoding:")
+        print(f"    Time:     {g['time']:>6.2f}% ({g['counts']['time']['correct']}/{g['counts']['time']['total']})")
+        print(f"    Duration: {g['duration']:>6.2f}% ({g['counts']['duration']['correct']}/{g['counts']['duration']['total']})")
+        print(f"    Pitch:    {g['pitch']:>6.2f}% ({g['counts']['pitch']['correct']}/{g['counts']['pitch']['total']})")
+        overall_g = (g['time'] + g['duration'] + g['pitch']) / 3
+        print(f"    Overall:  {overall_g:>6.2f}%")
+    
+    for num_beams in beam_widths:
+        if model_name in beam_results[num_beams]:
+            b = beam_results[num_beams][model_name]
             print(f"  Beam Search (num_beams={num_beams}):")
             print(f"    Time:     {b['time']:>6.2f}% ({b['counts']['time']['correct']}/{b['counts']['time']['total']})")
             print(f"    Duration: {b['duration']:>6.2f}% ({b['counts']['duration']['correct']}/{b['counts']['duration']['total']})")
