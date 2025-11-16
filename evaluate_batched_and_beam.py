@@ -362,17 +362,18 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
             
             # Select best beam
             best_score, best_seq = beams[0]
-            
+
             # Extract predictions from best sequence and compare to ground truth
             # Find the score triplets in the generated sequence
             pred_idx = first_score_time_pos
+            # Use prev_pos to track the last processed ground-truth position
+            prev_pos = first_score_time_pos
             for time_pos, dur_pos, pitch_pos in score_triplet_positions:
-                # Account for intermediate control tokens
-                if time_pos > first_score_time_pos:
-                    # Skip intermediate controls in both
-                    num_intermediate = time_pos - last_pos
+                # Account for intermediate control tokens between prev_pos and time_pos
+                if time_pos > prev_pos:
+                    num_intermediate = time_pos - prev_pos
                     pred_idx += num_intermediate
-                
+
                 # Compare TIME
                 if pred_idx < len(best_seq):
                     pred_time = best_seq[pred_idx]
@@ -381,7 +382,7 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                     if pred_time == gt_time:
                         stats['time']['correct'] += 1
                     pred_idx += 1
-                
+
                 # Compare DURATION
                 if pred_idx < len(best_seq):
                     pred_dur = best_seq[pred_idx]
@@ -390,7 +391,7 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                     if pred_dur == gt_dur:
                         stats['duration']['correct'] += 1
                     pred_idx += 1
-                
+
                 # Compare PITCH
                 if pred_idx < len(best_seq):
                     pred_pitch = best_seq[pred_idx]
@@ -399,6 +400,9 @@ def evaluate_beam_search(model_path, model_name, test_file, num_sequences=100, n
                     if pred_pitch == gt_pitch:
                         stats['pitch']['correct'] += 1
                     pred_idx += 1
+
+                # Advance prev_pos to after the pitch token
+                prev_pos = pitch_pos + 1
     
     # Calculate percentages
     results = {
