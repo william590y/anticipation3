@@ -18,8 +18,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-def extract_tokens_to_events(tokens):
-    """Extract events from tokens, combining performance and score."""
+def extract_score_only(tokens):
+    """Extract only score tokens (not performance/control tokens)."""
     # Skip ANTICIPATE token if present
     start_idx = 1 if (len(tokens) > 0 and tokens[0] == ANTICIPATE) else 0
     
@@ -34,12 +34,8 @@ def extract_tokens_to_events(tokens):
         
         time_tok, dur_tok, note_tok = tokens[i], tokens[i+1], tokens[i+2]
         
-        # Control triplet (performance) - remove CONTROL_OFFSET
-        if time_tok >= CONTROL_OFFSET and dur_tok >= CONTROL_OFFSET and note_tok >= CONTROL_OFFSET:
-            events.extend([time_tok - CONTROL_OFFSET, dur_tok - CONTROL_OFFSET, note_tok - CONTROL_OFFSET])
-        
-        # Score triplet (ground truth/predicted)
-        elif time_tok < CONTROL_OFFSET and dur_tok < CONTROL_OFFSET and note_tok < CONTROL_OFFSET:
+        # Score triplet only (not control)
+        if time_tok < CONTROL_OFFSET and dur_tok < CONTROL_OFFSET and note_tok < CONTROL_OFFSET:
             if note_tok != REST:  # Skip rests
                 events.extend([time_tok, dur_tok, note_tok])
     
@@ -77,10 +73,10 @@ def save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx):
     perf_midi = events_to_midi(perf_events)
     perf_midi.save(perf_midi_path)
     
-    # Convert tokens to events
-    gt_events = extract_tokens_to_events(tokens)
-    greedy_events = extract_tokens_to_events(greedy_seq)
-    beam_events = extract_tokens_to_events(beam_seq)
+    # Convert tokens to events (score only - no control/performance tokens)
+    gt_events = extract_score_only(tokens)
+    greedy_events = extract_score_only(greedy_seq)
+    beam_events = extract_score_only(beam_seq)
     
     # Save as MIDI
     gt_midi_path = os.path.join(output_dir, f'seq{seq_idx}_ground_truth.mid')
