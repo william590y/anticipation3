@@ -34,10 +34,9 @@ def extract_score_only(tokens):
         
         time_tok, dur_tok, note_tok = tokens[i], tokens[i+1], tokens[i+2]
         
-        # Score triplet only (not control)
+        # Score triplet only (not control) - include REST tokens for MIDI conversion
         if time_tok < CONTROL_OFFSET and dur_tok < CONTROL_OFFSET and note_tok < CONTROL_OFFSET:
-            if note_tok != REST:  # Skip rests
-                events.extend([time_tok, dur_tok, note_tok])
+            events.extend([time_tok, dur_tok, note_tok])
     
     return events
 
@@ -171,8 +170,14 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
-def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, device):
-    """Triplet-aware beam search with detailed tracking."""
+def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, branching_factor, device):
+    """
+    Triplet-aware beam search with detailed tracking.
+    
+    Args:
+        num_beams: Number of hypotheses to maintain
+        branching_factor: Number of triplet candidates to generate per beam before pruning
+    """
     first_score_time_pos = score_triplet_positions[0][0]
     init_context = tokens[:first_score_time_pos]
     beams = [(0.0, init_context)]
@@ -194,25 +199,24 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
             intermediate = tokens[last_pos:time_pos]
             beams = [(score, seq + intermediate) for score, seq in beams]
         
-        # Adaptive parameters based on sequence length
+        # Adaptive chunk size based on sequence length (for memory management)
         seq_len = len(beams[0][1])
         if seq_len > 800:
-            k_time, k_dur, k_pitch = 1, 1, 1
             chunk_size = 1
         elif seq_len > 500:
-            k_time, k_dur, k_pitch = 2, 1, 1
             chunk_size = 5
         elif seq_len > 300:
-            k_time, k_dur, k_pitch = 2, 2, 1
             chunk_size = 10
         else:
-            k_time, k_dur, k_pitch = 3, 2, 1
             chunk_size = 20
         
+        # Generate branching_factor complete triplets per beam
+        # Strategy: For each beam, generate top-k TIME tokens, then for each TIME
+        # generate top-1 DURATION and PITCH to get branching_factor triplets
         new_beams = []
         
         if len(beams) > 0:
-            # STEP 1: Get TIME candidates
+            # For each beam, get top branching_factor TIME candidates
             batch_seqs = [seq for _, seq in beams]
             max_len = max(len(seq) for seq in batch_seqs)
             padded_seqs = []
@@ -231,16 +235,17 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
             time_logits = outputs.logits[:, -1, :]
             time_log_probs = torch.nn.functional.log_softmax(time_logits, dim=-1)
             
-            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, k_time, dim=-1)
+            # Get top branching_factor TIME candidates per beam
+            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, branching_factor, dim=-1)
             
             del outputs, time_logits, time_log_probs, input_ids, attention_mask
             
-            # STEP 2: Expand TIME and get DURATION
+            # Expand each beam with its top-k TIME candidates
             time_expanded_seqs = []
             time_expanded_scores = []
             
             for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for time_idx in range(k_time):
+                for time_idx in range(branching_factor):
                     time_token = top_k_time_indices[beam_idx, time_idx].item()
                     time_log_prob = top_k_time_log_probs[beam_idx, time_idx].item()
                     
@@ -249,9 +254,9 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
             
             del top_k_time_log_probs, top_k_time_indices
             
-            # Process in chunks
-            top_k_dur_log_probs_list = []
-            top_k_dur_indices_list = []
+            # For each TIME-expanded sequence, get top-1 DURATION (greedy)
+            dur_log_probs_list = []
+            dur_indices_list = []
             
             for chunk_start in range(0, len(time_expanded_seqs), chunk_size):
                 chunk_end = min(chunk_start + chunk_size, len(time_expanded_seqs))
@@ -274,33 +279,33 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
                 dur_logits = outputs.logits[:, -1, :]
                 dur_log_probs = torch.nn.functional.log_softmax(dur_logits, dim=-1)
                 
-                top_k_dur_log_probs, top_k_dur_indices = torch.topk(dur_log_probs, k_dur, dim=-1)
+                # Get top-1 DURATION for each
+                top_dur_log_probs, top_dur_indices = torch.topk(dur_log_probs, 1, dim=-1)
                 
-                top_k_dur_log_probs_list.append(top_k_dur_log_probs.cpu())
-                top_k_dur_indices_list.append(top_k_dur_indices.cpu())
+                dur_log_probs_list.append(top_dur_log_probs.cpu())
+                dur_indices_list.append(top_dur_indices.cpu())
                 
                 del outputs, dur_logits, dur_log_probs, input_ids, attention_mask
             
-            top_k_dur_log_probs = torch.cat(top_k_dur_log_probs_list, dim=0)
-            top_k_dur_indices = torch.cat(top_k_dur_indices_list, dim=0)
+            all_dur_log_probs = torch.cat(dur_log_probs_list, dim=0).squeeze(-1)
+            all_dur_indices = torch.cat(dur_indices_list, dim=0).squeeze(-1)
             
-            # STEP 3: Expand DURATION and get PITCH
+            # Expand DURATION
             dur_expanded_seqs = []
             dur_expanded_scores = []
             
             for idx, (seq, score) in enumerate(zip(time_expanded_seqs, time_expanded_scores)):
-                for dur_idx in range(k_dur):
-                    dur_token = top_k_dur_indices[idx, dur_idx].item()
-                    dur_log_prob = top_k_dur_log_probs[idx, dur_idx].item()
-                    
-                    dur_expanded_seqs.append(seq + [dur_token])
-                    dur_expanded_scores.append(score + dur_log_prob)
+                dur_token = all_dur_indices[idx].item()
+                dur_log_prob = all_dur_log_probs[idx].item()
+                
+                dur_expanded_seqs.append(seq + [dur_token])
+                dur_expanded_scores.append(score + dur_log_prob)
             
-            del top_k_dur_log_probs, top_k_dur_indices, time_expanded_seqs, time_expanded_scores
+            del all_dur_log_probs, all_dur_indices, time_expanded_seqs, time_expanded_scores
             
-            # Process PITCH in chunks
-            top_k_pitch_log_probs_list = []
-            top_k_pitch_indices_list = []
+            # For each (TIME, DURATION) pair, get top-1 PITCH (greedy)
+            pitch_log_probs_list = []
+            pitch_indices_list = []
             
             for chunk_start in range(0, len(dur_expanded_seqs), chunk_size):
                 chunk_end = min(chunk_start + chunk_size, len(dur_expanded_seqs))
@@ -323,28 +328,28 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
                 pitch_logits = outputs.logits[:, -1, :]
                 pitch_log_probs = torch.nn.functional.log_softmax(pitch_logits, dim=-1)
                 
-                top_k_pitch_log_probs, top_k_pitch_indices = torch.topk(pitch_log_probs, k_pitch, dim=-1)
+                # Get top-1 PITCH for each
+                top_pitch_log_probs, top_pitch_indices = torch.topk(pitch_log_probs, 1, dim=-1)
                 
-                top_k_pitch_log_probs_list.append(top_k_pitch_log_probs.cpu())
-                top_k_pitch_indices_list.append(top_k_pitch_indices.cpu())
+                pitch_log_probs_list.append(top_pitch_log_probs.cpu())
+                pitch_indices_list.append(top_pitch_indices.cpu())
                 
                 del outputs, pitch_logits, pitch_log_probs, input_ids, attention_mask
             
-            top_k_pitch_log_probs = torch.cat(top_k_pitch_log_probs_list, dim=0)
-            top_k_pitch_indices = torch.cat(top_k_pitch_indices_list, dim=0)
+            all_pitch_log_probs = torch.cat(pitch_log_probs_list, dim=0).squeeze(-1)
+            all_pitch_indices = torch.cat(pitch_indices_list, dim=0).squeeze(-1)
             
             # Create complete triplets
             for idx, (seq, score) in enumerate(zip(dur_expanded_seqs, dur_expanded_scores)):
-                for pitch_idx in range(k_pitch):
-                    pitch_token = top_k_pitch_indices[idx, pitch_idx].item()
-                    pitch_log_prob = top_k_pitch_log_probs[idx, pitch_idx].item()
-                    
-                    final_seq = seq + [pitch_token]
-                    final_score = score + pitch_log_prob
-                    
-                    new_beams.append((final_score, final_seq))
+                pitch_token = all_pitch_indices[idx].item()
+                pitch_log_prob = all_pitch_log_probs[idx].item()
+                
+                final_seq = seq + [pitch_token]
+                final_score = score + pitch_log_prob
+                
+                new_beams.append((final_score, final_seq))
             
-            del top_k_pitch_log_probs, top_k_pitch_indices, dur_expanded_seqs, dur_expanded_scores
+            del all_pitch_log_probs, all_pitch_indices, dur_expanded_seqs, dur_expanded_scores
             
             new_beams.sort(key=lambda x: x[0], reverse=True)
             beams = new_beams[:num_beams]
@@ -407,8 +412,13 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_path = '150_model'
     test_file = 'data/test_sliding.txt'
-    num_sequences = 1000
+    num_sequences = 1  # Single sequence test run
     num_beams = 5
+    branching_factor = 6  # Number of triplet candidates per beam before pruning
+    
+    # Create main results directory
+    results_dir = 'results_new'
+    os.makedirs(results_dir, exist_ok=True)
     
     print("="*80)
     print("TRIPLET BEAM SEARCH ANALYSIS")
@@ -416,6 +426,8 @@ def main():
     print(f"Model: {model_path}")
     print(f"Test sequences: {num_sequences}")
     print(f"Beam width: {num_beams}")
+    print(f"Branching factor: {branching_factor}")
+    print(f"Results directory: {results_dir}")
     
     # Load model
     print(f"\nLoading model...")
@@ -476,9 +488,9 @@ def main():
             )
             
             # Run beam search
-            print(f"Running beam search (num_beams={num_beams})...")
+            print(f"Running beam search (num_beams={num_beams}, branching_factor={branching_factor})...")
             beam_preds, beam_lp, beam_gt, beam_corr, beam_seq = beam_search_with_tracking(
-                model, tokens, score_triplet_positions, num_beams, device
+                model, tokens, score_triplet_positions, num_beams, branching_factor, device
             )
             
             # Store for aggregate plot
@@ -554,7 +566,7 @@ def main():
             
             # Save MIDI outputs first to create directory
             print("Saving MIDI outputs...")
-            output_dir = f'triplet_beam_seq{seq_idx + 1}'
+            output_dir = os.path.join(results_dir, f'seq{seq_idx + 1}')
             save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx + 1)
             
             # Save plot to same directory
@@ -611,8 +623,9 @@ def main():
         ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('triplet_beam_aggregate_loss.png', dpi=150, bbox_inches='tight')
-    print("Saved: triplet_beam_aggregate_loss.png")
+    aggregate_loss_path = os.path.join(results_dir, 'aggregate_loss.png')
+    plt.savefig(aggregate_loss_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {aggregate_loss_path}")
     plt.close()
     
     # Print aggregate statistics
@@ -666,8 +679,9 @@ def main():
     ax.set_ylim(0, 105)
     
     plt.tight_layout()
-    plt.savefig('triplet_beam_aggregate_accuracy.png', dpi=150, bbox_inches='tight')
-    print("Saved: triplet_beam_aggregate_accuracy.png")
+    aggregate_acc_path = os.path.join(results_dir, 'aggregate_accuracy.png')
+    plt.savefig(aggregate_acc_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {aggregate_acc_path}")
     plt.close()
     
     # Create error histogram by triplet index
@@ -715,13 +729,17 @@ def main():
         ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('triplet_beam_error_histogram.png', dpi=150, bbox_inches='tight')
-    print("Saved: triplet_beam_error_histogram.png")
+    error_hist_path = os.path.join(results_dir, 'error_histogram.png')
+    plt.savefig(error_hist_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {error_hist_path}")
     plt.close()
     
     print(f"\n{'='*80}")
     print("Analysis complete!")
     print(f"{'='*80}")
+    print(f"All results saved to: {results_dir}/")
+    print(f"  - Individual sequence folders: seq1/, seq2/, seq3/, ...")
+    print(f"  - Aggregate plots: aggregate_loss.png, aggregate_accuracy.png, error_histogram.png")
 
 if __name__ == "__main__":
     main()
