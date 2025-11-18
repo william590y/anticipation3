@@ -440,6 +440,11 @@ def main():
         print(f"ANALYZING MODEL: {model_path}")
         print("="*80)
         
+        # Check if model directory exists
+        if not os.path.exists(model_path):
+            print(f"ERROR: Model directory '{model_path}' not found. Skipping...")
+            continue
+        
         # Create results directory
         os.makedirs(results_dir, exist_ok=True)
         
@@ -452,9 +457,14 @@ def main():
         print(f"Branching factor: {branching_factor}")
         print(f"Results directory: {results_dir}")
         
-        # Load model
-        print(f"\nLoading model...")
-        model = GPT2LMHeadModel.from_pretrained(model_path)
+        # Load model (local_files_only to prevent HuggingFace downloads)
+        print(f"\nLoading model from local directory...")
+        try:
+            model = GPT2LMHeadModel.from_pretrained(model_path, local_files_only=True)
+        except Exception as e:
+            print(f"ERROR loading model: {e}")
+            print(f"Skipping {model_path}...")
+            continue
         model = model.to(device)
         model.eval()
         
