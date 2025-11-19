@@ -170,206 +170,196 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
+
+def reorder_past(past, beam_indices):
+    """Reorder past_key_values according to beam indices."""
+    reordered_past = ()
+    for layer_past in past:
+        # layer_past is (key, value)
+        reordered_past += (
+            tuple(past_state.index_select(0, beam_indices) for past_state in layer_past),
+        )
+    return reordered_past
+
 def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, device):
     """
-    Triplet-aware beam search with detailed tracking.
+    Triplet-aware beam search with detailed tracking and KV caching.
     
     Args:
         num_beams: Number of hypotheses to maintain (prunes to this after each token)
     """
     first_score_time_pos = score_triplet_positions[0][0]
-    init_context = tokens[:first_score_time_pos]
-    beams = [(0.0, init_context)]
+    init_context = torch.tensor([tokens[:first_score_time_pos]], device=device)
+    
+    # Initial model run to get past_key_values
+    outputs = model(init_context, use_cache=True)
+    past_key_values = outputs.past_key_values
+    
+    # Initialize beams: list of (score, sequence)
+    # Note: We don't store past_key_values in the beam tuple to avoid duplication.
+    # Instead, we maintain a single past_key_values tensor that matches the batch of beams.
+    beams = [(0.0, tokens[:first_score_time_pos])]
     
     last_pos = first_score_time_pos
     
-    # Track best beam's predictions and log probs at each step
+    # Track predictions and log probs (populated at the end)
     predictions = {'time': [], 'duration': [], 'pitch': []}
     log_probs = {'time': [], 'duration': [], 'pitch': []}
     ground_truth = {'time': [], 'duration': [], 'pitch': []}
     correct = {'time': [], 'duration': [], 'pitch': []}
     
-    # Track generated sequence (from best beam at end)
-    generated_seq = None
-    
     for triplet_idx, (time_pos, dur_pos, pitch_pos) in enumerate(tqdm(score_triplet_positions, desc="  Triplets", leave=False)):
         # Add intermediate control tokens
         if time_pos > last_pos:
             intermediate = tokens[last_pos:time_pos]
+            intermediate_tensor = torch.tensor([intermediate], device=device)
+            
+            # Expand intermediate input to match current number of beams
+            if len(beams) > 1:
+                intermediate_tensor = intermediate_tensor.repeat(len(beams), 1)
+            
+            # Run model to update past_key_values
+            outputs = model(intermediate_tensor, past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+            
+            # Update beam sequences
             beams = [(score, seq + intermediate) for score, seq in beams]
         
-        # Adaptive chunk size based on sequence length (for memory management)
-        seq_len = len(beams[0][1])
-        if seq_len > 800:
-            chunk_size = 1
-        elif seq_len > 500:
-            chunk_size = 5
-        elif seq_len > 300:
-            chunk_size = 10
-        else:
-            chunk_size = 20
+        # ========== TIME TOKEN ==========
+        # 1. Get TIME candidates
+        # If we just ran intermediate tokens, outputs.logits has the predictions for TIME.
+        # If not, we need predictions from the previous step (PITCH).
+        # However, we need to be careful about the first step.
+        # At first step, outputs comes from init_context, which predicts the first TIME token.
         
-        # Standard beam search: expand by num_beams at each token, prune back to num_beams
-        if len(beams) > 0:
-            # ========== TIME TOKEN ==========
-            # STEP 1: Batch predict TIME for all current beams
-            batch_seqs = [seq for _, seq in beams]
-            max_len = max(len(seq) for seq in batch_seqs)
-            padded_seqs = []
-            attention_masks = []
+        time_logits = outputs.logits[:, -1, :]
+        time_log_probs = torch.nn.functional.log_softmax(time_logits, dim=-1)
+        
+        # Expand/Prune TIME
+        if len(beams) == 1:
+            # First expansion: 1 -> num_beams
+            top_k_log_probs, top_k_indices = torch.topk(time_log_probs, num_beams, dim=-1)
+            # top_k are (1, num_beams)
             
-            for seq in batch_seqs:
-                padding_len = max_len - len(seq)
-                padded_seq = [0] * padding_len + seq
-                padded_seqs.append(padded_seq)
-                attention_masks.append([0] * padding_len + [1] * len(seq))
+            new_beams = []
+            for i in range(num_beams):
+                token = top_k_indices[0, i].item()
+                score = top_k_log_probs[0, i].item()
+                new_beams.append((beams[0][0] + score, beams[0][1] + [token]))
             
-            input_ids = torch.tensor(padded_seqs, device=device)
-            attention_mask = torch.tensor(attention_masks, device=device)
+            beams = new_beams
             
-            outputs = model(input_ids, attention_mask=attention_mask)
-            time_logits = outputs.logits[:, -1, :]
-            time_log_probs = torch.nn.functional.log_softmax(time_logits, dim=-1)
+            # Replicate past_key_values for num_beams
+            indices = torch.zeros(num_beams, dtype=torch.long, device=device)
+            past_key_values = reorder_past(past_key_values, indices)
             
-            # Get top num_beams TIME candidates per beam
-            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, num_beams, dim=-1)
+        else:
+            # N -> N expansion
+            top_k_log_probs, top_k_indices = torch.topk(time_log_probs, num_beams, dim=-1)
             
-            del outputs, time_logits, time_log_probs, input_ids, attention_mask
-            
-            # STEP 2: Expand with TIME candidates and prune to num_beams
-            time_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for time_idx in range(num_beams):
-                    time_token = top_k_time_indices[beam_idx, time_idx].item()
-                    time_log_prob = top_k_time_log_probs[beam_idx, time_idx].item()
-                    
-                    time_candidates.append((
-                        beam_score + time_log_prob,
-                        beam_seq + [time_token]
+            candidates = []
+            for beam_idx in range(len(beams)):
+                for k in range(num_beams):
+                    token = top_k_indices[beam_idx, k].item()
+                    score = top_k_log_probs[beam_idx, k].item()
+                    candidates.append((
+                        beams[beam_idx][0] + score, 
+                        beams[beam_idx][1] + [token],
+                        beam_idx # Keep track of parent beam
                     ))
             
-            del top_k_time_log_probs, top_k_time_indices
+            # Sort and prune
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            best_candidates = candidates[:num_beams]
             
-            # Prune to top num_beams after TIME
-            time_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = time_candidates[:num_beams]
+            beams = [(s, seq) for s, seq, _ in best_candidates]
+            parent_indices = [p_idx for _, _, p_idx in best_candidates]
             
-            # ========== DURATION TOKEN ==========
-            # STEP 3: Batch predict DURATION for current beams
-            dur_log_probs_list = []
-            dur_indices_list = []
-            
-            batch_seqs = [seq for _, seq in beams]
-            for chunk_start in range(0, len(batch_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
-                chunk_seqs = batch_seqs[chunk_start:chunk_end]
-                
-                max_len = max(len(seq) for seq in chunk_seqs)
-                padded_seqs = []
-                attention_masks = []
-                
-                for seq in chunk_seqs:
-                    padding_len = max_len - len(seq)
-                    padded_seq = [0] * padding_len + seq
-                    padded_seqs.append(padded_seq)
-                    attention_masks.append([0] * padding_len + [1] * len(seq))
-                
-                input_ids = torch.tensor(padded_seqs, device=device)
-                attention_mask = torch.tensor(attention_masks, device=device)
-                
-                outputs = model(input_ids, attention_mask=attention_mask)
-                dur_logits = outputs.logits[:, -1, :]
-                dur_log_probs = torch.nn.functional.log_softmax(dur_logits, dim=-1)
-                
-                # Get top num_beams DURATION candidates per sequence
-                top_k_dur_log_probs, top_k_dur_indices = torch.topk(dur_log_probs, num_beams, dim=-1)
-                
-                dur_log_probs_list.append(top_k_dur_log_probs.cpu())
-                dur_indices_list.append(top_k_dur_indices.cpu())
-                
-                del outputs, dur_logits, dur_log_probs, input_ids, attention_mask
-            
-            top_k_dur_log_probs = torch.cat(dur_log_probs_list, dim=0)
-            top_k_dur_indices = torch.cat(dur_indices_list, dim=0)
-            
-            # STEP 4: Expand with DURATION candidates and prune to num_beams
-            dur_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for dur_idx in range(num_beams):
-                    dur_token = top_k_dur_indices[beam_idx, dur_idx].item()
-                    dur_log_prob = top_k_dur_log_probs[beam_idx, dur_idx].item()
-                    
-                    dur_candidates.append((
-                        beam_score + dur_log_prob,
-                        beam_seq + [dur_token]
-                    ))
-            
-            del top_k_dur_log_probs, top_k_dur_indices
-            
-            # Prune to top num_beams after DURATION
-            dur_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = dur_candidates[:num_beams]
-            
-            # ========== PITCH TOKEN ==========
-            # STEP 5: Batch predict PITCH for current beams
-            pitch_log_probs_list = []
-            pitch_indices_list = []
-            
-            batch_seqs = [seq for _, seq in beams]
-            for chunk_start in range(0, len(batch_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
-                chunk_seqs = batch_seqs[chunk_start:chunk_end]
-                
-                max_len = max(len(seq) for seq in chunk_seqs)
-                padded_seqs = []
-                attention_masks = []
-                
-                for seq in chunk_seqs:
-                    padding_len = max_len - len(seq)
-                    padded_seq = [0] * padding_len + seq
-                    padded_seqs.append(padded_seq)
-                    attention_masks.append([0] * padding_len + [1] * len(seq))
-                
-                input_ids = torch.tensor(padded_seqs, device=device)
-                attention_mask = torch.tensor(attention_masks, device=device)
-                
-                outputs = model(input_ids, attention_mask=attention_mask)
-                pitch_logits = outputs.logits[:, -1, :]
-                pitch_log_probs = torch.nn.functional.log_softmax(pitch_logits, dim=-1)
-                
-                # Get top num_beams PITCH candidates per (TIME, DURATION) pair
-                top_k_pitch_log_probs, top_k_pitch_indices = torch.topk(pitch_log_probs, num_beams, dim=-1)
-                
-                pitch_log_probs_list.append(top_k_pitch_log_probs.cpu())
-                pitch_indices_list.append(top_k_pitch_indices.cpu())
-                
-                del outputs, pitch_logits, pitch_log_probs, input_ids, attention_mask
-            
-            top_k_pitch_log_probs = torch.cat(pitch_log_probs_list, dim=0)
-            top_k_pitch_indices = torch.cat(pitch_indices_list, dim=0)
-            
-            # STEP 6: Expand with PITCH candidates and prune to num_beams
-            pitch_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for pitch_idx in range(num_beams):
-                    pitch_token = top_k_pitch_indices[beam_idx, pitch_idx].item()
-                    pitch_log_prob = top_k_pitch_log_probs[beam_idx, pitch_idx].item()
-                    
-                    pitch_candidates.append((
-                        beam_score + pitch_log_prob,
-                        beam_seq + [pitch_token]
-                    ))
-            
-            del top_k_pitch_log_probs, top_k_pitch_indices
-            
-            # Prune to top num_beams after PITCH (final triplet complete)
-            pitch_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = pitch_candidates[:num_beams]
-            
-            if triplet_idx % 20 == 0:
-                torch.cuda.empty_cache()
+            # Reorder past
+            indices = torch.tensor(parent_indices, dtype=torch.long, device=device)
+            past_key_values = reorder_past(past_key_values, indices)
+        
+        # Prepare input for DURATION (the TIME tokens we just selected)
+        last_tokens = [b[1][-1] for b in beams]
+        input_ids = torch.tensor(last_tokens, device=device).unsqueeze(1) # (num_beams, 1)
+        
+        # Run model for DURATION
+        outputs = model(input_ids, past_key_values=past_key_values, use_cache=True)
+        past_key_values = outputs.past_key_values
+        
+        # ========== DURATION TOKEN ==========
+        dur_logits = outputs.logits[:, -1, :]
+        dur_log_probs = torch.nn.functional.log_softmax(dur_logits, dim=-1)
+        
+        top_k_log_probs, top_k_indices = torch.topk(dur_log_probs, num_beams, dim=-1)
+        
+        candidates = []
+        for beam_idx in range(len(beams)):
+            for k in range(num_beams):
+                token = top_k_indices[beam_idx, k].item()
+                score = top_k_log_probs[beam_idx, k].item()
+                candidates.append((
+                    beams[beam_idx][0] + score, 
+                    beams[beam_idx][1] + [token],
+                    beam_idx
+                ))
+        
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_candidates = candidates[:num_beams]
+        
+        beams = [(s, seq) for s, seq, _ in best_candidates]
+        parent_indices = [p_idx for _, _, p_idx in best_candidates]
+        
+        indices = torch.tensor(parent_indices, dtype=torch.long, device=device)
+        past_key_values = reorder_past(past_key_values, indices)
+        
+        # Prepare input for PITCH
+        last_tokens = [b[1][-1] for b in beams]
+        input_ids = torch.tensor(last_tokens, device=device).unsqueeze(1)
+        
+        # Run model for PITCH
+        outputs = model(input_ids, past_key_values=past_key_values, use_cache=True)
+        past_key_values = outputs.past_key_values
+        
+        # ========== PITCH TOKEN ==========
+        pitch_logits = outputs.logits[:, -1, :]
+        pitch_log_probs = torch.nn.functional.log_softmax(pitch_logits, dim=-1)
+        
+        top_k_log_probs, top_k_indices = torch.topk(pitch_log_probs, num_beams, dim=-1)
+        
+        candidates = []
+        for beam_idx in range(len(beams)):
+            for k in range(num_beams):
+                token = top_k_indices[beam_idx, k].item()
+                score = top_k_log_probs[beam_idx, k].item()
+                candidates.append((
+                    beams[beam_idx][0] + score, 
+                    beams[beam_idx][1] + [token],
+                    beam_idx
+                ))
+        
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_candidates = candidates[:num_beams]
+        
+        beams = [(s, seq) for s, seq, _ in best_candidates]
+        parent_indices = [p_idx for _, _, p_idx in best_candidates]
+        
+        indices = torch.tensor(parent_indices, dtype=torch.long, device=device)
+        past_key_values = reorder_past(past_key_values, indices)
+        
+        # Prepare for next iteration (or next intermediate tokens)
+        # We need to run the model on the PITCH tokens to get logits for the next step
+        last_tokens = [b[1][-1] for b in beams]
+        input_ids = torch.tensor(last_tokens, device=device).unsqueeze(1)
+        
+        outputs = model(input_ids, past_key_values=past_key_values, use_cache=True)
+        past_key_values = outputs.past_key_values
+        # outputs.logits now contains predictions for the NEXT token (Time or Intermediate)
         
         last_pos = pitch_pos + 1
+        
+        if triplet_idx % 50 == 0:
+            torch.cuda.empty_cache()
     
     # Extract predictions from best beam
     best_score, best_seq = beams[0]
@@ -425,14 +415,14 @@ def main():
     
     # Run analysis on multiple models
     models_to_test = [
-        ('50_model', 'results_50_new'),
-        ('100_model', 'results_100_new'),
-        ('150_model', 'results_150_new')
+        ('50_model', 'results_50_kv'),
+        ('100_model', 'results_100_kv'),
+        ('150_model', 'results_150_kv')
     ]
     
     test_file = 'data/test_sliding.txt'
-    num_sequences = 20
-    num_beams = 30
+    num_sequences = 30
+    num_beams = 100
     
     # Load test data once and sample the same sequences for all models
     print("\nLoading test data and sampling sequences...")
