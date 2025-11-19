@@ -170,13 +170,12 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
-def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, branching_factor, device):
+def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, device):
     """
     Triplet-aware beam search with detailed tracking.
     
     Args:
-        num_beams: Number of hypotheses to maintain
-        branching_factor: Number of triplet candidates to generate per beam before pruning
+        num_beams: Number of hypotheses to maintain (prunes to this after each token)
     """
     first_score_time_pos = score_triplet_positions[0][0]
     init_context = tokens[:first_score_time_pos]
@@ -210,13 +209,10 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
         else:
             chunk_size = 20
         
-        # Generate branching_factor complete triplets per beam
-        # Strategy: For each beam, generate top-k TIME tokens, then for each TIME
-        # generate top-1 DURATION and PITCH to get branching_factor triplets
-        new_beams = []
-        
+        # Standard beam search: expand by num_beams at each token, prune back to num_beams
         if len(beams) > 0:
-            # For each beam, get top branching_factor TIME candidates
+            # ========== TIME TOKEN ==========
+            # STEP 1: Batch predict TIME for all current beams
             batch_seqs = [seq for _, seq in beams]
             max_len = max(len(seq) for seq in batch_seqs)
             padded_seqs = []
@@ -235,32 +231,38 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
             time_logits = outputs.logits[:, -1, :]
             time_log_probs = torch.nn.functional.log_softmax(time_logits, dim=-1)
             
-            # Get top branching_factor TIME candidates per beam
-            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, branching_factor, dim=-1)
+            # Get top num_beams TIME candidates per beam
+            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, num_beams, dim=-1)
             
             del outputs, time_logits, time_log_probs, input_ids, attention_mask
             
-            # Expand each beam with its top-k TIME candidates
-            time_expanded_seqs = []
-            time_expanded_scores = []
-            
+            # STEP 2: Expand with TIME candidates and prune to num_beams
+            time_candidates = []
             for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for time_idx in range(branching_factor):
+                for time_idx in range(num_beams):
                     time_token = top_k_time_indices[beam_idx, time_idx].item()
                     time_log_prob = top_k_time_log_probs[beam_idx, time_idx].item()
                     
-                    time_expanded_seqs.append(beam_seq + [time_token])
-                    time_expanded_scores.append(beam_score + time_log_prob)
+                    time_candidates.append((
+                        beam_score + time_log_prob,
+                        beam_seq + [time_token]
+                    ))
             
             del top_k_time_log_probs, top_k_time_indices
             
-            # For each TIME-expanded sequence, get top-1 DURATION (greedy)
+            # Prune to top num_beams after TIME
+            time_candidates.sort(key=lambda x: x[0], reverse=True)
+            beams = time_candidates[:num_beams]
+            
+            # ========== DURATION TOKEN ==========
+            # STEP 3: Batch predict DURATION for current beams
             dur_log_probs_list = []
             dur_indices_list = []
             
-            for chunk_start in range(0, len(time_expanded_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(time_expanded_seqs))
-                chunk_seqs = time_expanded_seqs[chunk_start:chunk_end]
+            batch_seqs = [seq for _, seq in beams]
+            for chunk_start in range(0, len(batch_seqs), chunk_size):
+                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
+                chunk_seqs = batch_seqs[chunk_start:chunk_end]
                 
                 max_len = max(len(seq) for seq in chunk_seqs)
                 padded_seqs = []
@@ -279,37 +281,44 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
                 dur_logits = outputs.logits[:, -1, :]
                 dur_log_probs = torch.nn.functional.log_softmax(dur_logits, dim=-1)
                 
-                # Get top-1 DURATION for each
-                top_dur_log_probs, top_dur_indices = torch.topk(dur_log_probs, 1, dim=-1)
+                # Get top num_beams DURATION candidates per sequence
+                top_k_dur_log_probs, top_k_dur_indices = torch.topk(dur_log_probs, num_beams, dim=-1)
                 
-                dur_log_probs_list.append(top_dur_log_probs.cpu())
-                dur_indices_list.append(top_dur_indices.cpu())
+                dur_log_probs_list.append(top_k_dur_log_probs.cpu())
+                dur_indices_list.append(top_k_dur_indices.cpu())
                 
                 del outputs, dur_logits, dur_log_probs, input_ids, attention_mask
             
-            all_dur_log_probs = torch.cat(dur_log_probs_list, dim=0).squeeze(-1)
-            all_dur_indices = torch.cat(dur_indices_list, dim=0).squeeze(-1)
+            top_k_dur_log_probs = torch.cat(dur_log_probs_list, dim=0)
+            top_k_dur_indices = torch.cat(dur_indices_list, dim=0)
             
-            # Expand DURATION
-            dur_expanded_seqs = []
-            dur_expanded_scores = []
+            # STEP 4: Expand with DURATION candidates and prune to num_beams
+            dur_candidates = []
+            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
+                for dur_idx in range(num_beams):
+                    dur_token = top_k_dur_indices[beam_idx, dur_idx].item()
+                    dur_log_prob = top_k_dur_log_probs[beam_idx, dur_idx].item()
+                    
+                    dur_candidates.append((
+                        beam_score + dur_log_prob,
+                        beam_seq + [dur_token]
+                    ))
             
-            for idx, (seq, score) in enumerate(zip(time_expanded_seqs, time_expanded_scores)):
-                dur_token = all_dur_indices[idx].item()
-                dur_log_prob = all_dur_log_probs[idx].item()
-                
-                dur_expanded_seqs.append(seq + [dur_token])
-                dur_expanded_scores.append(score + dur_log_prob)
+            del top_k_dur_log_probs, top_k_dur_indices
             
-            del all_dur_log_probs, all_dur_indices, time_expanded_seqs, time_expanded_scores
+            # Prune to top num_beams after DURATION
+            dur_candidates.sort(key=lambda x: x[0], reverse=True)
+            beams = dur_candidates[:num_beams]
             
-            # For each (TIME, DURATION) pair, get top-1 PITCH (greedy)
+            # ========== PITCH TOKEN ==========
+            # STEP 5: Batch predict PITCH for current beams
             pitch_log_probs_list = []
             pitch_indices_list = []
             
-            for chunk_start in range(0, len(dur_expanded_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(dur_expanded_seqs))
-                chunk_seqs = dur_expanded_seqs[chunk_start:chunk_end]
+            batch_seqs = [seq for _, seq in beams]
+            for chunk_start in range(0, len(batch_seqs), chunk_size):
+                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
+                chunk_seqs = batch_seqs[chunk_start:chunk_end]
                 
                 max_len = max(len(seq) for seq in chunk_seqs)
                 padded_seqs = []
@@ -328,31 +337,34 @@ def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams,
                 pitch_logits = outputs.logits[:, -1, :]
                 pitch_log_probs = torch.nn.functional.log_softmax(pitch_logits, dim=-1)
                 
-                # Get top-1 PITCH for each
-                top_pitch_log_probs, top_pitch_indices = torch.topk(pitch_log_probs, 1, dim=-1)
+                # Get top num_beams PITCH candidates per (TIME, DURATION) pair
+                top_k_pitch_log_probs, top_k_pitch_indices = torch.topk(pitch_log_probs, num_beams, dim=-1)
                 
-                pitch_log_probs_list.append(top_pitch_log_probs.cpu())
-                pitch_indices_list.append(top_pitch_indices.cpu())
+                pitch_log_probs_list.append(top_k_pitch_log_probs.cpu())
+                pitch_indices_list.append(top_k_pitch_indices.cpu())
                 
                 del outputs, pitch_logits, pitch_log_probs, input_ids, attention_mask
             
-            all_pitch_log_probs = torch.cat(pitch_log_probs_list, dim=0).squeeze(-1)
-            all_pitch_indices = torch.cat(pitch_indices_list, dim=0).squeeze(-1)
+            top_k_pitch_log_probs = torch.cat(pitch_log_probs_list, dim=0)
+            top_k_pitch_indices = torch.cat(pitch_indices_list, dim=0)
             
-            # Create complete triplets
-            for idx, (seq, score) in enumerate(zip(dur_expanded_seqs, dur_expanded_scores)):
-                pitch_token = all_pitch_indices[idx].item()
-                pitch_log_prob = all_pitch_log_probs[idx].item()
-                
-                final_seq = seq + [pitch_token]
-                final_score = score + pitch_log_prob
-                
-                new_beams.append((final_score, final_seq))
+            # STEP 6: Expand with PITCH candidates and prune to num_beams
+            pitch_candidates = []
+            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
+                for pitch_idx in range(num_beams):
+                    pitch_token = top_k_pitch_indices[beam_idx, pitch_idx].item()
+                    pitch_log_prob = top_k_pitch_log_probs[beam_idx, pitch_idx].item()
+                    
+                    pitch_candidates.append((
+                        beam_score + pitch_log_prob,
+                        beam_seq + [pitch_token]
+                    ))
             
-            del all_pitch_log_probs, all_pitch_indices, dur_expanded_seqs, dur_expanded_scores
+            del top_k_pitch_log_probs, top_k_pitch_indices
             
-            new_beams.sort(key=lambda x: x[0], reverse=True)
-            beams = new_beams[:num_beams]
+            # Prune to top num_beams after PITCH (final triplet complete)
+            pitch_candidates.sort(key=lambda x: x[0], reverse=True)
+            beams = pitch_candidates[:num_beams]
             
             if triplet_idx % 20 == 0:
                 torch.cuda.empty_cache()
@@ -413,15 +425,14 @@ def main():
     
     # Run analysis on multiple models
     models_to_test = [
-        ('50_model', 'results_50_30beams'),
-        ('100_model', 'results_100_30beams'),
-        ('150_model', 'results_150_30beams')
+        ('50_model', 'results_50_new'),
+        ('100_model', 'results_100_new'),
+        ('150_model', 'results_150_new')
     ]
     
     test_file = 'data/test_sliding.txt'
     num_sequences = 20
     num_beams = 30
-    branching_factor = 30  # Number of triplet candidates per beam before pruning
     
     # Load test data once and sample the same sequences for all models
     print("\nLoading test data and sampling sequences...")
@@ -454,7 +465,6 @@ def main():
         print(f"Model: {model_path}")
         print(f"Test sequences: {num_sequences}")
         print(f"Beam width: {num_beams}")
-        print(f"Branching factor: {branching_factor}")
         print(f"Results directory: {results_dir}")
         
         # Load model (local_files_only to prevent HuggingFace downloads)
@@ -514,9 +524,9 @@ def main():
                 )
                 
                 # Run beam search
-                print(f"Running beam search (num_beams={num_beams}, branching_factor={branching_factor})...")
+                print(f"Running beam search (num_beams={num_beams})...")
                 beam_preds, beam_lp, beam_gt, beam_corr, beam_seq = beam_search_with_tracking(
-                    model, tokens, score_triplet_positions, num_beams, branching_factor, device
+                    model, tokens, score_triplet_positions, num_beams, device
                 )
                 
                 # Store for aggregate plot
