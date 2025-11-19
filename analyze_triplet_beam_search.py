@@ -784,8 +784,13 @@ def main():
     print("CREATING CROSS-MODEL COMPARISON")
     print("="*80)
     
+    if len(model_comparison) == 0:
+        print("ERROR: No models were successfully analyzed. Exiting.")
+        return
+    
     token_types = ['time', 'duration', 'pitch']
-    model_names = ['50_model', '100_model', '150_model']
+    # Only use models that were successfully analyzed
+    model_names = list(model_comparison.keys())
     
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     fig.suptitle('Model Comparison: Greedy vs Beam Search Across Training Checkpoints', fontsize=16)
