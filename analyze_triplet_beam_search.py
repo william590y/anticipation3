@@ -413,15 +413,15 @@ def main():
     
     # Run analysis on multiple models
     models_to_test = [
-        ('50_model', 'results_50_model'),
-        ('100_model', 'results_100_model'),
-        ('150_model', 'results_150_model')
+        ('50_model', 'results_50_30beams'),
+        ('100_model', 'results_100_30beams'),
+        ('150_model', 'results_150_30beams')
     ]
     
     test_file = 'data/test_sliding.txt'
-    num_sequences = 100
-    num_beams = 5
-    branching_factor = 6  # Number of triplet candidates per beam before pruning
+    num_sequences = 20
+    num_beams = 30
+    branching_factor = 30  # Number of triplet candidates per beam before pruning
     
     # Load test data once and sample the same sequences for all models
     print("\nLoading test data and sampling sequences...")
