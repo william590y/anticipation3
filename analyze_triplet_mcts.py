@@ -1,8 +1,8 @@
 """
-Analyze triplet-aware beam search with loss progression and error distribution.
+Analyze triplet-aware Monte Carlo Tree Search (MCTS) with loss progression and error distribution.
 
 For each sequence:
-- Run greedy and beam search (num_beams=5)
+- Run greedy and MCTS
 - Track log probabilities for each token prediction
 - Plot loss progression over generation
 - Show error distribution by token type
@@ -17,6 +17,7 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import math
 
 def extract_score_only(tokens):
     """Extract only score tokens (not performance/control tokens)."""
@@ -62,8 +63,8 @@ def extract_performance_only(tokens):
     
     return events
 
-def save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx):
-    """Save MIDI files for input performance, ground truth, greedy, and beam outputs."""
+def save_midi_outputs(tokens, greedy_seq, mcts_seq, output_dir, seq_idx):
+    """Save MIDI files for input performance, ground truth, greedy, and MCTS outputs."""
     os.makedirs(output_dir, exist_ok=True)
     
     # Extract performance (input)
@@ -75,7 +76,7 @@ def save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx):
     # Convert tokens to events (score only - no control/performance tokens)
     gt_events = extract_score_only(tokens)
     greedy_events = extract_score_only(greedy_seq)
-    beam_events = extract_score_only(beam_seq)
+    mcts_events = extract_score_only(mcts_seq)
     
     # Save as MIDI
     gt_midi_path = os.path.join(output_dir, f'seq{seq_idx}_ground_truth.mid')
@@ -86,11 +87,11 @@ def save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx):
     greedy_midi = events_to_midi(greedy_events)
     greedy_midi.save(greedy_midi_path)
     
-    beam_midi_path = os.path.join(output_dir, f'seq{seq_idx}_beam.mid')
-    beam_midi = events_to_midi(beam_events)
-    beam_midi.save(beam_midi_path)
+    mcts_midi_path = os.path.join(output_dir, f'seq{seq_idx}_mcts.mid')
+    mcts_midi = events_to_midi(mcts_events)
+    mcts_midi.save(mcts_midi_path)
     
-    return perf_midi_path, gt_midi_path, greedy_midi_path, beam_midi_path
+    return perf_midi_path, gt_midi_path, greedy_midi_path, mcts_midi_path
 
 def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     """Greedy decoding with detailed tracking."""
@@ -170,253 +171,138 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
-def beam_search_with_tracking(model, tokens, score_triplet_positions, num_beams, device):
+class MCTSNode:
+    """Node in the MCTS tree for triplet generation."""
+    
+    def __init__(self, sequence, parent=None, token=None, log_prob=0.0):
+        self.sequence = sequence  # Current token sequence
+        self.parent = parent
+        self.token = token  # Token that led to this node
+        self.log_prob = log_prob  # Log probability of the token
+        self.children = {}  # token -> MCTSNode
+        self.visits = 0
+        self.total_value = 0.0
+        self.untried_tokens = None  # Will be set during expansion
+        
+    def is_fully_expanded(self):
+        return self.untried_tokens is not None and len(self.untried_tokens) == 0
+    
+    def best_child(self, c_param=1.414):
+        """Select best child using UCB1 formula."""
+        choices_weights = []
+        for child in self.children.values():
+            if child.visits == 0:
+                return child
+            # UCB1: exploitation + exploration
+            exploit = child.total_value / child.visits
+            explore = c_param * math.sqrt(math.log(self.visits) / child.visits)
+            choices_weights.append(exploit + explore)
+        
+        return list(self.children.values())[choices_weights.index(max(choices_weights))]
+    
+    def best_final_child(self):
+        """Select best child for final decision (max visits)."""
+        return max(self.children.values(), key=lambda c: c.visits)
+
+def mcts_with_tracking(model, tokens, score_triplet_positions, num_simulations, device):
     """
-    Triplet-aware beam search with detailed tracking.
+    Triplet-aware MCTS with detailed tracking.
     
     Args:
-        num_beams: Number of hypotheses to maintain (prunes to this after each token)
+        num_simulations: Number of MCTS simulations per triplet position
     """
     first_score_time_pos = score_triplet_positions[0][0]
     init_context = tokens[:first_score_time_pos]
-    beams = [(0.0, init_context)]
     
     last_pos = first_score_time_pos
     
-    # Track best beam's predictions and log probs at each step
+    # Track predictions and log probs at each step
     predictions = {'time': [], 'duration': [], 'pitch': []}
     log_probs = {'time': [], 'duration': [], 'pitch': []}
     ground_truth = {'time': [], 'duration': [], 'pitch': []}
     correct = {'time': [], 'duration': [], 'pitch': []}
     
-    # Track generated sequence (from best beam at end)
-    generated_seq = None
+    # Build generated sequence
+    generated_seq = list(init_context)
     
     for triplet_idx, (time_pos, dur_pos, pitch_pos) in enumerate(tqdm(score_triplet_positions, desc="  Triplets", leave=False)):
         # Add intermediate control tokens
         if time_pos > last_pos:
             intermediate = tokens[last_pos:time_pos]
-            beams = [(score, seq + intermediate) for score, seq in beams]
+            generated_seq.extend(intermediate)
         
-        # Adaptive chunk size based on sequence length (for memory management)
-        seq_len = len(beams[0][1])
-        if seq_len > 800:
-            chunk_size = 1
-        elif seq_len > 500:
-            chunk_size = 5
-        elif seq_len > 300:
-            chunk_size = 10
-        else:
-            chunk_size = 20
-        
-        # Standard beam search: expand by num_beams at each token, prune back to num_beams
-        if len(beams) > 0:
-            # ========== TIME TOKEN ==========
-            # STEP 1: Batch predict TIME for all current beams
-            batch_seqs = [seq for _, seq in beams]
-            max_len = max(len(seq) for seq in batch_seqs)
-            padded_seqs = []
-            attention_masks = []
+        # MCTS for each token in the triplet
+        for token_idx, (gt_pos, token_type) in enumerate([(time_pos, 'time'), (dur_pos, 'duration'), (pitch_pos, 'pitch')]):
+            # Root node with current sequence
+            root = MCTSNode(generated_seq.copy())
             
-            for seq in batch_seqs:
-                padding_len = max_len - len(seq)
-                padded_seq = [0] * padding_len + seq
-                padded_seqs.append(padded_seq)
-                attention_masks.append([0] * padding_len + [1] * len(seq))
-            
-            input_ids = torch.tensor(padded_seqs, device=device)
-            attention_mask = torch.tensor(attention_masks, device=device)
-            
-            outputs = model(input_ids, attention_mask=attention_mask)
-            time_logits = outputs.logits[:, -1, :]
-            time_log_probs = torch.nn.functional.log_softmax(time_logits, dim=-1)
-            
-            # Get top num_beams TIME candidates per beam
-            top_k_time_log_probs, top_k_time_indices = torch.topk(time_log_probs, num_beams, dim=-1)
-            
-            del outputs, time_logits, time_log_probs, input_ids, attention_mask
-            
-            # STEP 2: Expand with TIME candidates and prune to num_beams
-            time_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for time_idx in range(num_beams):
-                    time_token = top_k_time_indices[beam_idx, time_idx].item()
-                    time_log_prob = top_k_time_log_probs[beam_idx, time_idx].item()
+            # Run MCTS simulations
+            for _ in range(num_simulations):
+                node = root
+                
+                # 1. Selection: traverse tree using UCB1
+                while node.is_fully_expanded() and len(node.children) > 0:
+                    node = node.best_child()
+                
+                # 2. Expansion: add new child if not fully expanded
+                if not node.is_fully_expanded():
+                    # Get model predictions for this sequence
+                    with torch.no_grad():
+                        input_ids = torch.tensor([node.sequence], device=device)
+                        outputs = model(input_ids)
+                        logits = outputs.logits[0, -1, :]
+                        log_probs_tensor = torch.nn.functional.log_softmax(logits, dim=-1)
+                        
+                        # Get top-k candidates for expansion
+                        top_k = min(50, logits.size(0))  # Expand top 50 tokens
+                        top_log_probs, top_indices = torch.topk(log_probs_tensor, top_k)
+                        
+                        if node.untried_tokens is None:
+                            node.untried_tokens = [(top_indices[i].item(), top_log_probs[i].item()) 
+                                                   for i in range(top_k)]
                     
-                    time_candidates.append((
-                        beam_score + time_log_prob,
-                        beam_seq + [time_token]
-                    ))
-            
-            del top_k_time_log_probs, top_k_time_indices
-            
-            # Prune to top num_beams after TIME
-            time_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = time_candidates[:num_beams]
-            
-            # ========== DURATION TOKEN ==========
-            # STEP 3: Batch predict DURATION for current beams
-            dur_log_probs_list = []
-            dur_indices_list = []
-            
-            batch_seqs = [seq for _, seq in beams]
-            for chunk_start in range(0, len(batch_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
-                chunk_seqs = batch_seqs[chunk_start:chunk_end]
+                    # Expand one untried token
+                    if len(node.untried_tokens) > 0:
+                        token, token_log_prob = node.untried_tokens.pop(0)
+                        new_seq = node.sequence + [token]
+                        child = MCTSNode(new_seq, parent=node, token=token, log_prob=token_log_prob)
+                        node.children[token] = child
+                        node = child
                 
-                max_len = max(len(seq) for seq in chunk_seqs)
-                padded_seqs = []
-                attention_masks = []
+                # 3. Simulation: rollout from this node
+                # For language models, we use the log probability as the value
+                value = node.log_prob
                 
-                for seq in chunk_seqs:
-                    padding_len = max_len - len(seq)
-                    padded_seq = [0] * padding_len + seq
-                    padded_seqs.append(padded_seq)
-                    attention_masks.append([0] * padding_len + [1] * len(seq))
-                
-                input_ids = torch.tensor(padded_seqs, device=device)
-                attention_mask = torch.tensor(attention_masks, device=device)
-                
-                outputs = model(input_ids, attention_mask=attention_mask)
-                dur_logits = outputs.logits[:, -1, :]
-                dur_log_probs = torch.nn.functional.log_softmax(dur_logits, dim=-1)
-                
-                # Get top num_beams DURATION candidates per sequence
-                top_k_dur_log_probs, top_k_dur_indices = torch.topk(dur_log_probs, num_beams, dim=-1)
-                
-                dur_log_probs_list.append(top_k_dur_log_probs.cpu())
-                dur_indices_list.append(top_k_dur_indices.cpu())
-                
-                del outputs, dur_logits, dur_log_probs, input_ids, attention_mask
+                # 4. Backpropagation: update all ancestors
+                while node is not None:
+                    node.visits += 1
+                    node.total_value += value
+                    node = node.parent
             
-            top_k_dur_log_probs = torch.cat(dur_log_probs_list, dim=0)
-            top_k_dur_indices = torch.cat(dur_indices_list, dim=0)
+            # Select best token based on visit counts
+            if len(root.children) > 0:
+                best_child = root.best_final_child()
+                pred_token = best_child.token
+                pred_log_prob = best_child.log_prob
+            else:
+                # Fallback to greedy if no children (shouldn't happen)
+                with torch.no_grad():
+                    input_ids = torch.tensor([generated_seq], device=device)
+                    outputs = model(input_ids)
+                    logits = outputs.logits[0, -1, :]
+                    log_probs_tensor = torch.nn.functional.log_softmax(logits, dim=-1)
+                    pred_token = logits.argmax().item()
+                    pred_log_prob = log_probs_tensor[pred_token].item()
             
-            # STEP 4: Expand with DURATION candidates and prune to num_beams
-            dur_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for dur_idx in range(num_beams):
-                    dur_token = top_k_dur_indices[beam_idx, dur_idx].item()
-                    dur_log_prob = top_k_dur_log_probs[beam_idx, dur_idx].item()
-                    
-                    dur_candidates.append((
-                        beam_score + dur_log_prob,
-                        beam_seq + [dur_token]
-                    ))
+            gt_token = tokens[gt_pos]
             
-            del top_k_dur_log_probs, top_k_dur_indices
-            
-            # Prune to top num_beams after DURATION
-            dur_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = dur_candidates[:num_beams]
-            
-            # ========== PITCH TOKEN ==========
-            # STEP 5: Batch predict PITCH for current beams
-            pitch_log_probs_list = []
-            pitch_indices_list = []
-            
-            batch_seqs = [seq for _, seq in beams]
-            for chunk_start in range(0, len(batch_seqs), chunk_size):
-                chunk_end = min(chunk_start + chunk_size, len(batch_seqs))
-                chunk_seqs = batch_seqs[chunk_start:chunk_end]
-                
-                max_len = max(len(seq) for seq in chunk_seqs)
-                padded_seqs = []
-                attention_masks = []
-                
-                for seq in chunk_seqs:
-                    padding_len = max_len - len(seq)
-                    padded_seq = [0] * padding_len + seq
-                    padded_seqs.append(padded_seq)
-                    attention_masks.append([0] * padding_len + [1] * len(seq))
-                
-                input_ids = torch.tensor(padded_seqs, device=device)
-                attention_mask = torch.tensor(attention_masks, device=device)
-                
-                outputs = model(input_ids, attention_mask=attention_mask)
-                pitch_logits = outputs.logits[:, -1, :]
-                pitch_log_probs = torch.nn.functional.log_softmax(pitch_logits, dim=-1)
-                
-                # Get top num_beams PITCH candidates per (TIME, DURATION) pair
-                top_k_pitch_log_probs, top_k_pitch_indices = torch.topk(pitch_log_probs, num_beams, dim=-1)
-                
-                pitch_log_probs_list.append(top_k_pitch_log_probs.cpu())
-                pitch_indices_list.append(top_k_pitch_indices.cpu())
-                
-                del outputs, pitch_logits, pitch_log_probs, input_ids, attention_mask
-            
-            top_k_pitch_log_probs = torch.cat(pitch_log_probs_list, dim=0)
-            top_k_pitch_indices = torch.cat(pitch_indices_list, dim=0)
-            
-            # STEP 6: Expand with PITCH candidates and prune to num_beams
-            pitch_candidates = []
-            for beam_idx, (beam_score, beam_seq) in enumerate(beams):
-                for pitch_idx in range(num_beams):
-                    pitch_token = top_k_pitch_indices[beam_idx, pitch_idx].item()
-                    pitch_log_prob = top_k_pitch_log_probs[beam_idx, pitch_idx].item()
-                    
-                    pitch_candidates.append((
-                        beam_score + pitch_log_prob,
-                        beam_seq + [pitch_token]
-                    ))
-            
-            del top_k_pitch_log_probs, top_k_pitch_indices
-            
-            # Prune to top num_beams after PITCH (final triplet complete)
-            pitch_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = pitch_candidates[:num_beams]
-            
-            if triplet_idx % 20 == 0:
-                torch.cuda.empty_cache()
+            predictions[token_type].append(pred_token)
+            log_probs[token_type].append(pred_log_prob)
+            ground_truth[token_type].append(gt_token)
+            correct[token_type].append(pred_token == gt_token)
+            generated_seq.append(pred_token)
         
         last_pos = pitch_pos + 1
-    
-    # Extract predictions from best beam
-    best_score, best_seq = beams[0]
-    
-    pred_idx = first_score_time_pos
-    prev_pos = first_score_time_pos
-    
-    for time_pos, dur_pos, pitch_pos in score_triplet_positions:
-        if time_pos > prev_pos:
-            num_intermediate = time_pos - prev_pos
-            pred_idx += num_intermediate
-        
-        # Extract TIME
-        if pred_idx < len(best_seq):
-            pred_time = best_seq[pred_idx]
-            gt_time = tokens[time_pos]
-            predictions['time'].append(pred_time)
-            ground_truth['time'].append(gt_time)
-            correct['time'].append(pred_time == gt_time)
-            # Log prob not available for beam search final selection
-            log_probs['time'].append(0.0)
-            pred_idx += 1
-        
-        # Extract DURATION
-        if pred_idx < len(best_seq):
-            pred_dur = best_seq[pred_idx]
-            gt_dur = tokens[dur_pos]
-            predictions['duration'].append(pred_dur)
-            ground_truth['duration'].append(gt_dur)
-            correct['duration'].append(pred_dur == gt_dur)
-            log_probs['duration'].append(0.0)
-            pred_idx += 1
-        
-        # Extract PITCH
-        if pred_idx < len(best_seq):
-            pred_pitch = best_seq[pred_idx]
-            gt_pitch = tokens[pitch_pos]
-            predictions['pitch'].append(pred_pitch)
-            ground_truth['pitch'].append(gt_pitch)
-            correct['pitch'].append(pred_pitch == gt_pitch)
-            log_probs['pitch'].append(0.0)
-            pred_idx += 1
-        
-        prev_pos = pitch_pos + 1
-    
-    # best_seq is the generated sequence
-    generated_seq = best_seq
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
@@ -425,14 +311,14 @@ def main():
     
     # Run analysis on multiple models
     models_to_test = [
-        ('50_model', 'results_50_heavy'),
-        ('100_model', 'results_100_heavy'),
-        ('150_model', 'results_150_heavy')
+        ('50_model', 'results_50_mcts'),
+        ('100_model', 'results_100_mcts'),
+        ('150_model', 'results_150_mcts')
     ]
     
     test_file = 'data/test_sliding.txt'
-    num_sequences = 25
-    num_beams = 100
+    num_sequences = 20
+    num_simulations = 100  # Number of MCTS simulations per token
     
     # Load test data once and sample the same sequences for all models
     print("\nLoading test data and sampling sequences...")
@@ -460,11 +346,11 @@ def main():
         os.makedirs(results_dir, exist_ok=True)
         
         print("="*80)
-        print("TRIPLET BEAM SEARCH ANALYSIS")
+        print("TRIPLET MCTS ANALYSIS")
         print("="*80)
         print(f"Model: {model_path}")
         print(f"Test sequences: {num_sequences}")
-        print(f"Beam width: {num_beams}")
+        print(f"Simulations per token: {num_simulations}")
         print(f"Results directory: {results_dir}")
         
         # Load model (local_files_only to prevent HuggingFace downloads)
@@ -507,7 +393,7 @@ def main():
         # Store results across all sequences for aggregate plot
         all_greedy_losses = {'time': [], 'duration': [], 'pitch': []}
         all_greedy_correct = {'time': [], 'duration': [], 'pitch': []}
-        all_beam_correct = {'time': [], 'duration': [], 'pitch': []}
+        all_mcts_correct = {'time': [], 'duration': [], 'pitch': []}
         
         # Run analysis on each sequence
         with torch.no_grad():
@@ -523,10 +409,10 @@ def main():
                     model, tokens, score_triplet_positions, device
                 )
                 
-                # Run beam search
-                print(f"Running beam search (num_beams={num_beams})...")
-                beam_preds, beam_lp, beam_gt, beam_corr, beam_seq = beam_search_with_tracking(
-                    model, tokens, score_triplet_positions, num_beams, device
+                # Run MCTS
+                print(f"Running MCTS (simulations={num_simulations})...")
+                mcts_preds, mcts_lp, mcts_gt, mcts_corr, mcts_seq = mcts_with_tracking(
+                    model, tokens, score_triplet_positions, num_simulations, device
                 )
                 
                 # Store for aggregate plot
@@ -534,11 +420,11 @@ def main():
                     greedy_loss = [-lp for lp in greedy_lp[tok_type]]
                     all_greedy_losses[tok_type].extend(greedy_loss)
                     all_greedy_correct[tok_type].extend(greedy_corr[tok_type])
-                    all_beam_correct[tok_type].extend(beam_corr[tok_type])
+                    all_mcts_correct[tok_type].extend(mcts_corr[tok_type])
                 
                 # Create plots
                 fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-                fig.suptitle(f'Sequence {seq_idx + 1} - Greedy vs Beam Search (num_beams={num_beams})', fontsize=16)
+                fig.suptitle(f'Sequence {seq_idx + 1} - Greedy vs MCTS (simulations={num_simulations})', fontsize=16)
                 
                 token_types = ['time', 'duration', 'pitch']
                 
@@ -558,10 +444,10 @@ def main():
                         ax.scatter([greedy_errors], [greedy_loss[i] for i in greedy_errors], 
                                   color='red', s=50, marker='x', label='Greedy errors', zorder=5)
                     
-                    beam_errors = [i for i, c in enumerate(beam_corr[tok_type]) if not c]
-                    if beam_errors:
-                        ax.scatter([beam_errors], [greedy_loss[i] for i in beam_errors], 
-                                  color='orange', s=50, marker='^', label='Beam errors', zorder=5)
+                    mcts_errors = [i for i, c in enumerate(mcts_corr[tok_type]) if not c]
+                    if mcts_errors:
+                        ax.scatter([mcts_errors], [greedy_loss[i] for i in mcts_errors], 
+                                  color='orange', s=50, marker='^', label='MCTS errors', zorder=5)
                     
                     ax.set_xlabel('Triplet Index')
                     ax.set_ylabel('Loss (negative log prob)')
@@ -574,10 +460,10 @@ def main():
                     ax = axes[1, col]
                     
                     greedy_acc = sum(greedy_corr[tok_type]) / len(greedy_corr[tok_type]) * 100
-                    beam_acc = sum(beam_corr[tok_type]) / len(beam_corr[tok_type]) * 100
+                    mcts_acc = sum(mcts_corr[tok_type]) / len(mcts_corr[tok_type]) * 100
                     
-                    methods = ['Greedy', 'Beam']
-                    accuracies = [greedy_acc, beam_acc]
+                    methods = ['Greedy', 'MCTS']
+                    accuracies = [greedy_acc, mcts_acc]
                     colors = ['skyblue', 'lightcoral']
                     
                     bars = ax.bar(methods, accuracies, color=colors, alpha=0.7, edgecolor='black')
@@ -596,14 +482,14 @@ def main():
                     
                     # Add error count
                     greedy_errors = len([c for c in greedy_corr[tok_type] if not c])
-                    beam_errors = len([c for c in beam_corr[tok_type] if not c])
+                    mcts_errors = len([c for c in mcts_corr[tok_type] if not c])
                     ax.text(0, greedy_acc + 5, f'{greedy_errors} errors', ha='center', fontsize=9)
-                    ax.text(1, beam_acc + 5, f'{beam_errors} errors', ha='center', fontsize=9)
+                    ax.text(1, mcts_acc + 5, f'{mcts_errors} errors', ha='center', fontsize=9)
                 
                 # Save MIDI outputs first to create directory
                 print("Saving MIDI outputs...")
                 output_dir = os.path.join(results_dir, f'seq{seq_idx + 1}')
-                save_midi_outputs(tokens, greedy_seq, beam_seq, output_dir, seq_idx + 1)
+                save_midi_outputs(tokens, greedy_seq, mcts_seq, output_dir, seq_idx + 1)
                 
                 # Save plot to same directory
                 plt.tight_layout()
@@ -614,13 +500,13 @@ def main():
                 
                 # Print summary
                 print(f"Results:")
-                print(f"{'Token Type':<12} {'Greedy Acc':<15} {'Beam Acc':<15} {'Improvement':<15}")
+                print(f"{'Token Type':<12} {'Greedy Acc':<15} {'MCTS Acc':<15} {'Improvement':<15}")
                 print("-" * 60)
                 for tok_type in token_types:
                     greedy_acc = sum(greedy_corr[tok_type]) / len(greedy_corr[tok_type]) * 100
-                    beam_acc = sum(beam_corr[tok_type]) / len(beam_corr[tok_type]) * 100
-                    improvement = beam_acc - greedy_acc
-                    print(f"{tok_type.upper():<12} {greedy_acc:>6.2f}%{'':<8} {beam_acc:>6.2f}%{'':<8} {improvement:>+6.2f}%")
+                    mcts_acc = sum(mcts_corr[tok_type]) / len(mcts_corr[tok_type]) * 100
+                    improvement = mcts_acc - greedy_acc
+                    print(f"{tok_type.upper():<12} {greedy_acc:>6.2f}%{'':<8} {mcts_acc:>6.2f}%{'':<8} {improvement:>+6.2f}%")
         
         # Create aggregate plot across all sequences
         print(f"\n{'='*80}")
@@ -672,15 +558,15 @@ def main():
         print(f"Total triplets: {len(all_greedy_losses['time'])}")
         print()
         
-        print(f"{'Token Type':<12} {'Mean Loss':<15} {'Greedy Acc':<15} {'Beam Acc':<15} {'Improvement':<15}")
+        print(f"{'Token Type':<12} {'Mean Loss':<15} {'Greedy Acc':<15} {'MCTS Acc':<15} {'Improvement':<15}")
         print("-" * 75)
         for tok_type in token_types:
             mean_loss = np.mean(all_greedy_losses[tok_type])
             greedy_acc = sum(all_greedy_correct[tok_type]) / len(all_greedy_correct[tok_type]) * 100
-            beam_acc = sum(all_beam_correct[tok_type]) / len(all_beam_correct[tok_type]) * 100
-            improvement = beam_acc - greedy_acc
+            mcts_acc = sum(all_mcts_correct[tok_type]) / len(all_mcts_correct[tok_type]) * 100
+            improvement = mcts_acc - greedy_acc
             
-            print(f"{tok_type.upper():<12} {mean_loss:>6.3f}{'':<9} {greedy_acc:>6.2f}%{'':<8} {beam_acc:>6.2f}%{'':<8} {improvement:>+6.2f}%")
+            print(f"{tok_type.upper():<12} {mean_loss:>6.3f}{'':<9} {greedy_acc:>6.2f}%{'':<8} {mcts_acc:>6.2f}%{'':<8} {improvement:>+6.2f}%")
         
         # Create aggregate accuracy comparison plot
         print(f"\n{'='*80}")
@@ -694,10 +580,10 @@ def main():
         width = 0.35
         
         greedy_accs = [sum(all_greedy_correct[tok]) / len(all_greedy_correct[tok]) * 100 for tok in token_types]
-        beam_accs = [sum(all_beam_correct[tok]) / len(all_beam_correct[tok]) * 100 for tok in token_types]
+        mcts_accs = [sum(all_mcts_correct[tok]) / len(all_mcts_correct[tok]) * 100 for tok in token_types]
         
         bars1 = ax.bar(x - width/2, greedy_accs, width, label='Greedy', alpha=0.8)
-        bars2 = ax.bar(x + width/2, beam_accs, width, label='Beam Search', alpha=0.8)
+        bars2 = ax.bar(x + width/2, mcts_accs, width, label='MCTS', alpha=0.8)
         
         # Add value labels on bars
         for bars in [bars1, bars2]:
@@ -720,68 +606,16 @@ def main():
         print(f"Saved: {aggregate_acc_path}")
         plt.close()
         
-        # Create error histogram by triplet index
-        print(f"\n{'='*80}")
-        print("Creating error histogram by triplet index...")
-        print(f"{'='*80}")
-        
-        # Count errors by triplet index for greedy and beam
-        # We need to restructure the data to track errors by triplet position within each sequence
-        # For simplicity, we'll create histograms across all concatenated triplets
-        
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
-        fig.suptitle(f'Error Distribution by Triplet Index - {len(all_sequences)} Sequences', fontsize=16)
-        
-        for tok_idx, tok_type in enumerate(token_types):
-            ax = axes[tok_idx]
-            
-            # Create error indicators (1 = error, 0 = correct)
-            greedy_errors = [0 if c else 1 for c in all_greedy_correct[tok_type]]
-            beam_errors = [0 if c else 1 for c in all_beam_correct[tok_type]]
-            
-            # Compute cumulative errors by bins
-            num_triplets = len(greedy_errors)
-            bin_size = max(1, num_triplets // 50)  # 50 bins
-            num_bins = (num_triplets + bin_size - 1) // bin_size
-            
-            greedy_binned = []
-            beam_binned = []
-            bin_centers = []
-            
-            for i in range(num_bins):
-                start = i * bin_size
-                end = min(start + bin_size, num_triplets)
-                greedy_binned.append(sum(greedy_errors[start:end]))
-                beam_binned.append(sum(beam_errors[start:end]))
-                bin_centers.append((start + end) / 2)
-            
-            ax.plot(bin_centers, greedy_binned, 'o-', label='Greedy', alpha=0.7)
-            ax.plot(bin_centers, beam_binned, 's-', label='Beam Search', alpha=0.7)
-            
-            ax.set_xlabel('Triplet Index (binned)')
-            ax.set_ylabel(f'Errors per bin (bin size={bin_size})')
-            ax.set_title(f'{tok_type.upper()} Token')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        error_hist_path = os.path.join(results_dir, 'error_histogram.png')
-        plt.savefig(error_hist_path, dpi=150, bbox_inches='tight')
-        print(f"Saved: {error_hist_path}")
-        plt.close()
-        
         print(f"\n{'='*80}")
         print(f"Analysis complete for {model_path}!")
         print(f"{'='*80}")
         print(f"All results saved to: {results_dir}/")
-        print(f"  - Individual sequence folders: seq1/, seq2/, seq3/, ...")
-        print(f"  - Aggregate plots: aggregate_loss.png, aggregate_accuracy.png, error_histogram.png")
         
         # Store results for cross-model comparison
         model_comparison[model_path] = {
             'greedy': {tok: sum(all_greedy_correct[tok]) / len(all_greedy_correct[tok]) * 100 
                       for tok in ['time', 'duration', 'pitch']},
-            'beam': {tok: sum(all_beam_correct[tok]) / len(all_beam_correct[tok]) * 100 
+            'mcts': {tok: sum(all_mcts_correct[tok]) / len(all_mcts_correct[tok]) * 100 
                     for tok in ['time', 'duration', 'pitch']}
         }
         
@@ -799,11 +633,10 @@ def main():
         return
     
     token_types = ['time', 'duration', 'pitch']
-    # Only use models that were successfully analyzed
     model_names = list(model_comparison.keys())
     
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle('Model Comparison: Greedy vs Beam Search Across Training Checkpoints', fontsize=16)
+    fig.suptitle('Model Comparison: Greedy vs MCTS Across Training Checkpoints', fontsize=16)
     
     for col, tok_type in enumerate(token_types):
         ax = axes[col]
@@ -812,10 +645,10 @@ def main():
         width = 0.35
         
         greedy_accs = [model_comparison[model]['greedy'][tok_type] for model in model_names]
-        beam_accs = [model_comparison[model]['beam'][tok_type] for model in model_names]
+        mcts_accs = [model_comparison[model]['mcts'][tok_type] for model in model_names]
         
         bars1 = ax.bar(x - width/2, greedy_accs, width, label='Greedy', alpha=0.8)
-        bars2 = ax.bar(x + width/2, beam_accs, width, label='Beam Search', alpha=0.8)
+        bars2 = ax.bar(x + width/2, mcts_accs, width, label='MCTS', alpha=0.8)
         
         # Add value labels on bars
         for bars in [bars1, bars2]:
@@ -833,7 +666,7 @@ def main():
         ax.set_ylim(0, 105)
     
     plt.tight_layout()
-    comparison_path = 'model_comparison_greedy_vs_beam.png'
+    comparison_path = 'model_comparison_greedy_vs_mcts.png'
     plt.savefig(comparison_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {comparison_path}")
     plt.close()
@@ -846,15 +679,15 @@ def main():
     print("-" * 63)
     for model in model_names:
         greedy_data = model_comparison[model]['greedy']
-        beam_data = model_comparison[model]['beam']
+        mcts_data = model_comparison[model]['mcts']
         
         print(f"{model:<15} {'Greedy':<12} {greedy_data['time']:>6.2f}%{'':<5} {greedy_data['duration']:>6.2f}%{'':<5} {greedy_data['pitch']:>6.2f}%")
-        print(f"{'':<15} {'Beam':<12} {beam_data['time']:>6.2f}%{'':<5} {beam_data['duration']:>6.2f}%{'':<5} {beam_data['pitch']:>6.2f}%")
+        print(f"{'':<15} {'MCTS':<12} {mcts_data['time']:>6.2f}%{'':<5} {mcts_data['duration']:>6.2f}%{'':<5} {mcts_data['pitch']:>6.2f}%")
         
         # Calculate improvements
-        time_imp = beam_data['time'] - greedy_data['time']
-        dur_imp = beam_data['duration'] - greedy_data['duration']
-        pitch_imp = beam_data['pitch'] - greedy_data['pitch']
+        time_imp = mcts_data['time'] - greedy_data['time']
+        dur_imp = mcts_data['duration'] - greedy_data['duration']
+        pitch_imp = mcts_data['pitch'] - greedy_data['pitch']
         print(f"{'':<15} {'Improvement':<12} {time_imp:>+6.2f}%{'':<5} {dur_imp:>+6.2f}%{'':<5} {pitch_imp:>+6.2f}%")
         print("-" * 63)
     
