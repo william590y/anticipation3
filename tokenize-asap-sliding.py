@@ -150,11 +150,11 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 break  # Not enough notes for even the prefix
             
             # Normalize performance and score windows BEFORE interleaving
-            # Extract performance triplets from subset
-            perf_triplets = [match[0] for match in subset]
+            # Extract performance triplets from subset (remove CONTROL_OFFSET first)
+            perf_triplets = [[match[0][0] - CONTROL_OFFSET, match[0][1], match[0][2]] for match in subset]
             # Normalize performance to start at time 0
             if perf_triplets:
-                perf_min_time = min(triplet[0] - CONTROL_OFFSET for triplet in perf_triplets)
+                perf_min_time = min(triplet[0] for triplet in perf_triplets)
                 perf_triplets = [
                     [triplet[0] - perf_min_time, triplet[1], triplet[2]]
                     for triplet in perf_triplets

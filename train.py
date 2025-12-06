@@ -177,27 +177,28 @@ class TokenizedDataset(Dataset):
         
         return {"input_ids": augmented_tokens, "labels": labels}
 
-def evaluate_model(model, dataloader, accelerator, max_samples=500):
+def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
     """Calculate validation loss and pitch accuracy on a dataset
     
     Args:
         model: The model to evaluate
         dataloader: DataLoader with validation data
         accelerator: Accelerator instance
-        max_samples: Maximum number of sequences to evaluate (default: 500)
+        max_samples: Maximum number of sequences to evaluate for teacher-forced metrics (default: 500)
+        autoregressive_samples: Number of sequences to evaluate autoregressively (default: 20)
     
     Returns:
-        tuple: (avg_loss, pitch_accuracy)
+        tuple: (avg_loss, teacher_forced_pitch_accuracy, autoregressive_pitch_accuracy)
     """
     model.eval()
     total_loss = 0
     total_samples = 0
     
-    # For pitch accuracy: track predictions on score note tokens
+    # For teacher-forced pitch accuracy: track predictions on score note tokens
     correct_pitches = 0
     total_pitches = 0
     
-    from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET
+    from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET, REST
     import random
     
     # Randomly sample indices, then take only those batches from the dataloader
@@ -271,25 +272,90 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500):
                         i += 1  # Not a score triplet, move forward
     
     avg_loss = total_loss / total_samples
-    pitch_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
+    teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
     
-    return avg_loss, pitch_accuracy
+    # Autoregressive evaluation: greedy decoding on a small subset
+    autoregressive_correct = 0
+    autoregressive_total = 0
+    
+    if autoregressive_samples > 0:
+        # Collect a few sequences for autoregressive evaluation
+        all_sequences = []
+        with torch.no_grad():
+            for batch in dataloader:
+                input_ids = batch["input_ids"]
+                for seq in input_ids:
+                    all_sequences.append(seq)
+                    if len(all_sequences) >= autoregressive_samples:
+                        break
+                if len(all_sequences) >= autoregressive_samples:
+                    break
+        
+        # Run autoregressive generation on each sequence
+        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
+            # Find all score triplet positions (for ground truth)
+            score_positions = []
+            i = 1  # Skip mode token
+            while i < len(seq) - 2:
+                if (seq[i] < CONTROL_OFFSET and 
+                    seq[i+1] < CONTROL_OFFSET and 
+                    seq[i+2] < CONTROL_OFFSET and
+                    seq[i+2] != REST):  # Exclude REST tokens
+                    score_positions.append((i, i+1, i+2))
+                    i += 3
+                else:
+                    i += 1
+            
+            if len(score_positions) == 0:
+                continue
+            
+            # Find the first score triplet position
+            first_score_pos = score_positions[0][0]
+            
+            # Start with context up to first score triplet
+            context = seq[:first_score_pos].tolist()
+            
+            # Autoregressively generate all score triplets
+            for time_pos, dur_pos, pitch_pos in score_positions:
+                # Generate up to the pitch position
+                while len(context) <= pitch_pos:
+                    # Get model prediction
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        next_token = logits.argmax().item()
+                    
+                    context.append(next_token)
+                
+                # Check if the predicted pitch matches ground truth
+                predicted_pitch = context[pitch_pos]
+                true_pitch = seq[pitch_pos].item()
+                
+                if predicted_pitch == true_pitch:
+                    autoregressive_correct += 1
+                autoregressive_total += 1
+    
+    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
+    
+    return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
-def plot_losses(train_losses, val_losses, val_accuracies, validation_steps, output_dir):
+def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
     """
     Plot training/validation losses and validation pitch accuracy, save figures
     
     Args:
         train_losses (list): Training loss history
         val_losses (list): Validation loss history
-        val_accuracies (list): Validation pitch accuracy history
+        val_accuracies (list): Validation teacher-forced pitch accuracy history
+        val_autoregressive_accuracies (list): Validation autoregressive pitch accuracy history
         validation_steps (list): Steps at which validation was performed
         output_dir (Path): Directory to save the plots
     """
     steps = list(range(1, len(train_losses) + 1))
     
-    # Create figure with 3 subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
+    # Create figure with 4 subplots
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
     
     # Plot 1: Linear loss plot
     ax1.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
@@ -311,14 +377,23 @@ def plot_losses(train_losses, val_losses, val_accuracies, validation_steps, outp
     ax2.legend()
     ax2.grid(True, alpha=0.3, which='both')
     
-    # Plot 3: Validation pitch accuracy
-    ax3.plot(validation_steps, val_accuracies, label='Validation Pitch Accuracy', color='green', marker='o')
+    # Plot 3: Validation teacher-forced pitch accuracy
+    ax3.plot(validation_steps, val_accuracies, label='Teacher-Forced Pitch Accuracy', color='green', marker='o')
     ax3.set_xlabel('Step')
     ax3.set_ylabel('Pitch Accuracy (%)')
-    ax3.set_title('Validation Pitch Accuracy')
+    ax3.set_title('Validation Teacher-Forced Pitch Accuracy')
     ax3.set_ylim([0, 100])
     ax3.legend()
     ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Validation autoregressive pitch accuracy
+    ax4.plot(validation_steps, val_autoregressive_accuracies, label='Autoregressive Pitch Accuracy', color='purple', marker='s')
+    ax4.set_xlabel('Step')
+    ax4.set_ylabel('Pitch Accuracy (%)')
+    ax4.set_title('Validation Autoregressive Pitch Accuracy')
+    ax4.set_ylim([0, 100])
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
@@ -329,10 +404,10 @@ def plot_losses(train_losses, val_losses, val_accuracies, validation_steps, outp
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_sliding.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_sliding.txt'))
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_sliding'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_normalized'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -520,6 +595,7 @@ def main():
         train_losses = []
         val_losses = []
         val_accuracies = []
+        val_autoregressive_accuracies = []
         validation_steps = []
         
         # Use standard tqdm with disable=False to ensure it always displays
@@ -592,11 +668,12 @@ def main():
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                                     print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss, val_acc = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)  # Store as percentage
-                                    print(f"Validation Loss: {val_loss:.4f}, Pitch Accuracy: {val_acc*100:.2f}%")
+                                    val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
+                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -610,11 +687,12 @@ def main():
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
                                     print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss, val_acc = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)
-                                    print(f"Validation Loss: {val_loss:.4f}, Pitch Accuracy: {val_acc*100:.2f}%")
+                                    val_autoregressive_accuracies.append(val_auto_acc * 100)
+                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -637,11 +715,12 @@ def main():
                                         train_losses=np.array(train_losses),
                                         val_losses=np.array(val_losses),
                                         val_accuracies=np.array(val_accuracies),
+                                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
                                         validation_steps=np.array(validation_steps)
                                     )
                                     
                                     # Create and save loss plot
-                                    plot_losses(train_losses, val_losses, val_accuracies, validation_steps, checkpoint_dir)
+                                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
@@ -686,10 +765,12 @@ def main():
             try:
                 # Final validation run
                 print("\nRunning final validation...")
-                final_val_loss = evaluate_model(model, val_dataloader, accelerator)
+                final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                 validation_steps.append(completed_steps // 10)
                 val_losses.append(final_val_loss)
-                print(f"Final validation Loss: {final_val_loss:.4f}")
+                val_accuracies.append(final_val_acc * 100)
+                val_autoregressive_accuracies.append(final_auto_acc * 100)
+                print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
                 
                 # Final save
                 final_dir = args.output_dir / "final"
@@ -707,11 +788,13 @@ def main():
                     final_dir / "losses.npz",
                     train_losses=np.array(train_losses),
                     val_losses=np.array(val_losses),
+                    val_accuracies=np.array(val_accuracies),
+                    val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
                     validation_steps=np.array(validation_steps)
                 )
                 
                 # Create and save final loss plot
-                plot_losses(train_losses, val_losses, val_accuracies, validation_steps, final_dir)
+                plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
                 
             except Exception as save_error:
                 print(f"Error saving final model or generating plot: {save_error}")
