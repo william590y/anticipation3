@@ -27,9 +27,9 @@ ASAP_PATH = 'asap-dataset-master'
 META_CSV = os.path.join(ASAP_PATH, 'metadata.csv')
 
 # Output paths
-TRAIN_OUTPUT = 'data/train_sliding.txt'
-TEST_OUTPUT = 'data/test_sliding.txt'
-SPLIT_FILE = 'data/train_test_sliding_split.txt'
+TRAIN_OUTPUT = 'data/train_normalized.txt'
+TEST_OUTPUT = 'data/test_normalized.txt'
+SPLIT_FILE = 'data/normalized_split.txt'
 
 print(f"Tokenization configuration:")
 print(f"  Workers: {NUM_WORKERS}")
@@ -149,23 +149,47 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             if len(subset) < k:
                 break  # Not enough notes for even the prefix
             
-            # Prefix: control + rest pairs using first k notes from subset
+            # Normalize performance and score windows BEFORE interleaving
+            # Extract performance triplets from subset
+            perf_triplets = [match[0] for match in subset]
+            # Normalize performance to start at time 0
+            if perf_triplets:
+                perf_min_time = min(triplet[0] - CONTROL_OFFSET for triplet in perf_triplets)
+                perf_triplets = [
+                    [triplet[0] - perf_min_time, triplet[1], triplet[2]]
+                    for triplet in perf_triplets
+                ]
+            
+            # Extract score triplets from subset
+            score_triplets = [match[2] for match in subset]
+            # Normalize score to start at time 0 (only for non-None triplets)
+            valid_score_triplets = [t for t in score_triplets if t[0] is not None]
+            if valid_score_triplets:
+                score_min_time = min(triplet[0] for triplet in valid_score_triplets)
+                score_triplets = [
+                    [triplet[0] - score_min_time, triplet[1], triplet[2]] if triplet[0] is not None else triplet
+                    for triplet in score_triplets
+                ]
+            
+            # Prefix: control + rest pairs using first k notes from normalized subset
             for i in range(k):
-                match = subset[i]
-                perf_triplet = match[0]
+                perf_triplet = perf_triplets[i]
                 
-                # Add control triplet
-                interleaved_tokens.extend(perf_triplet)
+                # Add control triplet (re-add CONTROL_OFFSET)
+                interleaved_tokens.extend([
+                    perf_triplet[0] + CONTROL_OFFSET,
+                    perf_triplet[1],
+                    perf_triplet[2]
+                ])
                 
                 # Add rest triplet
-                cc_time = perf_triplet[0] - CONTROL_OFFSET
+                cc_time = perf_triplet[0]
                 interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
             
             # Main body: alternate score/control
             # Uses notes [0:] for scores and notes [k:] for controls from subset
             for i in range(len(subset)):
-                match = subset[i]
-                score_triplet = match[2]
+                score_triplet = score_triplets[i]
                 
                 # Add score triplet if it exists
                 if score_triplet[0] is not None:
@@ -174,8 +198,12 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 # Add next control if available
                 ii = i + k
                 if ii < len(subset):
-                    perf_triplet = subset[ii][0]
-                    interleaved_tokens.extend(perf_triplet)
+                    perf_triplet = perf_triplets[ii]
+                    interleaved_tokens.extend([
+                        perf_triplet[0] + CONTROL_OFFSET,
+                        perf_triplet[1],
+                        perf_triplet[2]
+                    ])
             
             # Prepend 3 SEPs
             interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
@@ -189,10 +217,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             # Trim to exactly 1023 tokens
             interleaved_tokens = interleaved_tokens[:max_body]
             
-            # Translate to start at time 0
-            interleaved_tokens = ops.translate(interleaved_tokens, 
-                                              -ops.min_time(interleaved_tokens, seconds=False), 
-                                              seconds=False)
+            # No need to translate - already normalized before interleaving
             
             # Check if sequence is valid
             if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
