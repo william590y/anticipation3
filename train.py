@@ -418,7 +418,7 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--perturb_std_ms', type=float, default=50.0, help='Standard deviation of time perturbation in milliseconds (training only)')
+    parser.add_argument('--perturb_std_ms', type=float, default=100.0, help='Standard deviation of time perturbation in milliseconds (training only)')
     parser.add_argument('--mask_prob', type=float, default=0.5, help='Probability of masking each control triplet (training only)')
     args = parser.parse_args()
     
