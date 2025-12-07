@@ -315,26 +315,49 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             # Start with context up to first score triplet
             context = seq[:first_score_pos].tolist()
             
-            # Autoregressively generate all score triplets
+            last_pos = first_score_pos
+            
+            # Autoregressively generate each score triplet
             for time_pos, dur_pos, pitch_pos in score_positions:
-                # Generate up to the pitch position
-                while len(context) <= pitch_pos:
-                    # Get model prediction
-                    input_tensor = torch.tensor([context]).to(accelerator.device)
-                    with torch.no_grad():
-                        outputs = model(input_tensor)
-                        logits = outputs.logits[0, -1, :]
-                        next_token = logits.argmax().item()
-                    
-                    context.append(next_token)
+                # Add ground truth intermediate control tokens between last position and this score triplet
+                if time_pos > last_pos:
+                    intermediate = seq[last_pos:time_pos].tolist()
+                    context.extend(intermediate)
+                
+                # Now autoregressively generate the score triplet (time, dur, pitch)
+                # Generate TIME
+                input_tensor = torch.tensor([context]).to(accelerator.device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    logits = outputs.logits[0, -1, :]
+                    pred_time = logits.argmax().item()
+                context.append(pred_time)
+                
+                # Generate DURATION
+                input_tensor = torch.tensor([context]).to(accelerator.device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    logits = outputs.logits[0, -1, :]
+                    pred_dur = logits.argmax().item()
+                context.append(pred_dur)
+                
+                # Generate PITCH
+                input_tensor = torch.tensor([context]).to(accelerator.device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    logits = outputs.logits[0, -1, :]
+                    pred_pitch = logits.argmax().item()
+                context.append(pred_pitch)
                 
                 # Check if the predicted pitch matches ground truth
-                predicted_pitch = context[pitch_pos]
                 true_pitch = seq[pitch_pos].item()
                 
-                if predicted_pitch == true_pitch:
+                if pred_pitch == true_pitch:
                     autoregressive_correct += 1
                 autoregressive_total += 1
+                
+                # Update last_pos to continue from this triplet
+                last_pos = pitch_pos + 1
     
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
     
