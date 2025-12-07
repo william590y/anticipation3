@@ -483,7 +483,7 @@ def main():
                         help='Path to validation data')
     
     # Model
-    parser.add_argument('--model', type=str, default='model-experimental',
+    parser.add_argument('--model', type=str, default='stanford-crfm/music-medium-800k',
                         help='Pretrained model to fine-tune')
     parser.add_argument('--output_dir', type=str, default='model-ppo',
                         help='Directory to save fine-tuned model')
