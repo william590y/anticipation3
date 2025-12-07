@@ -84,21 +84,16 @@ def autoregressive_generate_with_log_probs(model, tokens, device):
     
     model.eval()
     with torch.no_grad():
-        # Initialize KV cache
-        init_context = torch.tensor([context]).to(device)
-        outputs = model(init_context, past_key_values=None, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
         last_pos = first_score_pos
         
         for time_pos, dur_pos, pitch_pos in score_positions:
             # Add ground truth control tokens
             if time_pos > last_pos:
-                intermediate = torch.tensor([tokens_list[last_pos:time_pos]]).to(device)
-                outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
-                past_key_values = outputs.past_key_values
+                context.extend(tokens_list[last_pos:time_pos])
             
-            # Predict TIME
+            # Predict TIME (without KV cache to save memory)
+            input_tensor = torch.tensor([context]).to(device)
+            outputs = model(input_tensor, use_cache=False)
             logits = outputs.logits[0, -1]
             probs = F.softmax(logits, dim=-1)
             pred_time = torch.multinomial(probs, 1).item()
@@ -107,13 +102,11 @@ def autoregressive_generate_with_log_probs(model, tokens, device):
             generated_tokens.append(pred_time)
             log_probs.append(log_prob_time)
             rewards.append(1.0 if pred_time == tokens_list[time_pos] else 0.0)
-            
-            # Feed back
-            next_token = torch.tensor([[pred_time]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(pred_time)
             
             # Predict DURATION
+            input_tensor = torch.tensor([context]).to(device)
+            outputs = model(input_tensor, use_cache=False)
             logits = outputs.logits[0, -1]
             probs = F.softmax(logits, dim=-1)
             pred_dur = torch.multinomial(probs, 1).item()
@@ -122,13 +115,11 @@ def autoregressive_generate_with_log_probs(model, tokens, device):
             generated_tokens.append(pred_dur)
             log_probs.append(log_prob_dur)
             rewards.append(1.0 if pred_dur == tokens_list[dur_pos] else 0.0)
-            
-            # Feed back
-            next_token = torch.tensor([[pred_dur]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(pred_dur)
             
             # Predict PITCH
+            input_tensor = torch.tensor([context]).to(device)
+            outputs = model(input_tensor, use_cache=False)
             logits = outputs.logits[0, -1]
             probs = F.softmax(logits, dim=-1)
             pred_pitch = torch.multinomial(probs, 1).item()
@@ -138,11 +129,7 @@ def autoregressive_generate_with_log_probs(model, tokens, device):
             log_probs.append(log_prob_pitch)
             # Higher reward for correct pitch
             rewards.append(2.0 if pred_pitch == tokens_list[pitch_pos] else 0.0)
-            
-            # Feed back
-            next_token = torch.tensor([[pred_pitch]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(pred_pitch)
             
             last_pos = pitch_pos + 1
     
@@ -183,60 +170,47 @@ def ppo_update(model, optimizer, tokens, generated_tokens, old_log_probs, advant
     num_updates = 0
     
     for _ in range(ppo_epochs):
-        # Rebuild context and compute new log probs
+        # Rebuild context and compute new log probs (without KV cache to save memory)
         tokens_list = tokens.tolist()
         first_score_pos = score_positions[0][0]
         context = tokens_list[:first_score_pos]
         
         model.train()
         
-        # Forward pass with current policy
-        init_context = torch.tensor([context]).to(device)
-        outputs = model(init_context, past_key_values=None, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
         new_log_probs = []
-        last_pos = first_score_pos
         gen_idx = 0
         
         for time_pos, dur_pos, pitch_pos in score_positions:
             # Add ground truth control tokens
-            if time_pos > last_pos:
-                intermediate = torch.tensor([tokens_list[last_pos:time_pos]]).to(device)
-                outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
-                past_key_values = outputs.past_key_values
+            if time_pos > context[-1] if context else time_pos > 0:
+                context.extend(tokens_list[len(context):time_pos])
             
             # Time token
-            logits = outputs.logits[0, -1]
+            input_tensor = torch.tensor([context + [generated_tokens[gen_idx]]]).to(device)
+            outputs = model(input_tensor, use_cache=False)
+            logits = outputs.logits[0, -2]  # Get logits before the appended token
             probs = F.softmax(logits, dim=-1)
             new_log_probs.append(torch.log(probs[generated_tokens[gen_idx]] + 1e-10))
-            
-            next_token = torch.tensor([[generated_tokens[gen_idx]]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(generated_tokens[gen_idx])
             gen_idx += 1
             
             # Duration token
-            logits = outputs.logits[0, -1]
+            input_tensor = torch.tensor([context + [generated_tokens[gen_idx]]]).to(device)
+            outputs = model(input_tensor, use_cache=False)
+            logits = outputs.logits[0, -2]
             probs = F.softmax(logits, dim=-1)
             new_log_probs.append(torch.log(probs[generated_tokens[gen_idx]] + 1e-10))
-            
-            next_token = torch.tensor([[generated_tokens[gen_idx]]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(generated_tokens[gen_idx])
             gen_idx += 1
             
             # Pitch token
-            logits = outputs.logits[0, -1]
+            input_tensor = torch.tensor([context + [generated_tokens[gen_idx]]]).to(device)
+            outputs = model(input_tensor, use_cache=False)
+            logits = outputs.logits[0, -2]
             probs = F.softmax(logits, dim=-1)
             new_log_probs.append(torch.log(probs[generated_tokens[gen_idx]] + 1e-10))
-            
-            next_token = torch.tensor([[generated_tokens[gen_idx]]]).to(device)
-            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-            past_key_values = outputs.past_key_values
+            context.append(generated_tokens[gen_idx])
             gen_idx += 1
-            
-            last_pos = pitch_pos + 1
         
         new_log_probs = torch.stack(new_log_probs)
         old_log_probs_tensor = torch.tensor(old_log_probs, device=device)
@@ -296,6 +270,17 @@ def train_ppo(args):
     # Load model
     print(f"Loading model from {args.model}...")
     model = AutoModelForCausalLM.from_pretrained(args.model)
+    
+    # Enable gradient checkpointing to save memory
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+        print("✓ Gradient checkpointing enabled")
+    
+    # Resize embeddings if needed
+    from anticipation.vocab import VOCAB_SIZE
+    if model.config.vocab_size != VOCAB_SIZE:
+        print(f"Resizing embeddings from {model.config.vocab_size} to {VOCAB_SIZE}")
+        model.resize_token_embeddings(VOCAB_SIZE)
     
     # Optimizer
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
