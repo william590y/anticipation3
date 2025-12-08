@@ -192,7 +192,7 @@ def main():
     model_path = 'model-experimental'
     results_dir = 'greedy_analysis_results'
     test_file = 'data/test_normalized.txt'
-    num_sequences = 35  # Reduced to avoid OOM
+    num_sequences = 50  # Reduced to avoid OOM
     
     print("="*80)
     print("GREEDY DECODING DETAILED ANALYSIS")
