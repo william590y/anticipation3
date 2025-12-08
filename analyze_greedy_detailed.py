@@ -105,10 +105,6 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
         generated_seq: complete generated sequence
     """
     first_score_time_pos = score_triplet_positions[0][0]
-    init_context = torch.tensor([tokens[:first_score_time_pos]]).to(device)
-    
-    outputs = model(init_context, past_key_values=None, use_cache=True)
-    past_key_values = outputs.past_key_values
     
     predictions = {'time': [], 'duration': [], 'pitch': []}
     log_probs = {'time': [], 'duration': [], 'pitch': []}
@@ -117,77 +113,86 @@ def greedy_with_tracking(model, tokens, score_triplet_positions, device):
     
     generated_seq = list(tokens[:first_score_time_pos])
     
-    prev_pos = first_score_time_pos
-    
-    for time_pos, dur_pos, pitch_pos in score_triplet_positions:
-        # Add intermediate control tokens if any
-        if time_pos > prev_pos:
-            intermediate = torch.tensor([tokens[prev_pos:time_pos]]).to(device)
-            outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
+    with torch.no_grad():
+        init_context = torch.tensor([tokens[:first_score_time_pos]]).to(device)
+        outputs = model(init_context, past_key_values=None, use_cache=True)
+        past_key_values = outputs.past_key_values
+        
+        prev_pos = first_score_time_pos
+        
+        for time_pos, dur_pos, pitch_pos in score_triplet_positions:
+            # Add intermediate control tokens if any
+            if time_pos > prev_pos:
+                intermediate = torch.tensor([tokens[prev_pos:time_pos]]).to(device)
+                outputs = model(intermediate, past_key_values=past_key_values, use_cache=True)
+                past_key_values = outputs.past_key_values
+                generated_seq.extend(tokens[prev_pos:time_pos])
+            
+            # Predict TIME
+            logits = outputs.logits[0, -1]
+            log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
+            pred_time = logits.argmax().item()
+            gt_time = tokens[time_pos]
+            
+            predictions['time'].append(pred_time)
+            log_probs['time'].append(-log_probs_all[gt_time].item())  # Store loss (negative log prob)
+            ground_truth['time'].append(gt_time)
+            correct['time'].append(pred_time == gt_time)
+            generated_seq.append(pred_time)
+            
+            # Feed predicted TIME back
+            next_token = torch.tensor([[pred_time]]).to(device)
+            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
             past_key_values = outputs.past_key_values
-            generated_seq.extend(tokens[prev_pos:time_pos])
+            
+            # Predict DURATION
+            logits = outputs.logits[0, -1]
+            log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
+            pred_dur = logits.argmax().item()
+            gt_dur = tokens[dur_pos]
+            
+            predictions['duration'].append(pred_dur)
+            log_probs['duration'].append(-log_probs_all[gt_dur].item())
+            ground_truth['duration'].append(gt_dur)
+            correct['duration'].append(pred_dur == gt_dur)
+            generated_seq.append(pred_dur)
+            
+            # Feed predicted DURATION back
+            next_token = torch.tensor([[pred_dur]]).to(device)
+            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+            
+            # Predict PITCH
+            logits = outputs.logits[0, -1]
+            log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
+            pred_pitch = logits.argmax().item()
+            gt_pitch = tokens[pitch_pos]
+            
+            predictions['pitch'].append(pred_pitch)
+            log_probs['pitch'].append(-log_probs_all[gt_pitch].item())
+            ground_truth['pitch'].append(gt_pitch)
+            correct['pitch'].append(pred_pitch == gt_pitch)
+            generated_seq.append(pred_pitch)
+            
+            # Feed predicted PITCH back
+            next_token = torch.tensor([[pred_pitch]]).to(device)
+            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+            
+            prev_pos = pitch_pos + 1
         
-        # Predict TIME
-        logits = outputs.logits[0, -1]
-        log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
-        pred_time = logits.argmax().item()
-        gt_time = tokens[time_pos]
-        
-        predictions['time'].append(pred_time)
-        log_probs['time'].append(-log_probs_all[gt_time].item())  # Store loss (negative log prob)
-        ground_truth['time'].append(gt_time)
-        correct['time'].append(pred_time == gt_time)
-        generated_seq.append(pred_time)
-        
-        # Feed predicted TIME back
-        next_token = torch.tensor([[pred_time]]).to(device)
-        outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
-        # Predict DURATION
-        logits = outputs.logits[0, -1]
-        log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
-        pred_dur = logits.argmax().item()
-        gt_dur = tokens[dur_pos]
-        
-        predictions['duration'].append(pred_dur)
-        log_probs['duration'].append(-log_probs_all[gt_dur].item())
-        ground_truth['duration'].append(gt_dur)
-        correct['duration'].append(pred_dur == gt_dur)
-        generated_seq.append(pred_dur)
-        
-        # Feed predicted DURATION back
-        next_token = torch.tensor([[pred_dur]]).to(device)
-        outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
-        # Predict PITCH
-        logits = outputs.logits[0, -1]
-        log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)
-        pred_pitch = logits.argmax().item()
-        gt_pitch = tokens[pitch_pos]
-        
-        predictions['pitch'].append(pred_pitch)
-        log_probs['pitch'].append(-log_probs_all[gt_pitch].item())
-        ground_truth['pitch'].append(gt_pitch)
-        correct['pitch'].append(pred_pitch == gt_pitch)
-        generated_seq.append(pred_pitch)
-        
-        # Feed predicted PITCH back
-        next_token = torch.tensor([[pred_pitch]]).to(device)
-        outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
-        prev_pos = pitch_pos + 1
+        # Explicitly delete cache to free memory
+        del past_key_values
+        del outputs
     
     return predictions, log_probs, ground_truth, correct, generated_seq
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_path = 'model-experimental'
-    results_dir = 'greedy_analysis_results_run_2'
+    results_dir = 'greedy_analysis_results'
     test_file = 'data/test_normalized.txt'
-    num_sequences = 35
+    num_sequences = 35  # Reduced to avoid OOM
     
     print("="*80)
     print("GREEDY DECODING DETAILED ANALYSIS")
