@@ -6,7 +6,7 @@ on validation sequences and save MIDI outputs.
 """
 import torch
 from transformers import GPT2LMHeadModel
-from anticipation.vocab import CONTROL_OFFSET, REST
+from anticipation.vocab import CONTROL_OFFSET, REST, TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET, SEPARATOR, ANTICIPATE
 from anticipation.convert import events_to_midi
 from tqdm import tqdm
 import random
@@ -80,13 +80,13 @@ def greedy_pitch_accuracy(model, tokens, device):
     # Exclude REST tokens from both - only collect actual notes
     score_positions = []
     control_positions = []
-    i = 1  # Skip mode token
+    i = 4  # Skip [ANTICIPATE, SEP, SEP, SEP]
     while i < len(tokens) - 2:
         time_tok, dur_tok, note_tok = tokens[i], tokens[i+1], tokens[i+2]
         
-        if (time_tok < CONTROL_OFFSET and 
-            dur_tok < CONTROL_OFFSET and 
-            note_tok < CONTROL_OFFSET and
+        if (time_tok >= TIME_OFFSET and time_tok < CONTROL_OFFSET and 
+            dur_tok >= DUR_OFFSET and dur_tok < CONTROL_OFFSET and 
+            note_tok >= NOTE_OFFSET and note_tok < CONTROL_OFFSET and
             note_tok != REST):  # Exclude REST tokens
             score_positions.append((i, i+1, i+2))
             i += 3
@@ -101,13 +101,13 @@ def greedy_pitch_accuracy(model, tokens, device):
             i += 1
     
     if len(score_positions) == 0:
-        return 0, 0, 0, 0, tokens
+        return 0, 0, 0, 0, tokens, []
     
     # Validate ground truth alignment (score[i] should match control[i])
     # Both lists exclude REST tokens, so we compare by index
-    from anticipation.vocab import NOTE_OFFSET
     gt_aligned = 0
     gt_total = min(len(score_positions), len(control_positions))
+    gt_mismatches = []
     
     for score_idx in range(gt_total):
         score_pitch_tok = tokens[score_positions[score_idx][2]]
@@ -119,6 +119,16 @@ def greedy_pitch_accuracy(model, tokens, device):
         
         if score_pitch == control_pitch:
             gt_aligned += 1
+        else:
+            gt_mismatches.append({
+                'idx': score_idx,
+                'score_pos': score_positions[score_idx][2],
+                'control_pos': control_positions[score_idx][2],
+                'score_pitch': score_pitch,
+                'control_pitch': control_pitch,
+                'score_tok': score_pitch_tok,
+                'control_tok': control_pitch_tok
+            })
     
     # Find the first score triplet position
     first_score_pos = score_positions[0][0]
@@ -186,7 +196,7 @@ def greedy_pitch_accuracy(model, tokens, device):
             
             last_pos = pitch_pos + 1
     
-    return correct_predictions, total, gt_aligned, gt_total, context
+    return correct_predictions, total, gt_aligned, gt_total, context, gt_mismatches
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -220,6 +230,7 @@ def main():
     total_pitches = 0
     total_gt_aligned = 0
     total_gt_scores = 0
+    all_mismatches = []
     
     # Save first 10 sequences as MIDI
     num_midi_saves = 10
@@ -233,11 +244,17 @@ def main():
         
         tokens = [int(t) for t in token_part.split()]
         
-        correct, total, gt_aligned, gt_total, generated_seq = greedy_pitch_accuracy(model, tokens, device)
+        correct, total, gt_aligned, gt_total, generated_seq, mismatches = greedy_pitch_accuracy(model, tokens, device)
         total_correct += correct
         total_pitches += total
         total_gt_aligned += gt_aligned
         total_gt_scores += gt_total
+        
+        if mismatches:
+            all_mismatches.append({
+                'seq_idx': seq_idx,
+                'mismatches': mismatches
+            })
         
         # Save MIDI files for first few sequences
         if seq_idx < num_midi_saves:
@@ -279,10 +296,23 @@ def main():
     print(f"Ground Truth Alignment: {gt_alignment_acc:.2f}%")
     print(f"  GT scores matching controls: {total_gt_aligned}/{total_gt_scores}")
     print(f"  (Verifies score[i] == control[i] in test data)")
-    if gt_alignment_acc > 99:
+    if gt_alignment_acc >= 99.99:
         print(f"  ✓ Data alignment preserved correctly")
     else:
         print(f"  ⚠ Warning: Data may have alignment issues")
+        
+        # Show detailed mismatch information
+        if all_mismatches:
+            print(f"\n  Alignment mismatches detected in {len(all_mismatches)} sequences:")
+            for seq_info in all_mismatches[:3]:  # Show first 3 sequences with errors
+                seq_idx = seq_info['seq_idx']
+                mismatches = seq_info['mismatches']
+                print(f"\n  Sequence {seq_idx}: {len(mismatches)} mismatches")
+                for err in mismatches[:3]:  # Show first 3 errors per sequence
+                    print(f"    Position {err['idx']}: score_pitch={err['score_pitch']} (tok={err['score_tok']}) "
+                          f"vs control_pitch={err['control_pitch']} (tok={err['control_tok']})")
+                    print(f"      Score position in tokens: {err['score_pos']}, Control position: {err['control_pos']}")
+    
     print(f"\nMIDI outputs saved to: {output_dir}/")
     print(f"  - First {num_midi_saves} sequences saved")
     print(f"  - Files: input_performance.mid, ground_truth.mid, greedy.mid")
