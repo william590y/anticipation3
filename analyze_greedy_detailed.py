@@ -187,7 +187,7 @@ def main():
     model_path = 'model-experimental'
     results_dir = 'greedy_analysis_results_run_2'
     test_file = 'data/test_normalized.txt'
-    num_sequences = 10
+    num_sequences = 35
     
     print("="*80)
     print("GREEDY DECODING DETAILED ANALYSIS")
