@@ -48,15 +48,28 @@ def tokenize_sliding_windows_simple(filegroup, prefix_controls=33):
             
             if score_triplet[0] is not None:
                 # Convert from quantized units to seconds
+                # Triplet format: [time, duration, pitch]
                 original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION  # triplet[1] is duration!
+                pitch = score_triplet[2]  # triplet[2] is pitch!
                 
                 # Normalize using beat mapping (0.5 sec between beats)
-                # Find which beats this falls between
+                # Map first beat to 0.0, each subsequent beat to 0.5 sec apart
                 normalized_time_sec = 0.0
+                time_scale_factor = 1.0  # Track how much we scaled time to apply to duration
+                
                 if score_beat_times and len(score_beat_times) >= 2:
-                    if original_time_sec <= score_beat_times[0]:
-                        ratio = original_time_sec / score_beat_times[0] if score_beat_times[0] > 0 else 0
-                        normalized_time_sec = 0.0 + ratio * 0.5
+                    if original_time_sec < score_beat_times[0]:
+                        # Before first beat - scale relative to first beat
+                        beat_duration = score_beat_times[1] - score_beat_times[0]
+                        if beat_duration > 0:
+                            # How far before first beat as fraction of beat duration
+                            progress = (original_time_sec - score_beat_times[0]) / beat_duration  # negative
+                            time_scale_factor = 0.5 / beat_duration
+                        else:
+                            progress = 0
+                            time_scale_factor = 1.0
+                        normalized_time_sec = 0.0 + progress * 0.5  # Will be negative
                     else:
                         # Find the beat interval
                         found = False
@@ -65,8 +78,11 @@ def tokenize_sliding_windows_simple(filegroup, prefix_controls=33):
                                 beat_duration = score_beat_times[i + 1] - score_beat_times[i]
                                 if beat_duration > 0:
                                     progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                                    time_scale_factor = 0.5 / beat_duration
                                 else:
                                     progress = 0
+                                    time_scale_factor = 1.0
+                                # Beat index i (first beat) maps to 0.0, beat i+1 maps to 0.5, etc.
                                 normalized_time_sec = i * 0.5 + progress * 0.5
                                 found = True
                                 break
@@ -77,18 +93,26 @@ def tokenize_sliding_windows_simple(filegroup, prefix_controls=33):
                             last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
                             if last_beat_duration > 0:
                                 progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                                time_scale_factor = 0.5 / last_beat_duration
                             else:
                                 progress = 0
+                                time_scale_factor = 1.0
                             normalized_time_sec = last_beat_idx * 0.5 + progress * 0.5
                 else:
                     normalized_time_sec = original_time_sec
+                    time_scale_factor = 1.0
+                
+                # Scale duration by the same factor we scaled time
+                normalized_duration_sec = original_duration_sec * time_scale_factor
                 
                 # Convert back to quantized units
+                # Triplet format: [time, duration, pitch]
                 normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
+                normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
                 normalized_score = [
                     normalized_time_units + TIME_OFFSET,
-                    score_triplet[1],
-                    score_triplet[2]
+                    normalized_duration_units + DUR_OFFSET,  # index 1 is duration!
+                    pitch  # index 2 is pitch!
                 ]
             else:
                 normalized_score = score_triplet

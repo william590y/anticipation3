@@ -71,8 +71,8 @@ def evaluate_model(model, dataloader, device):
                 seq_labels = labels[b]
                 seq_logits = logits[b]
                 
-                # Start from position 1 (skip first token)
-                i = 1
+                # Start from position 4 (skip ANTICIPATE + SEP SEP SEP)
+                i = 4 if len(seq_input) > 4 else 1
                 while i < len(seq_input) - 2:
                     # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET)
                     if (seq_input[i] < CONTROL_OFFSET and 
@@ -173,7 +173,7 @@ def run_smoketest():
     expected = 100.0
     actual = accuracy * 100
     if abs(actual - expected) < 0.01:
-        print("✅ PASS: Got expected 100% accuracy")
+        print("PASS: Got expected 100% accuracy")
     else:
         print(f"❌ FAIL: Expected {expected}%, got {actual}%")
     
@@ -186,7 +186,7 @@ def run_smoketest():
     expected = 0.0
     actual = accuracy * 100
     if abs(actual - expected) < 0.01:
-        print("✅ PASS: Got expected 0% accuracy")
+        print("PASS: Got expected 0% accuracy")
     else:
         print(f"❌ FAIL: Expected {expected}%, got {actual}%")
     
@@ -198,9 +198,9 @@ def run_smoketest():
     print(f"Pitch Accuracy: {accuracy*100:.2f}%")
     print(f"Note: Random chance is 1/{vocab_size} ≈ {100.0/vocab_size:.4f}%")
     if accuracy * 100 < 5.0:  # Should be very low
-        print("✅ PASS: Random accuracy is appropriately low")
+        print("PASS: Random accuracy is appropriately low")
     else:
-        print(f"❌ FAIL: Random accuracy too high: {accuracy*100:.2f}%")
+        print(f"FAIL: Random accuracy too high: {accuracy*100:.2f}%")
     
     print("\n" + "="*80)
     print("ADDITIONAL CHECKS")
@@ -209,14 +209,17 @@ def run_smoketest():
     # Verify that control triplets are NOT counted
     print("\nVerifying that only SCORE triplets are counted (not control)...")
     
-    # Create data with ONLY control triplets (no score triplets)
+    # Create data with proper format: ANTICIPATE + SEP SEP SEP + control triplets only
+    # This tests that control triplets are correctly ignored
+    from anticipation.vocab import ANTICIPATE, SEPARATOR
+    
     control_only_sequences = []
     for _ in range(2):
-        seq = []
+        seq = [ANTICIPATE, SEPARATOR, SEPARATOR, SEPARATOR]  # Proper header
         for j in range(20):  # 20 control triplets
             time = CONTROL_OFFSET + 100 + j * 10
-            duration = CONTROL_OFFSET + 50 + j * 5
-            note = CONTROL_OFFSET + 60 + (j % 12)
+            duration = CONTROL_OFFSET + 10050 + j * 5  # CONTROL_OFFSET + (DUR_OFFSET + duration)
+            note = CONTROL_OFFSET + 11060 + (j % 12)   # CONTROL_OFFSET + (NOTE_OFFSET + pitch)
             seq.extend([time, duration, note])
         control_only_sequences.append(seq)
     
@@ -240,11 +243,12 @@ def run_smoketest():
     model = DummyModel(vocab_size, mode='perfect')
     accuracy = evaluate_model(model, control_dataloader, device)
     print(f"Pitch Accuracy on CONTROL-ONLY data: {accuracy*100:.2f}%")
+    print(f"  (Should be 0.0 because control triplets are filtered out)")
     
     if accuracy == 0.0:
-        print("✅ PASS: Control triplets are NOT counted (accuracy is undefined/0)")
+        print("PASS: Control triplets are correctly NOT counted")
     else:
-        print(f"❌ WARNING: Got {accuracy*100:.2f}% accuracy on control-only data")
+        print(f"WARNING: Got {accuracy*100:.2f}% accuracy on control-only data")
     
     print("\n" + "="*80)
     print("SMOKETEST COMPLETE")
@@ -273,7 +277,7 @@ def test_real_model():
         with open('data/test_output.txt', 'r') as f:
             lines = f.readlines()
     except FileNotFoundError:
-        print("❌ data/test_output.txt not found! Please run tokenize-asap.py first.")
+        print("ERROR: data/test_output.txt not found! Please run tokenize-asap.py first.")
         return
     
     # Parse data

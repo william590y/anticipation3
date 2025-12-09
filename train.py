@@ -274,7 +274,9 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     avg_loss = total_loss / total_samples
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
     
-    # Autoregressive evaluation: greedy decoding on a small subset
+    # Autoregressive evaluation: use performance (control) to generate score
+    # Format: ANTICIPATE + SEP SEP SEP + control+rest pairs + alternating score/control
+    # Goal: Given the performance context, autoregressively generate score triplets
     autoregressive_correct = 0
     autoregressive_total = 0
     
@@ -293,71 +295,70 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
         
         # Run autoregressive generation on each sequence
         for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
-            # Find all score triplet positions (for ground truth)
-            score_positions = []
-            i = 1  # Skip mode token
-            while i < len(seq) - 2:
-                if (seq[i] < CONTROL_OFFSET and 
-                    seq[i+1] < CONTROL_OFFSET and 
-                    seq[i+2] < CONTROL_OFFSET and
-                    seq[i+2] != REST):  # Exclude REST tokens
-                    score_positions.append((i, i+1, i+2))
-                    i += 3
-                else:
-                    i += 1
+            # Sequence format: [ANTICIPATE, SEP, SEP, SEP, control+rest pairs (positions 4-201), alternating score/control (202+)]
+            # We want to use the control tokens as context and generate the score tokens
             
-            if len(score_positions) == 0:
+            # Find where alternating section starts (position 202)
+            alternating_start = 202
+            if len(seq) <= alternating_start:
                 continue
             
-            # Find the first score triplet position
-            first_score_pos = score_positions[0][0]
+            # Start context with: ANTICIPATE + SEP SEP SEP + all control+rest pairs (positions 0-201)
+            # This gives the model all the performance information
+            context = seq[:alternating_start].tolist()
             
-            # Start with context up to first score triplet
-            context = seq[:first_score_pos].tolist()
-            
-            last_pos = first_score_pos
-            
-            # Autoregressively generate each score triplet
-            for time_pos, dur_pos, pitch_pos in score_positions:
-                # Add ground truth intermediate control tokens between last position and this score triplet
-                if time_pos > last_pos:
-                    intermediate = seq[last_pos:time_pos].tolist()
-                    context.extend(intermediate)
-                
-                # Now autoregressively generate the score triplet (time, dur, pitch)
-                # Generate TIME
-                input_tensor = torch.tensor([context]).to(accelerator.device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    logits = outputs.logits[0, -1, :]
-                    pred_time = logits.argmax().item()
-                context.append(pred_time)
-                
-                # Generate DURATION
-                input_tensor = torch.tensor([context]).to(accelerator.device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    logits = outputs.logits[0, -1, :]
-                    pred_dur = logits.argmax().item()
-                context.append(pred_dur)
-                
-                # Generate PITCH
-                input_tensor = torch.tensor([context]).to(accelerator.device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    logits = outputs.logits[0, -1, :]
-                    pred_pitch = logits.argmax().item()
-                context.append(pred_pitch)
-                
-                # Check if the predicted pitch matches ground truth
-                true_pitch = seq[pitch_pos].item()
-                
-                if pred_pitch == true_pitch:
-                    autoregressive_correct += 1
-                autoregressive_total += 1
-                
-                # Update last_pos to continue from this triplet
-                last_pos = pitch_pos + 1
+            # Now autoregressively generate the alternating score/control section
+            # Pattern: score_triplet, control_triplet, score_triplet, control_triplet, ...
+            pos = alternating_start
+            while pos + 5 < len(seq):
+                # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET)
+                if (seq[pos] < CONTROL_OFFSET and 
+                    seq[pos+1] < CONTROL_OFFSET and 
+                    seq[pos+2] < CONTROL_OFFSET and
+                    seq[pos+2] != REST):
+                    
+                    # This is a score triplet - generate it autoregressively
+                    # Generate TIME token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_time = logits.argmax().item()
+                    context.append(pred_time)
+                    
+                    # Generate DURATION token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_dur = logits.argmax().item()
+                    context.append(pred_dur)
+                    
+                    # Generate PITCH token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_pitch = logits.argmax().item()
+                    context.append(pred_pitch)
+                    
+                    # Check if predicted pitch matches ground truth
+                    true_pitch = seq[pos + 2].item()
+                    if pred_pitch == true_pitch:
+                        autoregressive_correct += 1
+                    autoregressive_total += 1
+                    
+                    pos += 3
+                    
+                    # After score triplet, add ground truth control triplet to context
+                    # (We're only testing score generation, not control generation)
+                    if pos + 2 < len(seq):
+                        context.extend([seq[pos].item(), seq[pos+1].item(), seq[pos+2].item()])
+                        pos += 3
+                else:
+                    # Not a score triplet, add to context and continue
+                    context.append(seq[pos].item())
+                    pos += 1
     
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
     

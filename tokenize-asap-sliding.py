@@ -5,6 +5,9 @@ This creates multiple training examples from each piece by starting the interlea
 process at every valid position that has enough remaining notes to form a complete
 1024-token sequence.
 
+Score normalization ENFORCES 0.5 second beat spacing regardless of original tempo.
+Performance/control times preserve original tempo but are shifted to start at 0.
+
 Uses parallel processing with 128 workers for efficiency.
 """
 
@@ -114,7 +117,9 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
     Matches the exact interleaving logic from tokenize-asap-openings.py but applied at
     multiple starting positions.
     
-    Score times are normalized to have 0.5 seconds between beats.
+    Score times are ENFORCED to have exactly 0.5 seconds between beats (TARGET_BEAT_INTERVAL=0.5).
+    This means beat[0]->0.0s, beat[1]->0.5s, beat[2]->1.0s, etc., regardless of original tempo.
+    
     Performance/control times are normalized to start at 0 but keep original tempo.
     
     Args:
@@ -138,6 +143,10 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
         score_annotations = load_annotation_file(file4)
         score_beat_times = [anno[0] for anno in score_annotations]  # Original beat times in seconds
         
+        # ENFORCE 0.5 second beat spacing for score normalization
+        # Map original beat times to enforced 0.5s intervals: beat[0]->0.0, beat[1]->0.5, beat[2]->1.0, etc.
+        TARGET_BEAT_INTERVAL = 0.5  # seconds
+        
         # Pre-normalize ALL score triplets once using beat mapping
         # This is much faster than normalizing per sliding window
         normalized_matched_tuples = []
@@ -147,15 +156,28 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             
             if score_triplet[0] is not None:
                 # Convert from quantized units back to seconds
+                # Triplet format: [time, duration, pitch]
                 original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION  # triplet[1] is duration!
+                pitch = score_triplet[2]  # triplet[2] is pitch!
                 
-                # Normalize using beat mapping (0.5 sec between beats)
+                # Normalize using beat mapping (ENFORCED 0.5 sec between beats)
+                # Map first beat to 0.0, each subsequent beat to 0.5 sec apart
                 normalized_time_sec = 0.0
+                time_scale_factor = 1.0  # Track how much we scaled time to apply to duration
+                
                 if score_beat_times and len(score_beat_times) >= 2:
-                    if original_time_sec <= score_beat_times[0]:
-                        # Before first beat
-                        ratio = original_time_sec / score_beat_times[0] if score_beat_times[0] > 0 else 0
-                        normalized_time_sec = 0.0 + ratio * 0.5
+                    if original_time_sec < score_beat_times[0]:
+                        # Before first beat - scale relative to first beat
+                        beat_duration = score_beat_times[1] - score_beat_times[0]
+                        if beat_duration > 0:
+                            # How far before first beat as fraction of beat duration
+                            progress = (original_time_sec - score_beat_times[0]) / beat_duration  # negative
+                            time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                        else:
+                            progress = 0
+                            time_scale_factor = 1.0
+                        normalized_time_sec = 0.0 + progress * TARGET_BEAT_INTERVAL  # Will be negative
                     else:
                         # Find which beats this falls between
                         found = False
@@ -164,32 +186,46 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                                 beat_duration = score_beat_times[i + 1] - score_beat_times[i]
                                 if beat_duration > 0:
                                     progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                                    time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration  # ENFORCED 0.5 sec / original beat duration
                                 else:
                                     progress = 0
-                                # Beat i maps to i*0.5, beat i+1 maps to (i+1)*0.5
-                                normalized_time_sec = i * 0.5 + progress * 0.5
+                                    time_scale_factor = 1.0
+                                # Beat index i (first beat) maps to 0.0, beat i+1 maps to TARGET_BEAT_INTERVAL, etc.
+                                normalized_time_sec = i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
                                 found = True
                                 break
                         
                         if not found:
                             # After last beat: extrapolate
                             last_beat_idx = len(score_beat_times) - 1
-                            last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                            if len(score_beat_times) >= 2:
+                                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                            else:
+                                last_beat_duration = 1.0  # fallback
+                            
                             if last_beat_duration > 0:
                                 progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                                time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
                             else:
                                 progress = 0
-                            normalized_time_sec = last_beat_idx * 0.5 + progress * 0.5
+                                time_scale_factor = 1.0
+                            normalized_time_sec = last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
                 else:
-                    # Fallback if not enough beats
-                    normalized_time_sec = original_time_sec
+                    # Fallback if not enough beats - just shift to start at 0
+                    normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0)
+                    time_scale_factor = 1.0
+                
+                # Scale duration by the same factor we scaled time (to maintain proportions)
+                normalized_duration_sec = original_duration_sec * time_scale_factor
                 
                 # Convert back to quantized units
+                # Triplet format: [time, duration, pitch]
                 normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
+                normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
                 normalized_score = [
                     normalized_time_units + TIME_OFFSET,
-                    score_triplet[1],
-                    score_triplet[2]
+                    normalized_duration_units + DUR_OFFSET,  # index 1 is duration!
+                    pitch  # index 2 is pitch!
                 ]
             else:
                 normalized_score = score_triplet
@@ -211,7 +247,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 break  # Not enough notes for even the prefix
             
             # Extract performance triplets from subset (remove CONTROL_OFFSET first)
-            perf_triplets = [[match[0][0] - CONTROL_OFFSET, match[0][1], match[0][2]] for match in subset]
+            perf_triplets = [[match[0][0] - CONTROL_OFFSET, match[0][1] - CONTROL_OFFSET, match[0][2] - CONTROL_OFFSET] for match in subset]
             # Normalize performance to start at time 0
             if perf_triplets:
                 perf_min_time = min(triplet[0] for triplet in perf_triplets)
@@ -230,8 +266,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 # Add control triplet (re-add CONTROL_OFFSET)
                 interleaved_tokens.extend([
                     perf_triplet[0] + CONTROL_OFFSET,
-                    perf_triplet[1],
-                    perf_triplet[2]
+                    perf_triplet[1] + CONTROL_OFFSET,
+                    perf_triplet[2] + CONTROL_OFFSET
                 ])
                 
                 # Add rest triplet
@@ -253,8 +289,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                     perf_triplet = perf_triplets[ii]
                     interleaved_tokens.extend([
                         perf_triplet[0] + CONTROL_OFFSET,
-                        perf_triplet[1],
-                        perf_triplet[2]
+                        perf_triplet[1] + CONTROL_OFFSET,
+                        perf_triplet[2] + CONTROL_OFFSET
                     ])
             
             # Prepend 3 SEPs
