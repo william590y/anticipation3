@@ -169,7 +169,7 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
 
     return matched_tuples
 
-def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1, perturb_std_ms=0.0, mask_prob=0.0):
+def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
     perf = midi_to_events(file1, quantize=False)
     score = midi_to_events(file2, quantize=False)
@@ -222,31 +222,15 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1, pertur
             matched_tuples.append([p_tuple,i,best_match,best_index])
 
 
-    # revert back to token format and remove beat indices
+    # revert back to token format
     for i, l in enumerate(matched_tuples):
-        # Decide if this control token triplet should be masked (but don't replace tokens yet)
-        # This decision will be used later during tokenization to build mask indices
-        should_mask = mask_prob > 0 and np.random.random() < mask_prob
-        
-        # Always apply perturbation and convert to token format (no masking at this stage)
         # performance tokens should have control offset
-        # Apply time perturbation to control/performance tokens if specified
-        if perturb_std_ms > 0:
-            # Convert std from milliseconds to seconds, then to time resolution units
-            perturb_std_units = (perturb_std_ms / 1000.0) * TIME_RESOLUTION
-            # Sample from normal distribution (approximates binomial for large n)
-            time_perturbation = np.random.normal(0, perturb_std_units)
-            perturbed_time = max(0, round(l[0][0]*TIME_RESOLUTION + time_perturbation))
-            l[0] = [perturbed_time, l[0][1]+DUR_OFFSET, l[0][2]+NOTE_OFFSET]
-        else:
-            l[0] = [round(l[0][0]*TIME_RESOLUTION), l[0][1]+DUR_OFFSET, l[0][2]+NOTE_OFFSET]
+        l[0] = [round(l[0][0]*TIME_RESOLUTION), l[0][1]+DUR_OFFSET, l[0][2]+NOTE_OFFSET]
         l[0] = [CONTROL_OFFSET + t for t in l[0]]
 
         if l[2][0] != None:
             l[2] = [round(l[2][0]*TIME_RESOLUTION), l[2][1]+DUR_OFFSET, l[2][2]+NOTE_OFFSET]
         
-        # Return tuples in format: [perf_tuple, i, score_match, score_index]
-        # Note: mask decision is NOT stored here - tokenization will handle it
         matched_tuples[i] = l
 
     return matched_tuples

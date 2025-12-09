@@ -17,7 +17,7 @@ from multiprocessing import Pool
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation import ops
-from alignment import align_tokens2
+from alignment import align_tokens2, load_annotation_file
 
 # Number of parallel workers
 NUM_WORKERS = 128
@@ -114,6 +114,9 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
     Matches the exact interleaving logic from tokenize-asap-openings.py but applied at
     multiple starting positions.
     
+    Score times are normalized to have 0.5 seconds between beats.
+    Performance/control times are normalized to start at 0 but keep original tempo.
+    
     Args:
         filegroup: Tuple of (perf_midi, score_midi, perf_beats, score_beats)
         prefix_controls: Number of control notes in the prefix (default 33)
@@ -131,25 +134,82 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
         if len(matched_tuples) < 20:  # Need at least 20 matched pairs
             return []
         
-        sequences = []
-        k = min(prefix_controls, len(matched_tuples))
+        # Load score beat annotations to create time normalization mapping - DO THIS ONCE
+        score_annotations = load_annotation_file(file4)
+        score_beat_times = [anno[0] for anno in score_annotations]  # Original beat times in seconds
         
-        # For each valid starting position, create a sequence
-        # We need enough notes to fill 1023 tokens after interleaving
-        # The interleaving uses notes [start_idx:] so we need to ensure we have enough
+        # Pre-normalize ALL score triplets once using beat mapping
+        # This is much faster than normalizing per sliding window
+        normalized_matched_tuples = []
+        for match in matched_tuples:
+            perf_triplet = match[0]
+            score_triplet = match[2]
+            
+            if score_triplet[0] is not None:
+                # Convert from quantized units back to seconds
+                original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                
+                # Normalize using beat mapping (0.5 sec between beats)
+                normalized_time_sec = 0.0
+                if score_beat_times and len(score_beat_times) >= 2:
+                    if original_time_sec <= score_beat_times[0]:
+                        # Before first beat
+                        ratio = original_time_sec / score_beat_times[0] if score_beat_times[0] > 0 else 0
+                        normalized_time_sec = 0.0 + ratio * 0.5
+                    else:
+                        # Find which beats this falls between
+                        found = False
+                        for i in range(len(score_beat_times) - 1):
+                            if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                                beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                                if beat_duration > 0:
+                                    progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                                else:
+                                    progress = 0
+                                # Beat i maps to i*0.5, beat i+1 maps to (i+1)*0.5
+                                normalized_time_sec = i * 0.5 + progress * 0.5
+                                found = True
+                                break
+                        
+                        if not found:
+                            # After last beat: extrapolate
+                            last_beat_idx = len(score_beat_times) - 1
+                            last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                            if last_beat_duration > 0:
+                                progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                            else:
+                                progress = 0
+                            normalized_time_sec = last_beat_idx * 0.5 + progress * 0.5
+                else:
+                    # Fallback if not enough beats
+                    normalized_time_sec = original_time_sec
+                
+                # Convert back to quantized units
+                normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
+                normalized_score = [
+                    normalized_time_units + TIME_OFFSET,
+                    score_triplet[1],
+                    score_triplet[2]
+                ]
+            else:
+                normalized_score = score_triplet
+            
+            normalized_matched_tuples.append([perf_triplet, match[1], normalized_score, match[3]])
+        
+        sequences = []
+        k = min(prefix_controls, len(normalized_matched_tuples))
         
         # Try different starting positions
-        for start_idx in range(len(matched_tuples)):
+        for start_idx in range(len(normalized_matched_tuples)):
             # Build interleaved stream starting from start_idx (same logic as openings)
             interleaved_tokens = []
             
             # Get subset starting from start_idx
-            subset = matched_tuples[start_idx:]
+            subset = normalized_matched_tuples[start_idx:]
             
             if len(subset) < k:
                 break  # Not enough notes for even the prefix
             
-            # Normalize performance and score windows BEFORE interleaving
             # Extract performance triplets from subset (remove CONTROL_OFFSET first)
             perf_triplets = [[match[0][0] - CONTROL_OFFSET, match[0][1], match[0][2]] for match in subset]
             # Normalize performance to start at time 0
@@ -160,16 +220,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                     for triplet in perf_triplets
                 ]
             
-            # Extract score triplets from subset
+            # Extract already-normalized score triplets from subset
             score_triplets = [match[2] for match in subset]
-            # Normalize score to start at time 0 (only for non-None triplets)
-            valid_score_triplets = [t for t in score_triplets if t[0] is not None]
-            if valid_score_triplets:
-                score_min_time = min(triplet[0] for triplet in valid_score_triplets)
-                score_triplets = [
-                    [triplet[0] - score_min_time, triplet[1], triplet[2]] if triplet[0] is not None else triplet
-                    for triplet in score_triplets
-                ]
             
             # Prefix: control + rest pairs using first k notes from normalized subset
             for i in range(k):
@@ -216,8 +268,6 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             
             # Trim to exactly 1023 tokens
             interleaved_tokens = interleaved_tokens[:max_body]
-            
-            # No need to translate - already normalized before interleaving
             
             # Check if sequence is valid
             if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
