@@ -170,12 +170,23 @@ class TokenizedDataset(Dataset):
         # Apply on-the-fly augmentation
         augmented_tokens, mask_idxs = self._augment_sequence(tokens)
         
-        # Create labels (same as input, but with masked positions set to -100)
+        # Create attention mask: 0 for masked positions, 1 for visible positions
+        # Masked tokens are hidden from the model's attention mechanism
+        attention_mask = torch.ones_like(augmented_tokens)
+        if mask_idxs:
+            attention_mask[mask_idxs] = 0
+        
+        # Create labels: -100 for masked positions (excluded from loss)
+        # Model doesn't see masked tokens AND isn't trained to predict them
         labels = augmented_tokens.clone()
         if mask_idxs:
             labels[mask_idxs] = -100
         
-        return {"input_ids": augmented_tokens, "labels": labels}
+        return {
+            "input_ids": augmented_tokens, 
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
 
 def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
     """Calculate validation loss and pitch accuracy on a dataset
