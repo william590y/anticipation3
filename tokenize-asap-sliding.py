@@ -246,8 +246,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             if len(subset) < k:
                 break  # Not enough notes for even the prefix
             
-            # Extract performance triplets from subset (remove CONTROL_OFFSET first)
-            perf_triplets = [[match[0][0] - CONTROL_OFFSET, match[0][1] - CONTROL_OFFSET, match[0][2] - CONTROL_OFFSET] for match in subset]
+            # Extract performance triplets from subset (remove offsets first)
+            perf_triplets = [[match[0][0] - ATIME_OFFSET, match[0][1] - ADUR_OFFSET, match[0][2] - ANOTE_OFFSET] for match in subset]
             # Normalize performance to start at time 0
             if perf_triplets:
                 perf_min_time = min(triplet[0] for triplet in perf_triplets)
@@ -263,11 +263,11 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             for i in range(k):
                 perf_triplet = perf_triplets[i]
                 
-                # Add control triplet (re-add CONTROL_OFFSET)
+                # Add control triplet (use correct offsets for each token type)
                 interleaved_tokens.extend([
-                    perf_triplet[0] + CONTROL_OFFSET,
-                    perf_triplet[1] + CONTROL_OFFSET,
-                    perf_triplet[2] + CONTROL_OFFSET
+                    perf_triplet[0] + ATIME_OFFSET,   # time
+                    perf_triplet[1] + ADUR_OFFSET,    # duration
+                    perf_triplet[2] + ANOTE_OFFSET    # pitch
                 ])
                 
                 # Add rest triplet
@@ -288,9 +288,9 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 if ii < len(subset):
                     perf_triplet = perf_triplets[ii]
                     interleaved_tokens.extend([
-                        perf_triplet[0] + CONTROL_OFFSET,
-                        perf_triplet[1] + CONTROL_OFFSET,
-                        perf_triplet[2] + CONTROL_OFFSET
+                        perf_triplet[0] + ATIME_OFFSET,   # time
+                        perf_triplet[1] + ADUR_OFFSET,    # duration
+                        perf_triplet[2] + ANOTE_OFFSET    # pitch
                     ])
             
             # Prepend 3 SEPs
