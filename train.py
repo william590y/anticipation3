@@ -250,10 +250,11 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 # Skip first token (mode token), start from position 1
                 i = 1
                 while i < len(seq_input) - 2:
-                    # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET)
+                    # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET, but not REST)
                     if (seq_input[i] < CONTROL_OFFSET and 
                         seq_input[i+1] < CONTROL_OFFSET and 
-                        seq_input[i+2] < CONTROL_OFFSET):
+                        seq_input[i+2] < CONTROL_OFFSET and
+                        seq_input[i+2] != REST):  # Exclude REST triplets
                         # This is a score triplet
                         # Position i+2 is the note token
                         note_pos = i + 2
