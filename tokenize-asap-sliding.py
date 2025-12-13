@@ -23,7 +23,7 @@ from anticipation import ops
 from alignment import align_tokens2, load_annotation_file
 
 # Number of parallel workers
-NUM_WORKERS = 200
+NUM_WORKERS = 128
 
 # ASAP dataset path
 ASAP_PATH = 'asap-dataset-master'
