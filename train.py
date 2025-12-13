@@ -57,10 +57,9 @@ class TokenizedDataset(Dataset):
     - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
     - Augmentation (perturbation + masking) applied during training, not tokenization
     """
-    def __init__(self, file_path, perturb_std_ms=0.0, mask_prob=0.0, is_training=True):
+    def __init__(self, file_path, perturb_std_ms=0.0, is_training=True):
         self.sequences = []
         self.perturb_std_ms = perturb_std_ms if is_training else 0.0
-        self.mask_prob = mask_prob if is_training else 0.0
         self.is_training = is_training
         
         with open(file_path, 'r') as f:
@@ -79,7 +78,7 @@ class TokenizedDataset(Dataset):
         self.sequence_length = len(self.sequences[0]) if self.sequences else 0
         print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
         if self.is_training:
-            print(f"  Training mode: perturb_std={self.perturb_std_ms}ms, mask_prob={self.mask_prob}")
+            print(f"  Training mode: perturb_std={self.perturb_std_ms}ms")
         else:
             print(f"  Validation mode: no augmentation")
         
@@ -97,7 +96,7 @@ class TokenizedDataset(Dataset):
         return len(self.sequences)
     
     def _augment_sequence(self, tokens):
-        """Apply on-the-fly augmentation: time perturbation + masking.
+        """Apply on-the-fly augmentation: time perturbation.
         
         Only augments CONTROL triplets, not score triplets or special tokens.
         Control triplets have all 3 tokens >= CONTROL_OFFSET.
@@ -105,20 +104,18 @@ class TokenizedDataset(Dataset):
         
         Returns:
             augmented_tokens: Perturbed tokens
-            mask_indices: Indices to mask in loss (list of ints)
         """
         from anticipation.vocab import CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST
         from anticipation.config import TIME_RESOLUTION
         
-        if not self.is_training or (self.perturb_std_ms == 0 and self.mask_prob == 0):
+        if not self.is_training or self.perturb_std_ms == 0:
             # No augmentation for validation or if disabled
-            return tokens.clone(), []
+            return tokens.clone()
         
         augmented = tokens.clone()
-        mask_indices = []
         
         # Convert perturbation std from ms to time resolution units
-        perturb_std_units = (self.perturb_std_ms / 1000.0) * TIME_RESOLUTION if self.perturb_std_ms > 0 else 0
+        perturb_std_units = (self.perturb_std_ms / 1000.0) * TIME_RESOLUTION
         
         # Iterate through sequence in triplets
         # Skip first token (ANTICIPATE mode token)
@@ -134,27 +131,21 @@ class TokenizedDataset(Dataset):
                 augmented[i] != ANTICIPATE):
                 
                 # This is a control triplet (time, dur, pitch) with CONTROL_OFFSET added
-                
-                # Decide whether to mask this triplet
-                if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
-                    # Mark these 3 positions for masking in loss
-                    mask_indices.extend([i, i+1, i+2])
-                
                 # Apply time perturbation to time and duration (NOT pitch)
-                if perturb_std_units > 0:
-                    # Perturb time (first token)
-                    base_time = augmented[i].item() - CONTROL_OFFSET
-                    time_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                    perturbed_time = max(0, base_time + time_perturbation)
-                    augmented[i] = CONTROL_OFFSET + perturbed_time
-                    
-                    # Perturb duration (second token)
-                    base_dur = augmented[i+1].item() - CONTROL_OFFSET
-                    dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                    perturbed_dur = max(0, base_dur + dur_perturbation)
-                    augmented[i+1] = CONTROL_OFFSET + perturbed_dur
-                    
-                    # Leave pitch (third token) unchanged
+                
+                # Perturb time (first token)
+                base_time = augmented[i].item() - CONTROL_OFFSET
+                time_perturbation = int(torch.randn(1).item() * perturb_std_units)
+                perturbed_time = max(0, base_time + time_perturbation)
+                augmented[i] = CONTROL_OFFSET + perturbed_time
+                
+                # Perturb duration (second token)
+                base_dur = augmented[i+1].item() - CONTROL_OFFSET
+                dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
+                perturbed_dur = max(0, base_dur + dur_perturbation)
+                augmented[i+1] = CONTROL_OFFSET + perturbed_dur
+                
+                # Leave pitch (third token) unchanged
                 
                 i += 3  # Skip to next triplet
             else:
@@ -162,31 +153,15 @@ class TokenizedDataset(Dataset):
                 # Don't augment, just move to next token
                 i += 1
         
-        return augmented, mask_indices
+        return augmented
     
     def __getitem__(self, idx):
         tokens = self.sequences[idx]
         
-        # Apply on-the-fly augmentation
-        augmented_tokens, mask_idxs = self._augment_sequence(tokens)
+        # Apply on-the-fly augmentation (time perturbation only)
+        augmented_tokens = self._augment_sequence(tokens)
         
-        # Create attention mask: 0 for masked positions, 1 for visible positions
-        # Masked tokens are hidden from the model's attention mechanism
-        attention_mask = torch.ones_like(augmented_tokens)
-        if mask_idxs:
-            attention_mask[mask_idxs] = 0
-        
-        # Create labels: -100 for masked positions (excluded from loss)
-        # Model doesn't see masked tokens AND isn't trained to predict them
-        labels = augmented_tokens.clone()
-        if mask_idxs:
-            labels[mask_idxs] = -100
-        
-        return {
-            "input_ids": augmented_tokens, 
-            "attention_mask": attention_mask,
-            "labels": labels
-        }
+        return {"input_ids": augmented_tokens, "labels": augmented_tokens}
 
 def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
     """Calculate validation loss and pitch accuracy on a dataset
@@ -442,7 +417,7 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_vanilla'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./fine_tuned_scaled_new'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -453,8 +428,7 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--perturb_std_ms', type=float, default=0.0, help='Standard deviation of time perturbation in milliseconds (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0.0, help='Probability of masking each control triplet (training only)')
+    parser.add_argument('--perturb_std_ms', type=float, default=100.0, help='Standard deviation of time perturbation in milliseconds (training only)')
     args = parser.parse_args()
     
     # Override device if requested
@@ -490,7 +464,6 @@ def main():
         train_dataset = TokenizedDataset(
             args.data_file, 
             perturb_std_ms=args.perturb_std_ms,
-            mask_prob=args.mask_prob,
             is_training=True
         )
         
@@ -513,7 +486,6 @@ def main():
         val_dataset = TokenizedDataset(
             args.val_file,
             perturb_std_ms=0.0,
-            mask_prob=0.0,
             is_training=False
         )
         
