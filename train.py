@@ -82,15 +82,22 @@ class TokenizedDataset(Dataset):
         else:
             print(f"  Validation mode: no augmentation")
         
-        # Validate format
+        # Validate format and token ranges
         if self.sequences:
-            from anticipation.vocab import ANTICIPATE
+            from anticipation.vocab import ANTICIPATE, VOCAB_SIZE
             sample = self.sequences[0].tolist()
             if len(sample) >= 1:
                 if sample[0] == ANTICIPATE:
                     print(f"✓ Tokenization format validated (starts with ANTICIPATE token)")
                 else:
                     print(f"⚠ Warning: First token is {sample[0]}, expected ANTICIPATE ({ANTICIPATE})")
+            
+            # Validate all tokens are within vocabulary range
+            max_token = max(max(seq.tolist()) for seq in self.sequences)
+            min_token = min(min(seq.tolist()) for seq in self.sequences)
+            if max_token >= VOCAB_SIZE or min_token < 0:
+                raise ValueError(f"Invalid token range: [{min_token}, {max_token}], must be [0, {VOCAB_SIZE-1}]")
+            print(f"✓ Token range validated: [{min_token}, {max_token}] within [0, {VOCAB_SIZE-1}]")
     
     def __len__(self):
         return len(self.sequences)
@@ -105,8 +112,9 @@ class TokenizedDataset(Dataset):
         Returns:
             augmented_tokens: Perturbed tokens
         """
-        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST
-        from anticipation.config import TIME_RESOLUTION
+        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST, VOCAB_SIZE,
+                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET)
+        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR
         
         if not self.is_training or self.perturb_std_ms == 0:
             # No augmentation for validation or if disabled
@@ -130,22 +138,25 @@ class TokenizedDataset(Dataset):
                 augmented[i] != SEPARATOR and 
                 augmented[i] != ANTICIPATE):
                 
-                # This is a control triplet (time, dur, pitch) with CONTROL_OFFSET added
+                # This is a control triplet (time, dur, pitch) with separate offsets
                 # Apply time perturbation to time and duration (NOT pitch)
                 
                 # Perturb time (first token)
-                base_time = augmented[i].item() - CONTROL_OFFSET
+                # Valid range: [ATIME_OFFSET, ATIME_OFFSET + MAX_TIME - 1]
+                base_time = augmented[i].item() - ATIME_OFFSET
                 time_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_time = max(0, base_time + time_perturbation)
-                augmented[i] = CONTROL_OFFSET + perturbed_time
+                perturbed_time = max(0, min(MAX_TIME - 1, base_time + time_perturbation))
+                augmented[i] = ATIME_OFFSET + perturbed_time
                 
                 # Perturb duration (second token)
-                base_dur = augmented[i+1].item() - CONTROL_OFFSET
+                # Valid range: [ADUR_OFFSET, ADUR_OFFSET + MAX_DUR - 1]
+                base_dur = augmented[i+1].item() - ADUR_OFFSET
                 dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_dur = max(0, base_dur + dur_perturbation)
-                augmented[i+1] = CONTROL_OFFSET + perturbed_dur
+                perturbed_dur = max(0, min(MAX_DUR - 1, base_dur + dur_perturbation))
+                augmented[i+1] = ADUR_OFFSET + perturbed_dur
                 
                 # Leave pitch (third token) unchanged
+                # Valid range: [ANOTE_OFFSET, ANOTE_OFFSET + MAX_NOTE - 1]
                 
                 i += 3  # Skip to next triplet
             else:
@@ -160,6 +171,10 @@ class TokenizedDataset(Dataset):
         
         # Apply on-the-fly augmentation (time perturbation only)
         augmented_tokens = self._augment_sequence(tokens)
+        
+        # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
+        from anticipation.vocab import VOCAB_SIZE
+        augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
         
         return {"input_ids": augmented_tokens, "labels": augmented_tokens}
 
