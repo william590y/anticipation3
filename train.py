@@ -73,6 +73,10 @@ class TokenizedDataset(Dataset):
                     # Old format: just tokens
                     tokens = list(map(int, line.split()))
                 
+                # Replace invalid tokens (e.g., -1 from negative time calculations) with 0 (TIME_OFFSET)
+                # This preserves sequence length and structure while fixing tokenization bugs
+                tokens = [max(0, t) for t in tokens]
+                
                 self.sequences.append(torch.tensor(tokens, dtype=torch.long))
         
         self.sequence_length = len(self.sequences[0]) if self.sequences else 0

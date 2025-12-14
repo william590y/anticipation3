@@ -222,6 +222,9 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 # Triplet format: [time, duration, pitch]
                 normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
                 normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
+                # Clamp to non-negative to prevent invalid tokens
+                normalized_time_units = max(0, normalized_time_units)
+                normalized_duration_units = max(0, normalized_duration_units)
                 normalized_score = [
                     normalized_time_units + TIME_OFFSET,
                     normalized_duration_units + DUR_OFFSET,  # index 1 is duration!
@@ -271,7 +274,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 ])
                 
                 # Add rest triplet
-                cc_time = perf_triplet[0]
+                cc_time = max(0, perf_triplet[0])  # Clamp to non-negative
                 interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
             
             # Main body: alternate score/control
