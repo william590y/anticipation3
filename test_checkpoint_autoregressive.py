@@ -31,7 +31,7 @@ print("Loading test data...")
 with open('data/test_normalized.txt', 'r') as f:
     lines = f.readlines()
 
-num_examples = 3
+num_examples = 15
 print(f"Testing on {num_examples} examples (matches train.py slow method, no KV caching)")
 print(f"Method: Generate score triplets one at a time, feed back ground truth control")
 print()
