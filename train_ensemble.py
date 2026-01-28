@@ -559,16 +559,12 @@ def train_single_member(
         num_workers=0,
     )
     
-    # Setup optimizer
-    # From the paper (Section 4.2): Ensemble members benefit from more epochs
-    # and less weight decay compared to single model training
-    weight_decay = args.weight_decay / 2.0  # Half weight decay for ensemble members
-    
+    # Setup optimizer (same as train.py)
     optimizer = AdamW(
         model.parameters(),
         lr=args.learning_rate,
         eps=1e-6,
-        weight_decay=weight_decay,
+        weight_decay=args.weight_decay,
         betas=(0.9, 0.999),
     )
     
@@ -613,6 +609,20 @@ def train_single_member(
                 
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), max_norm=2.0)
+                    
+                    # Check for NaN in gradients (same as train.py)
+                    has_nan_grads = False
+                    for name, param in model.named_parameters():
+                        if param.grad is not None and torch.isnan(param.grad).any():
+                            print(f"NaN gradient detected in {name}")
+                            has_nan_grads = True
+                            break
+                    
+                    if has_nan_grads:
+                        print("Skipping update due to NaN gradients")
+                        optimizer.zero_grad()
+                        continue
+                    
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
@@ -622,12 +632,19 @@ def train_single_member(
                     
                     if completed_steps % 10 == 0:
                         train_losses.append(loss.item())
+                        
+                        # Check for NaN parameters periodically (same as train.py)
+                        if check_model_for_nans(model):
+                            print("NaN parameters detected in model! Training may be unstable.")
                     
                     if completed_steps % 100 == 0:
                         print(f"  Step {completed_steps}, Loss: {loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.2e}")
+                        print_gpu_memory_stats()
                     
                     # Periodic validation and plotting (every eval_steps)
-                    if completed_steps % args.eval_steps == 0:
+                    # Skip if this is also a checkpoint step to avoid double validation
+                    is_checkpoint_step = (completed_steps % args.save_steps == 0)
+                    if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                         val_loss, val_tf_acc, val_ar_acc = evaluate_single_model(model, val_dataloader, accelerator)
                         val_losses.append(val_loss)
                         val_tf_accuracies.append(val_tf_acc * 100)
@@ -637,7 +654,15 @@ def train_single_member(
                         model.train()
                     
                     # Save checkpoint with plot (every save_steps)
-                    if completed_steps % args.save_steps == 0:
+                    if is_checkpoint_step:
+                        # Run validation before saving checkpoint
+                        val_loss, val_tf_acc, val_ar_acc = evaluate_single_model(model, val_dataloader, accelerator)
+                        val_losses.append(val_loss)
+                        val_tf_accuracies.append(val_tf_acc * 100)
+                        val_ar_accuracies.append(val_ar_acc * 100)
+                        validation_steps.append(completed_steps)
+                        print(f"  [Validation] Step {completed_steps}: Loss={val_loss:.4f}, TF-Acc={val_tf_acc*100:.2f}%, AR-Acc={val_ar_acc*100:.2f}%")
+                        model.train()
                         checkpoint_dir = member_dir / f"checkpoint-{completed_steps}"
                         os.makedirs(checkpoint_dir, exist_ok=True)
                         unwrapped = accelerator.unwrap_model(model)
