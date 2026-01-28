@@ -979,7 +979,7 @@ def main():
     
     # Model arguments
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./ensemble_model'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./ensemble_model_new'))
     
     # Ensemble arguments
     parser.add_argument('--num_members', type=int, default=4,
