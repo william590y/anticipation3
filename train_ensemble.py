@@ -307,6 +307,113 @@ def create_ensemble_members(
     return models, seeds
 
 
+def evaluate_single_model(model, dataloader, accelerator, max_batches=50):
+    """Evaluate a single model on validation data."""
+    model.eval()
+    total_loss = 0
+    total_samples = 0
+    correct_pitches = 0
+    total_pitches = 0
+    
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            if batch_idx >= max_batches:
+                break
+            
+            outputs = model(**batch)
+            input_ids = batch["input_ids"]
+            labels = batch["labels"]
+            logits = outputs.logits
+            
+            batch_size = input_ids.size(0)
+            total_loss += outputs.loss.item() * batch_size
+            total_samples += batch_size
+            
+            # Calculate pitch accuracy on score triplets
+            for b in range(batch_size):
+                seq_input = input_ids[b]
+                seq_labels = labels[b]
+                seq_logits = logits[b]
+                
+                i = 1
+                while i < len(seq_input) - 2:
+                    if (seq_input[i] < CONTROL_OFFSET and 
+                        seq_input[i+1] < CONTROL_OFFSET and 
+                        seq_input[i+2] < CONTROL_OFFSET and
+                        seq_input[i+2] != REST):
+                        
+                        note_pos = i + 2
+                        if seq_labels[note_pos] != -100:
+                            predicted_token = seq_logits[note_pos - 1].argmax().item()
+                            true_token = seq_labels[note_pos].item()
+                            if predicted_token == true_token:
+                                correct_pitches += 1
+                            total_pitches += 1
+                    i += 3
+    
+    avg_loss = total_loss / total_samples if total_samples > 0 else 0
+    accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
+    
+    return avg_loss, accuracy
+
+
+def plot_member_metrics(train_losses, val_losses, val_accuracies, validation_steps, member_idx, output_dir):
+    """Plot training metrics for a single ensemble member."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # Plot 1: Training loss (linear)
+    ax1 = axes[0, 0]
+    steps = list(range(10, 10 * len(train_losses) + 1, 10))
+    ax1.plot(steps, train_losses, alpha=0.7, color='blue')
+    if validation_steps and val_losses:
+        ax1.scatter(validation_steps, val_losses, color='red', s=30, zorder=5, label='Val Loss')
+        ax1.plot(validation_steps, val_losses, color='red', alpha=0.3, linestyle='--')
+    ax1.set_xlabel('Step')
+    ax1.set_ylabel('Loss')
+    ax1.set_title(f'Member {member_idx+1}: Training Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Training loss (log)
+    ax2 = axes[0, 1]
+    ax2.semilogy(steps, train_losses, alpha=0.7, color='blue')
+    if validation_steps and val_losses:
+        ax2.scatter(validation_steps, val_losses, color='red', s=30, zorder=5, label='Val Loss')
+    ax2.set_xlabel('Step')
+    ax2.set_ylabel('Loss (log)')
+    ax2.set_title(f'Member {member_idx+1}: Training Loss (Log Scale)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Validation accuracy
+    ax3 = axes[1, 0]
+    if validation_steps and val_accuracies:
+        ax3.plot(validation_steps, val_accuracies, color='green', marker='o')
+    ax3.set_xlabel('Step')
+    ax3.set_ylabel('Pitch Accuracy (%)')
+    ax3.set_title(f'Member {member_idx+1}: Validation Accuracy')
+    ax3.set_ylim([0, 100])
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Loss summary
+    ax4 = axes[1, 1]
+    if train_losses:
+        ax4.text(0.5, 0.7, f'Latest Train Loss: {train_losses[-1]:.4f}', 
+                transform=ax4.transAxes, ha='center', fontsize=12)
+    if val_losses:
+        ax4.text(0.5, 0.5, f'Latest Val Loss: {val_losses[-1]:.4f}', 
+                transform=ax4.transAxes, ha='center', fontsize=12)
+    if val_accuracies:
+        ax4.text(0.5, 0.3, f'Latest Accuracy: {val_accuracies[-1]:.2f}%', 
+                transform=ax4.transAxes, ha='center', fontsize=12)
+    ax4.set_title(f'Member {member_idx+1}: Summary')
+    ax4.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def train_single_member(
     member_idx: int,
     model: torch.nn.Module,
@@ -408,6 +515,8 @@ def train_single_member(
     completed_steps = 0
     train_losses = []
     val_losses = []
+    val_accuracies = []
+    validation_steps = []
     
     progress_bar = tqdm(total=args.max_steps_per_member, desc=f"Member {member_idx+1}", leave=True)
     
@@ -436,7 +545,38 @@ def train_single_member(
                         train_losses.append(loss.item())
                     
                     if completed_steps % 100 == 0:
-                        print(f"  Step {completed_steps}, Loss: {loss.item():.4f}")
+                        print(f"  Step {completed_steps}, Loss: {loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.2e}")
+                    
+                    # Periodic validation and plotting (every eval_steps)
+                    if completed_steps % args.eval_steps == 0:
+                        val_loss, val_acc = evaluate_single_model(model, val_dataloader, accelerator)
+                        val_losses.append(val_loss)
+                        val_accuracies.append(val_acc * 100)
+                        validation_steps.append(completed_steps)
+                        print(f"  [Validation] Step {completed_steps}: Loss={val_loss:.4f}, Accuracy={val_acc*100:.2f}%")
+                        model.train()
+                    
+                    # Save checkpoint with plot (every save_steps)
+                    if completed_steps % args.save_steps == 0:
+                        checkpoint_dir = member_dir / f"checkpoint-{completed_steps}"
+                        os.makedirs(checkpoint_dir, exist_ok=True)
+                        unwrapped = accelerator.unwrap_model(model)
+                        unwrapped.save_pretrained(checkpoint_dir)
+                        
+                        # Save metrics and plot
+                        np.savez(
+                            checkpoint_dir / "training_history.npz",
+                            train_losses=np.array(train_losses),
+                            val_losses=np.array(val_losses),
+                            val_accuracies=np.array(val_accuracies),
+                            validation_steps=np.array(validation_steps)
+                        )
+                        plot_member_metrics(train_losses, val_losses, val_accuracies, 
+                                          validation_steps, member_idx, checkpoint_dir)
+                        print(f"  [Checkpoint] Saved to {checkpoint_dir}")
+                        
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                 else:
                     optimizer.zero_grad()
                 
@@ -446,21 +586,12 @@ def train_single_member(
     progress_bar.close()
     
     # Final validation
-    model.eval()
-    total_loss = 0
-    total_samples = 0
-    
-    with torch.no_grad():
-        for batch in val_dataloader:
-            outputs = model(**batch)
-            batch_size = batch["input_ids"].size(0)
-            total_loss += outputs.loss.item() * batch_size
-            total_samples += batch_size
-    
-    final_val_loss = total_loss / total_samples if total_samples > 0 else 0
+    final_val_loss, final_val_acc = evaluate_single_model(model, val_dataloader, accelerator)
     val_losses.append(final_val_loss)
+    val_accuracies.append(final_val_acc * 100)
+    validation_steps.append(completed_steps)
     
-    print(f"  Member {member_idx+1} final validation loss: {final_val_loss:.4f}")
+    print(f"  Member {member_idx+1} final: Loss={final_val_loss:.4f}, Accuracy={final_val_acc*100:.2f}%")
     
     # Save member checkpoint
     unwrapped_model = accelerator.unwrap_model(model)
@@ -471,12 +602,22 @@ def train_single_member(
         member_dir / "training_history.npz",
         train_losses=np.array(train_losses),
         val_losses=np.array(val_losses),
+        val_accuracies=np.array(val_accuracies),
+        validation_steps=np.array(validation_steps),
         seed=seed
     )
     
+    # Final plot for this member
+    plot_member_metrics(train_losses, val_losses, val_accuracies, 
+                       validation_steps, member_idx, member_dir)
+    
     metrics = {
         "final_val_loss": final_val_loss,
+        "final_val_acc": final_val_acc,
         "train_losses": train_losses,
+        "val_losses": val_losses,
+        "val_accuracies": val_accuracies,
+        "validation_steps": validation_steps,
         "seed": seed
     }
     
@@ -631,6 +772,10 @@ def main():
                        help='Base weight decay (will be halved for ensemble members per paper)')
     parser.add_argument('--max_steps_per_member', type=int, default=3500,
                        help='Training steps per ensemble member')
+    parser.add_argument('--save_steps', type=int, default=200,
+                       help='Save checkpoint every N steps')
+    parser.add_argument('--eval_steps', type=int, default=100,
+                       help='Run validation every N steps')
     
     # Augmentation arguments
     parser.add_argument('--perturb_std_ms', type=float, default=100.0)
