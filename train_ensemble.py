@@ -994,7 +994,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--weight_decay', type=float, default=0.01,
                        help='Base weight decay (will be halved for ensemble members per paper)')
-    parser.add_argument('--max_steps_per_member', type=int, default=3500,
+    parser.add_argument('--max_steps_per_member', type=int, default=1250,
                        help='Training steps per ensemble member')
     parser.add_argument('--save_steps', type=int, default=200,
                        help='Save checkpoint every N steps')
