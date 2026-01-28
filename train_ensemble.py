@@ -50,13 +50,13 @@ def check_model_for_nans(model):
 if torch.cuda.is_available():
     device = torch.device("cuda")
     device_count = torch.cuda.device_count()
-    print(f"✓ CUDA is available with {device_count} device(s)")
+    print(f"CUDA is available with {device_count} device(s)")
     for i in range(device_count):
         device_name = torch.cuda.get_device_name(i)
         print(f"  Device {i}: {device_name}")
 else:
     device = torch.device("cpu")
-    print("✗ CUDA is not available! Training will be much slower on CPU.")
+    print("CUDA is not available! Training will be much slower on CPU.")
 
 print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
