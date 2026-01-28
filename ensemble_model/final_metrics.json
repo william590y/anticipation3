@@ -1,0 +1,44 @@
+{
+  "ensemble_metrics": {
+    "val_loss": 2.3203255224227903,
+    "tf_accuracy": 0.7526948288419519,
+    "ar_accuracy": 0.01970802919708029,
+    "num_members": 4
+  },
+  "member_metrics": [
+    {
+      "member": 0,
+      "val_loss": 2.2996256923675538,
+      "tf_accuracy": 0.7403812888071524,
+      "ar_accuracy": 0.043795620437956206,
+      "seed": 42
+    },
+    {
+      "member": 1,
+      "val_loss": 2.6996893644332887,
+      "tf_accuracy": 0.7124310347967006,
+      "ar_accuracy": 0.025547445255474453,
+      "seed": 1042
+    },
+    {
+      "member": 2,
+      "val_loss": 2.5757513999938966,
+      "tf_accuracy": 0.7209344671243103,
+      "ar_accuracy": 0.022627737226277374,
+      "seed": 2042
+    },
+    {
+      "member": 3,
+      "val_loss": 2.4353167533874513,
+      "tf_accuracy": 0.7240663522642437,
+      "ar_accuracy": 0.041605839416058395,
+      "seed": 3042
+    }
+  ],
+  "mean_member_loss": 2.5025958025455477,
+  "mean_member_tf_acc": 0.7244532857481017,
+  "mean_member_ar_acc": 0.0333941605839416,
+  "loss_improvement_percent": 7.283248854543702,
+  "tf_accuracy_improvement_percent": 3.8983249368089687,
+  "ar_accuracy_improvement_percent": -40.983606557377044
+}
