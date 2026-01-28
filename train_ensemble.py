@@ -307,13 +307,21 @@ def create_ensemble_members(
     return models, seeds
 
 
-def evaluate_single_model(model, dataloader, accelerator, max_batches=50):
-    """Evaluate a single model on validation data."""
+def evaluate_single_model(model, dataloader, accelerator, max_batches=50, autoregressive_samples=10):
+    """
+    Evaluate a single model on validation data.
+    
+    Returns:
+        tuple: (avg_loss, teacher_forced_accuracy, autoregressive_accuracy)
+    """
     model.eval()
     total_loss = 0
     total_samples = 0
     correct_pitches = 0
     total_pitches = 0
+    
+    # Collect sequences for autoregressive evaluation
+    all_sequences = []
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
@@ -329,7 +337,14 @@ def evaluate_single_model(model, dataloader, accelerator, max_batches=50):
             total_loss += outputs.loss.item() * batch_size
             total_samples += batch_size
             
-            # Calculate pitch accuracy on score triplets
+            # Collect sequences for autoregressive eval
+            if len(all_sequences) < autoregressive_samples:
+                for seq in input_ids:
+                    all_sequences.append(seq)
+                    if len(all_sequences) >= autoregressive_samples:
+                        break
+            
+            # Calculate teacher-forced pitch accuracy on score triplets
             for b in range(batch_size):
                 seq_input = input_ids[b]
                 seq_labels = labels[b]
@@ -352,12 +367,77 @@ def evaluate_single_model(model, dataloader, accelerator, max_batches=50):
                     i += 3
     
     avg_loss = total_loss / total_samples if total_samples > 0 else 0
-    accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
+    teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
     
-    return avg_loss, accuracy
+    # Autoregressive evaluation
+    autoregressive_correct = 0
+    autoregressive_total = 0
+    
+    if autoregressive_samples > 0 and all_sequences:
+        for seq in all_sequences[:autoregressive_samples]:
+            # Sequence format: [ANTICIPATE, SEP, SEP, SEP, control+rest pairs (positions 4-201), alternating score/control (202+)]
+            alternating_start = 202
+            if len(seq) <= alternating_start:
+                continue
+            
+            # Start context with: ANTICIPATE + SEP SEP SEP + all control+rest pairs (positions 0-201)
+            context = seq[:alternating_start].tolist()
+            
+            # Autoregressively generate the alternating score/control section
+            pos = alternating_start
+            while pos + 5 < len(seq):
+                # Check if this is a score triplet
+                if (seq[pos] < CONTROL_OFFSET and 
+                    seq[pos+1] < CONTROL_OFFSET and 
+                    seq[pos+2] < CONTROL_OFFSET and
+                    seq[pos+2] != REST):
+                    
+                    # Generate TIME token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_time = logits.argmax().item()
+                    context.append(pred_time)
+                    
+                    # Generate DURATION token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_dur = logits.argmax().item()
+                    context.append(pred_dur)
+                    
+                    # Generate PITCH token
+                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    with torch.no_grad():
+                        outputs = model(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_pitch = logits.argmax().item()
+                    context.append(pred_pitch)
+                    
+                    # Check if predicted pitch matches ground truth
+                    true_pitch = seq[pos + 2].item()
+                    if pred_pitch == true_pitch:
+                        autoregressive_correct += 1
+                    autoregressive_total += 1
+                    
+                    pos += 3
+                    
+                    # After score triplet, add ground truth control triplet to context
+                    if pos + 2 < len(seq):
+                        context.extend([seq[pos].item(), seq[pos+1].item(), seq[pos+2].item()])
+                        pos += 3
+                else:
+                    context.append(seq[pos].item())
+                    pos += 1
+    
+    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0
+    
+    return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
 
-def plot_member_metrics(train_losses, val_losses, val_accuracies, validation_steps, member_idx, output_dir):
+def plot_member_metrics(train_losses, val_losses, val_tf_accuracies, val_ar_accuracies, validation_steps, member_idx, output_dir):
     """Plot training metrics for a single ensemble member."""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
@@ -385,29 +465,27 @@ def plot_member_metrics(train_losses, val_losses, val_accuracies, validation_ste
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
-    # Plot 3: Validation accuracy
+    # Plot 3: Teacher-forced pitch accuracy
     ax3 = axes[1, 0]
-    if validation_steps and val_accuracies:
-        ax3.plot(validation_steps, val_accuracies, color='green', marker='o')
+    if validation_steps and val_tf_accuracies:
+        ax3.plot(validation_steps, val_tf_accuracies, color='green', marker='o', label='Teacher-Forced')
     ax3.set_xlabel('Step')
     ax3.set_ylabel('Pitch Accuracy (%)')
-    ax3.set_title(f'Member {member_idx+1}: Validation Accuracy')
+    ax3.set_title(f'Member {member_idx+1}: Teacher-Forced Accuracy')
     ax3.set_ylim([0, 100])
+    ax3.legend()
     ax3.grid(True, alpha=0.3)
     
-    # Plot 4: Loss summary
+    # Plot 4: Autoregressive pitch accuracy
     ax4 = axes[1, 1]
-    if train_losses:
-        ax4.text(0.5, 0.7, f'Latest Train Loss: {train_losses[-1]:.4f}', 
-                transform=ax4.transAxes, ha='center', fontsize=12)
-    if val_losses:
-        ax4.text(0.5, 0.5, f'Latest Val Loss: {val_losses[-1]:.4f}', 
-                transform=ax4.transAxes, ha='center', fontsize=12)
-    if val_accuracies:
-        ax4.text(0.5, 0.3, f'Latest Accuracy: {val_accuracies[-1]:.2f}%', 
-                transform=ax4.transAxes, ha='center', fontsize=12)
-    ax4.set_title(f'Member {member_idx+1}: Summary')
-    ax4.axis('off')
+    if validation_steps and val_ar_accuracies:
+        ax4.plot(validation_steps, val_ar_accuracies, color='purple', marker='s', label='Autoregressive')
+    ax4.set_xlabel('Step')
+    ax4.set_ylabel('Pitch Accuracy (%)')
+    ax4.set_title(f'Member {member_idx+1}: Autoregressive Accuracy')
+    ax4.set_ylim([0, 100])
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
@@ -515,7 +593,8 @@ def train_single_member(
     completed_steps = 0
     train_losses = []
     val_losses = []
-    val_accuracies = []
+    val_tf_accuracies = []  # Teacher-forced
+    val_ar_accuracies = []  # Autoregressive
     validation_steps = []
     
     progress_bar = tqdm(total=args.max_steps_per_member, desc=f"Member {member_idx+1}", leave=True)
@@ -549,11 +628,12 @@ def train_single_member(
                     
                     # Periodic validation and plotting (every eval_steps)
                     if completed_steps % args.eval_steps == 0:
-                        val_loss, val_acc = evaluate_single_model(model, val_dataloader, accelerator)
+                        val_loss, val_tf_acc, val_ar_acc = evaluate_single_model(model, val_dataloader, accelerator)
                         val_losses.append(val_loss)
-                        val_accuracies.append(val_acc * 100)
+                        val_tf_accuracies.append(val_tf_acc * 100)
+                        val_ar_accuracies.append(val_ar_acc * 100)
                         validation_steps.append(completed_steps)
-                        print(f"  [Validation] Step {completed_steps}: Loss={val_loss:.4f}, Accuracy={val_acc*100:.2f}%")
+                        print(f"  [Validation] Step {completed_steps}: Loss={val_loss:.4f}, TF-Acc={val_tf_acc*100:.2f}%, AR-Acc={val_ar_acc*100:.2f}%")
                         model.train()
                     
                     # Save checkpoint with plot (every save_steps)
@@ -568,11 +648,12 @@ def train_single_member(
                             checkpoint_dir / "training_history.npz",
                             train_losses=np.array(train_losses),
                             val_losses=np.array(val_losses),
-                            val_accuracies=np.array(val_accuracies),
+                            val_tf_accuracies=np.array(val_tf_accuracies),
+                            val_ar_accuracies=np.array(val_ar_accuracies),
                             validation_steps=np.array(validation_steps)
                         )
-                        plot_member_metrics(train_losses, val_losses, val_accuracies, 
-                                          validation_steps, member_idx, checkpoint_dir)
+                        plot_member_metrics(train_losses, val_losses, val_tf_accuracies, 
+                                          val_ar_accuracies, validation_steps, member_idx, checkpoint_dir)
                         print(f"  [Checkpoint] Saved to {checkpoint_dir}")
                         
                         if torch.cuda.is_available():
@@ -586,12 +667,13 @@ def train_single_member(
     progress_bar.close()
     
     # Final validation
-    final_val_loss, final_val_acc = evaluate_single_model(model, val_dataloader, accelerator)
+    final_val_loss, final_tf_acc, final_ar_acc = evaluate_single_model(model, val_dataloader, accelerator)
     val_losses.append(final_val_loss)
-    val_accuracies.append(final_val_acc * 100)
+    val_tf_accuracies.append(final_tf_acc * 100)
+    val_ar_accuracies.append(final_ar_acc * 100)
     validation_steps.append(completed_steps)
     
-    print(f"  Member {member_idx+1} final: Loss={final_val_loss:.4f}, Accuracy={final_val_acc*100:.2f}%")
+    print(f"  Member {member_idx+1} final: Loss={final_val_loss:.4f}, TF-Acc={final_tf_acc*100:.2f}%, AR-Acc={final_ar_acc*100:.2f}%")
     
     # Save member checkpoint
     unwrapped_model = accelerator.unwrap_model(model)
@@ -602,21 +684,24 @@ def train_single_member(
         member_dir / "training_history.npz",
         train_losses=np.array(train_losses),
         val_losses=np.array(val_losses),
-        val_accuracies=np.array(val_accuracies),
+        val_tf_accuracies=np.array(val_tf_accuracies),
+        val_ar_accuracies=np.array(val_ar_accuracies),
         validation_steps=np.array(validation_steps),
         seed=seed
     )
     
     # Final plot for this member
-    plot_member_metrics(train_losses, val_losses, val_accuracies, 
-                       validation_steps, member_idx, member_dir)
+    plot_member_metrics(train_losses, val_losses, val_tf_accuracies, 
+                       val_ar_accuracies, validation_steps, member_idx, member_dir)
     
     metrics = {
         "final_val_loss": final_val_loss,
-        "final_val_acc": final_val_acc,
+        "final_tf_acc": final_tf_acc,
+        "final_ar_acc": final_ar_acc,
         "train_losses": train_losses,
         "val_losses": val_losses,
-        "val_accuracies": val_accuracies,
+        "val_tf_accuracies": val_tf_accuracies,
+        "val_ar_accuracies": val_ar_accuracies,
         "validation_steps": validation_steps,
         "seed": seed
     }
@@ -627,20 +712,32 @@ def train_single_member(
 def evaluate_ensemble(
     ensemble: EnsembleModel,
     dataloader: DataLoader,
-    accelerator: Accelerator,
-    max_samples: int = 500
-) -> Tuple[float, float]:
-    """Evaluate the ensemble model."""
+    device: torch.device,
+    max_batches: int = 50,
+    autoregressive_samples: int = 10
+) -> Tuple[float, float, float]:
+    """
+    Evaluate the ensemble model.
+    
+    Returns:
+        tuple: (avg_loss, teacher_forced_accuracy, autoregressive_accuracy)
+    """
     ensemble.eval()
     total_loss = 0
     total_samples = 0
     correct_pitches = 0
     total_pitches = 0
     
+    # Collect sequences for autoregressive evaluation
+    all_sequences = []
+    
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating ensemble", leave=False)):
-            if total_samples >= max_samples:
+            if batch_idx >= max_batches:
                 break
+            
+            # Move batch to device
+            batch = {k: v.to(device) for k, v in batch.items()}
             
             outputs = ensemble(**batch)
             input_ids = batch["input_ids"]
@@ -651,7 +748,14 @@ def evaluate_ensemble(
             total_loss += outputs.loss.item() * batch_size
             total_samples += batch_size
             
-            # Calculate pitch accuracy
+            # Collect sequences for autoregressive eval
+            if len(all_sequences) < autoregressive_samples:
+                for seq in input_ids:
+                    all_sequences.append(seq)
+                    if len(all_sequences) >= autoregressive_samples:
+                        break
+            
+            # Calculate teacher-forced pitch accuracy
             for b in range(batch_size):
                 seq_input = input_ids[b]
                 seq_labels = labels[b]
@@ -674,16 +778,75 @@ def evaluate_ensemble(
                     i += 3
     
     avg_loss = total_loss / total_samples if total_samples > 0 else 0
-    accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
+    teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
     
-    return avg_loss, accuracy
+    # Autoregressive evaluation
+    autoregressive_correct = 0
+    autoregressive_total = 0
+    
+    if autoregressive_samples > 0 and all_sequences:
+        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
+            alternating_start = 202
+            if len(seq) <= alternating_start:
+                continue
+            
+            context = seq[:alternating_start].tolist()
+            
+            pos = alternating_start
+            while pos + 5 < len(seq):
+                if (seq[pos] < CONTROL_OFFSET and 
+                    seq[pos+1] < CONTROL_OFFSET and 
+                    seq[pos+2] < CONTROL_OFFSET and
+                    seq[pos+2] != REST):
+                    
+                    # Generate TIME token
+                    input_tensor = torch.tensor([context]).to(device)
+                    with torch.no_grad():
+                        outputs = ensemble(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_time = logits.argmax().item()
+                    context.append(pred_time)
+                    
+                    # Generate DURATION token
+                    input_tensor = torch.tensor([context]).to(device)
+                    with torch.no_grad():
+                        outputs = ensemble(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_dur = logits.argmax().item()
+                    context.append(pred_dur)
+                    
+                    # Generate PITCH token
+                    input_tensor = torch.tensor([context]).to(device)
+                    with torch.no_grad():
+                        outputs = ensemble(input_tensor)
+                        logits = outputs.logits[0, -1, :]
+                        pred_pitch = logits.argmax().item()
+                    context.append(pred_pitch)
+                    
+                    true_pitch = seq[pos + 2].item()
+                    if pred_pitch == true_pitch:
+                        autoregressive_correct += 1
+                    autoregressive_total += 1
+                    
+                    pos += 3
+                    
+                    if pos + 2 < len(seq):
+                        context.extend([seq[pos].item(), seq[pos+1].item(), seq[pos+2].item()])
+                        pos += 3
+                else:
+                    context.append(seq[pos].item())
+                    pos += 1
+    
+    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0
+    
+    return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
 
 def plot_ensemble_metrics(all_member_metrics: List[dict], ensemble_metrics: dict, output_dir: Path):
     """Plot training metrics for all ensemble members and the combined ensemble."""
     num_members = len(all_member_metrics)
     
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
     # Plot 1: Individual member training losses
     ax1 = axes[0, 0]
@@ -713,11 +876,10 @@ def plot_ensemble_metrics(all_member_metrics: List[dict], ensemble_metrics: dict
     ax2.grid(True, alpha=0.3)
     
     # Plot 3: Loss improvement from ensembling
-    ax3 = axes[1, 0]
+    ax3 = axes[0, 2]
     ensemble_sizes = list(range(1, num_members + 1))
     cumulative_losses = []
     for k in ensemble_sizes:
-        # Simulate ensemble of first k members
         avg_loss = np.mean(member_losses[:k])
         cumulative_losses.append(avg_loss)
     ax3.plot(ensemble_sizes, cumulative_losses, 'o-', color='purple', 
@@ -730,15 +892,52 @@ def plot_ensemble_metrics(all_member_metrics: List[dict], ensemble_metrics: dict
     ax3.legend()
     ax3.grid(True, alpha=0.3)
     
-    # Plot 4: Pitch accuracy comparison
-    ax4 = axes[1, 1]
-    ax4.bar([1], [ensemble_metrics["accuracy"] * 100], color='red', alpha=0.7)
-    ax4.set_xticks([1])
-    ax4.set_xticklabels(['Ensemble'])
+    # Plot 4: Teacher-forced accuracy comparison
+    ax4 = axes[1, 0]
+    member_tf_accs = [m["final_tf_acc"] * 100 for m in all_member_metrics]
+    bars = ax4.bar(x, member_tf_accs, color='green', alpha=0.7, label='Individual Members')
+    ax4.axhline(y=ensemble_metrics["tf_accuracy"] * 100, color='red', linestyle='--', 
+                linewidth=2, label=f'Ensemble: {ensemble_metrics["tf_accuracy"]*100:.2f}%')
+    ax4.set_xlabel('Member')
     ax4.set_ylabel('Pitch Accuracy (%)')
-    ax4.set_title('Ensemble Pitch Accuracy')
+    ax4.set_title('Teacher-Forced Accuracy: Members vs Ensemble')
     ax4.set_ylim([0, 100])
+    ax4.legend()
     ax4.grid(True, alpha=0.3)
+    
+    # Plot 5: Autoregressive accuracy comparison
+    ax5 = axes[1, 1]
+    member_ar_accs = [m["final_ar_acc"] * 100 for m in all_member_metrics]
+    bars = ax5.bar(x, member_ar_accs, color='purple', alpha=0.7, label='Individual Members')
+    ax5.axhline(y=ensemble_metrics["ar_accuracy"] * 100, color='red', linestyle='--', 
+                linewidth=2, label=f'Ensemble: {ensemble_metrics["ar_accuracy"]*100:.2f}%')
+    ax5.set_xlabel('Member')
+    ax5.set_ylabel('Pitch Accuracy (%)')
+    ax5.set_title('Autoregressive Accuracy: Members vs Ensemble')
+    ax5.set_ylim([0, 100])
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # Plot 6: Summary comparison
+    ax6 = axes[1, 2]
+    categories = ['TF Accuracy', 'AR Accuracy']
+    avg_member_tf = np.mean(member_tf_accs)
+    avg_member_ar = np.mean(member_ar_accs)
+    ensemble_tf = ensemble_metrics["tf_accuracy"] * 100
+    ensemble_ar = ensemble_metrics["ar_accuracy"] * 100
+    
+    x_pos = np.arange(len(categories))
+    width = 0.35
+    
+    ax6.bar(x_pos - width/2, [avg_member_tf, avg_member_ar], width, label='Avg Member', color='steelblue', alpha=0.7)
+    ax6.bar(x_pos + width/2, [ensemble_tf, ensemble_ar], width, label='Ensemble', color='red', alpha=0.7)
+    ax6.set_ylabel('Pitch Accuracy (%)')
+    ax6.set_title('Ensemble vs Average Member')
+    ax6.set_xticks(x_pos)
+    ax6.set_xticklabels(categories)
+    ax6.set_ylim([0, 100])
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(output_dir / 'ensemble_metrics.png', dpi=150, bbox_inches='tight')
@@ -906,6 +1105,9 @@ def main():
     # Move ensemble to device
     if torch.cuda.is_available() and not args.force_cpu:
         ensemble = ensemble.cuda()
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
     
     # Create validation dataloader for ensemble evaluation
     def collate_fn(batch):
@@ -921,79 +1123,48 @@ def main():
         collate_fn=collate_fn,
     )
     
-    # Move batches to device during evaluation
-    if torch.cuda.is_available() and not args.force_cpu:
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-    
     # Evaluate ensemble
     print("\nEvaluating ensemble...")
-    ensemble.eval()
-    total_loss = 0
-    total_samples = 0
-    correct_pitches = 0
-    total_pitches = 0
-    
-    with torch.no_grad():
-        for batch in tqdm(val_dataloader, desc="Ensemble evaluation"):
-            # Move batch to device
-            batch = {k: v.to(device) for k, v in batch.items()}
-            
-            outputs = ensemble(**batch)
-            input_ids = batch["input_ids"]
-            labels = batch["labels"]
-            logits = outputs.logits
-            
-            batch_size = input_ids.size(0)
-            total_loss += outputs.loss.item() * batch_size
-            total_samples += batch_size
-            
-            # Calculate pitch accuracy
-            for b in range(batch_size):
-                seq_input = input_ids[b]
-                seq_labels = labels[b]
-                seq_logits = logits[b]
-                
-                i = 1
-                while i < len(seq_input) - 2:
-                    if (seq_input[i] < CONTROL_OFFSET and 
-                        seq_input[i+1] < CONTROL_OFFSET and 
-                        seq_input[i+2] < CONTROL_OFFSET and
-                        seq_input[i+2] != REST):
-                        
-                        note_pos = i + 2
-                        if seq_labels[note_pos] != -100:
-                            predicted_token = seq_logits[note_pos - 1].argmax().item()
-                            true_token = seq_labels[note_pos].item()
-                            if predicted_token == true_token:
-                                correct_pitches += 1
-                            total_pitches += 1
-                    i += 3
-    
-    ensemble_val_loss = total_loss / total_samples if total_samples > 0 else 0
-    ensemble_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0
+    ensemble_val_loss, ensemble_tf_acc, ensemble_ar_acc = evaluate_ensemble(
+        ensemble, val_dataloader, device
+    )
     
     ensemble_metrics = {
         "val_loss": ensemble_val_loss,
-        "accuracy": ensemble_accuracy,
+        "tf_accuracy": ensemble_tf_acc,
+        "ar_accuracy": ensemble_ar_acc,
         "num_members": args.num_members
     }
     
     print(f"\n{'='*70}")
     print("RESULTS")
     print(f"{'='*70}")
-    print(f"\nIndividual member validation losses:")
+    print(f"\nIndividual member results:")
     for i, metrics in enumerate(all_member_metrics):
-        print(f"  Member {i+1}: {metrics['final_val_loss']:.4f}")
+        print(f"  Member {i+1}: Loss={metrics['final_val_loss']:.4f}, TF-Acc={metrics['final_tf_acc']*100:.2f}%, AR-Acc={metrics['final_ar_acc']*100:.2f}%")
     
     mean_member_loss = np.mean([m["final_val_loss"] for m in all_member_metrics])
-    print(f"\nMean of individual members: {mean_member_loss:.4f}")
-    print(f"Ensemble validation loss:   {ensemble_val_loss:.4f}")
-    print(f"Ensemble pitch accuracy:    {ensemble_accuracy*100:.2f}%")
+    mean_member_tf_acc = np.mean([m["final_tf_acc"] for m in all_member_metrics])
+    mean_member_ar_acc = np.mean([m["final_ar_acc"] for m in all_member_metrics])
+    
+    print(f"\nMean of individual members:")
+    print(f"  Loss: {mean_member_loss:.4f}")
+    print(f"  Teacher-Forced Accuracy: {mean_member_tf_acc*100:.2f}%")
+    print(f"  Autoregressive Accuracy: {mean_member_ar_acc*100:.2f}%")
+    
+    print(f"\nEnsemble results:")
+    print(f"  Loss: {ensemble_val_loss:.4f}")
+    print(f"  Teacher-Forced Accuracy: {ensemble_tf_acc*100:.2f}%")
+    print(f"  Autoregressive Accuracy: {ensemble_ar_acc*100:.2f}%")
     
     improvement = (mean_member_loss - ensemble_val_loss) / mean_member_loss * 100
-    print(f"\nLoss improvement from ensembling: {improvement:.2f}%")
+    tf_improvement = (ensemble_tf_acc - mean_member_tf_acc) / mean_member_tf_acc * 100 if mean_member_tf_acc > 0 else 0
+    ar_improvement = (ensemble_ar_acc - mean_member_ar_acc) / mean_member_ar_acc * 100 if mean_member_ar_acc > 0 else 0
+    
+    print(f"\nImprovement from ensembling:")
+    print(f"  Loss reduction: {improvement:.2f}%")
+    print(f"  Teacher-Forced Accuracy gain: {tf_improvement:.2f}%")
+    print(f"  Autoregressive Accuracy gain: {ar_improvement:.2f}%")
     
     # Save ensemble
     ensemble_dir = args.output_dir / "ensemble_final"
@@ -1004,11 +1175,21 @@ def main():
         json.dump({
             "ensemble_metrics": ensemble_metrics,
             "member_metrics": [
-                {"member": i, "val_loss": m["final_val_loss"], "seed": m["seed"]}
+                {
+                    "member": i, 
+                    "val_loss": m["final_val_loss"], 
+                    "tf_accuracy": m["final_tf_acc"],
+                    "ar_accuracy": m["final_ar_acc"],
+                    "seed": m["seed"]
+                }
                 for i, m in enumerate(all_member_metrics)
             ],
             "mean_member_loss": float(mean_member_loss),
-            "improvement_percent": float(improvement)
+            "mean_member_tf_acc": float(mean_member_tf_acc),
+            "mean_member_ar_acc": float(mean_member_ar_acc),
+            "loss_improvement_percent": float(improvement),
+            "tf_accuracy_improvement_percent": float(tf_improvement),
+            "ar_accuracy_improvement_percent": float(ar_improvement)
         }, f, indent=2)
     
     # Plot metrics
