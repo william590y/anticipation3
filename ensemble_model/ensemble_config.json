@@ -1,0 +1,20 @@
+{
+  "data_file": "data/train_normalized.txt",
+  "val_file": "data/test_normalized.txt",
+  "model_name": "stanford-crfm/music-medium-800k",
+  "output_dir": "ensemble_model",
+  "num_members": 4,
+  "base_seed": 42,
+  "batch_size": 8,
+  "val_batch_size": 8,
+  "gradient_accumulation_steps": 64,
+  "learning_rate": 3e-05,
+  "weight_decay": 0.01,
+  "max_steps_per_member": 1000,
+  "save_steps": 200,
+  "eval_steps": 100,
+  "perturb_std_ms": 100.0,
+  "mask_prob": 0.5,
+  "force_cpu": false,
+  "reduce_memory": false
+}
