@@ -1,7 +1,11 @@
 # Ignore all safetensors files
 *.safetensors
+*.safetensors.filepart
 data/
 __pycache__/
 *.py[cod]
 
 ATEPP/*
+build/
+checkpoint-1000/
+checkpoint-1750/
