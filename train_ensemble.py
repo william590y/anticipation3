@@ -1002,8 +1002,8 @@ def main():
                        help='Run validation every N steps')
     
     # Augmentation arguments
-    parser.add_argument('--perturb_std_ms', type=float, default=100.0)
-    parser.add_argument('--mask_prob', type=float, default=0.5)
+    parser.add_argument('--perturb_std_ms', type=float, default=50.0)
+    parser.add_argument('--mask_prob', type=float, default=0)
     
     # Other arguments
     parser.add_argument('--force_cpu', action='store_true')
