@@ -30,6 +30,16 @@ from alignment import align_tokens2, load_annotation_file
 # Suppress music21 warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
+# Try to import Cython-optimized DTW, fall back to pure Python
+try:
+    from dtw_alignment import dtw_align as cython_dtw_align, dtw_traceback as cython_dtw_traceback
+    USE_CYTHON_DTW = True
+    print("Using Cython-optimized DTW alignment")
+except ImportError:
+    USE_CYTHON_DTW = False
+    print("Cython DTW not available, using pure Python (slower)")
+    print("To compile Cython module, run: python setup_dtw.py build_ext --inplace")
+
 # Number of parallel workers
 NUM_WORKERS = 128
 
@@ -410,9 +420,16 @@ def align_atepp_dtw(perf_midi, score_musicxml, ds=0.01, lmbda=1.0):
         if len(perf_notes) == 0 or len(score_notes) == 0:
             return []
         
-        # Run DTW alignment
-        L = dtw_align(score_features, perf_features[:, :128], ds, lmbda)
-        alignment, costs = dtw_traceback(score_features, perf_features[:, :128], L, ds, lmbda)
+        # Run DTW alignment (use Cython if available)
+        if USE_CYTHON_DTW:
+            # Cython version expects memory views
+            score_f32 = np.ascontiguousarray(score_features, dtype=np.float32)
+            perf_f32 = np.ascontiguousarray(perf_features[:, :128], dtype=np.float32)
+            L = cython_dtw_align(score_f32, perf_f32, ds, lmbda)
+            alignment, costs = cython_dtw_traceback(score_f32, perf_f32, L, ds, lmbda)
+        else:
+            L = dtw_align(score_features, perf_features[:, :128], ds, lmbda)
+            alignment, costs = dtw_traceback(score_features, perf_features[:, :128], L, ds, lmbda)
         
         # Build frame-to-frame mapping from alignment
         # alignment is list of (score_frame, perf_frame) pairs
