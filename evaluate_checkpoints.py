@@ -63,16 +63,16 @@ def find_score_start(tokens):
     # = position 202, but let's verify by finding first score triplet
     expected_start = 4 + K_PREFIX * 6  # = 202
     
-    # Verify it's a score triplet: time < CONTROL, dur < CONTROL, pitch in [NOTE_OFFSET, REST)
+    # Verify it's a score triplet: all 3 tokens < CONTROL_OFFSET, pitch != REST (matching train.py logic)
     if expected_start + 2 < len(tokens):
         t0, t1, t2 = tokens[expected_start], tokens[expected_start+1], tokens[expected_start+2]
-        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 >= NOTE_OFFSET and t2 < REST:
+        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 < CONTROL_OFFSET and t2 != REST:
             return expected_start
     
     # Fallback: search for first score triplet
     for i in range(4, len(tokens) - 2, 3):
         t0, t1, t2 = tokens[i], tokens[i+1], tokens[i+2]
-        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 >= NOTE_OFFSET and t2 < REST:
+        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 < CONTROL_OFFSET and t2 != REST:
             return i
     
     return None
@@ -106,8 +106,8 @@ def extract_components(tokens, score_start_idx):
     while pos + 2 < len(alternating):
         t0, t1, t2 = alternating[pos], alternating[pos+1], alternating[pos+2]
         
-        # Check if score triplet: time < CONTROL, dur < CONTROL, pitch in [NOTE_OFFSET, REST)
-        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 >= NOTE_OFFSET and t2 < REST:
+        # Check if score triplet: all 3 tokens < CONTROL_OFFSET, pitch != REST (matching train.py)
+        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 < CONTROL_OFFSET and t2 != REST:
             score_triplets.append([t0, t1, t2])
             pos += 3
             
@@ -153,8 +153,8 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device):
     while pos + 2 < len(gt_alternating):
         t0, t1, t2 = gt_alternating[pos], gt_alternating[pos+1], gt_alternating[pos+2]
         
-        # Check if this is a score triplet
-        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 >= NOTE_OFFSET and t2 < REST:
+        # Check if this is a score triplet: all 3 tokens < CONTROL_OFFSET, pitch != REST (matching train.py)
+        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 < CONTROL_OFFSET and t2 != REST:
             num_score_triplets += 1
             pos += 3
             
