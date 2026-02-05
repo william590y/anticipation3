@@ -20,7 +20,7 @@ from anticipation.vocab import *
 from anticipation.config import *
 from anticipation.convert import events_to_midi
 from tqdm import tqdm
-d
+
 # Configuration
 CHECKPOINTS = ['checkpoint-1000', 'checkpoint-1750']
 # Use test_combined.txt to match training data source (train_combined.txt)
