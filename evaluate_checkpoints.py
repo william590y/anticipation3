@@ -23,7 +23,7 @@ from tqdm import tqdm
 CHECKPOINTS = ['checkpoint-1000', 'checkpoint-1750']
 TEST_FILE = 'data/test_combined.txt'
 OUTPUT_BASE = 'evaluation_results'
-NUM_EXAMPLES = 100  # Randomly sample 100 sequences
+NUM_EXAMPLES = 250  # Randomly sample 100 sequences
 RANDOM_SEED = 42
 K_PREFIX = 33  # Number of control+rest pairs in prefix
 
