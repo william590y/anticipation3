@@ -1,11 +1,13 @@
 """
-Evaluate models on test_combined.txt with autoregressive score generation.
+Evaluate models on test data with autoregressive score generation.
 
 Generates MIDI files for: input performance, output score, and ground truth score.
 Also computes aggregate statistics for pitch, duration, and time token accuracy.
 
 Usage:
-    python evaluate_checkpoints.py
+    python evaluate_checkpoints.py [--test-file PATH]
+    
+    Default test file: data/test_normalized.txt (matches train.py)
 """
 import os
 import sys
@@ -21,9 +23,10 @@ from tqdm import tqdm
 
 # Configuration
 CHECKPOINTS = ['checkpoint-1000', 'checkpoint-1750']
+# Use test_combined.txt to match training data source (train_combined.txt)
 TEST_FILE = 'data/test_combined.txt'
-OUTPUT_BASE = 'evaluation_results'
-NUM_EXAMPLES = 250  # Randomly sample 100 sequences
+OUTPUT_BASE = 'evaluation_results_corrected'
+NUM_EXAMPLES = 250  # Randomly sample sequences
 RANDOM_SEED = 42
 K_PREFIX = 33  # Number of control+rest pairs in prefix
 
@@ -40,12 +43,18 @@ def load_model(checkpoint_path):
 
 
 def parse_sequence(line):
-    """Parse a sequence from the test file."""
+    """Parse a sequence from the test file.
+    
+    Matches train.py's TokenizedDataset preprocessing:
+    - Replace negative tokens with 0 (TIME_OFFSET)
+    """
     if '|' in line:
         token_str, _ = line.split('|')
         tokens = [int(t) for t in token_str.strip().split()]
     else:
         tokens = [int(t) for t in line.strip().split()]
+    # Match train.py: replace invalid negative tokens with 0
+    tokens = [max(0, t) for t in tokens]
     return tokens
 
 
@@ -133,79 +142,55 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device):
     """
     Generate score tokens autoregressively while keeping control tokens fixed.
     
-    The sequence format after score_start_idx is:
-    [score_triplet, control_triplet, score_triplet, control_triplet, ...]
-    
-    We generate score triplets token-by-token, then insert the ground truth
-    control triplets to maintain the interleaved structure.
+    This exactly matches train.py's autoregressive evaluation logic:
+    - Loop while pos + 5 < len(tokens) (need 6 tokens: score + control)
+    - If score triplet: generate 3 tokens, add GT control triplet
+    - If not score triplet: add single GT token and continue
     """
-    # Context is everything before first score triplet
-    context = tokens[:score_start_idx]
+    # Start context with everything before alternating section (positions 0 to score_start_idx-1)
+    context = list(tokens[:score_start_idx])
     
-    # Parse the ground truth alternating section to get control triplet positions
-    gt_alternating = tokens[score_start_idx:]
-    
-    # Count how many score/control pairs exist
-    num_score_triplets = 0
-    control_triplets = []
-    
-    pos = 0
-    while pos + 2 < len(gt_alternating):
-        t0, t1, t2 = gt_alternating[pos], gt_alternating[pos+1], gt_alternating[pos+2]
-        
-        # Check if this is a score triplet: all 3 tokens < CONTROL_OFFSET, pitch != REST (matching train.py)
-        if t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and t2 < CONTROL_OFFSET and t2 != REST:
-            num_score_triplets += 1
+    pos = score_start_idx
+    while pos + 5 < len(tokens):
+        # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET, pitch != REST)
+        if (tokens[pos] < CONTROL_OFFSET and 
+            tokens[pos+1] < CONTROL_OFFSET and 
+            tokens[pos+2] < CONTROL_OFFSET and
+            tokens[pos+2] != REST):
+            
+            # This is a score triplet - generate it autoregressively
+            with torch.no_grad():
+                # Generate TIME token
+                input_tensor = torch.tensor([context], device=device)
+                outputs = model(input_tensor)
+                pred_time = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_time)
+                
+                # Generate DURATION token
+                input_tensor = torch.tensor([context], device=device)
+                outputs = model(input_tensor)
+                pred_dur = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_dur)
+                
+                # Generate PITCH token
+                input_tensor = torch.tensor([context], device=device)
+                outputs = model(input_tensor)
+                pred_pitch = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_pitch)
+            
             pos += 3
             
-            # Check for following control triplet
-            if pos + 2 < len(gt_alternating):
-                c0, c1, c2 = gt_alternating[pos], gt_alternating[pos+1], gt_alternating[pos+2]
-                if c0 >= CONTROL_OFFSET:
-                    control_triplets.append([c0, c1, c2])
-                    pos += 3
-                else:
-                    break
-            else:
-                break
+            # After score triplet, add ground truth control triplet to context
+            # (We're only testing score generation, not control generation)
+            if pos + 2 < len(tokens):
+                context.extend([tokens[pos], tokens[pos+1], tokens[pos+2]])
+                pos += 3
         else:
-            break
+            # Not a score triplet, add to context and continue (matching train.py)
+            context.append(tokens[pos])
+            pos += 1
     
-    # Generate autoregressively
-    generated = list(context)
-    
-    with torch.no_grad():
-        # Process context to build initial KV cache
-        input_ids = torch.tensor([context], device=device)
-        outputs = model(input_ids, use_cache=True)
-        past_key_values = outputs.past_key_values
-        
-        for triplet_idx in range(num_score_triplets):
-            # Generate 3 score tokens
-            for token_in_triplet in range(3):
-                next_token_logits = outputs.logits[:, -1, :]
-                next_token = torch.argmax(next_token_logits, dim=-1).item()
-                generated.append(next_token)
-                
-                # Forward pass for next token
-                input_ids = torch.tensor([[next_token]], device=device)
-                outputs = model(input_ids, past_key_values=past_key_values, use_cache=True)
-                past_key_values = outputs.past_key_values
-            
-            # Insert control triplet from ground truth (if available)
-            if triplet_idx < len(control_triplets):
-                ctrl = control_triplets[triplet_idx]
-                generated.extend(ctrl)
-                
-                # Update KV cache with control tokens
-                ctrl_ids = torch.tensor([ctrl], device=device)
-                outputs = model(ctrl_ids, past_key_values=past_key_values, use_cache=True)
-                past_key_values = outputs.past_key_values
-            
-            if len(generated) >= CONTEXT_SIZE:
-                break
-    
-    return generated
+    return context
 
 
 def compute_statistics(gt_score, pred_score):
@@ -252,6 +237,75 @@ def compute_statistics(gt_score, pred_score):
         stats['overall_total'] += 1
         if gt_time == pred_time and gt_dur == pred_dur and gt_pitch == pred_pitch:
             stats['overall_correct'] += 1
+    
+    # Compute percentages
+    for key in ['time', 'dur', 'pitch', 'overall']:
+        total = stats[f'{key}_total']
+        correct = stats[f'{key}_correct']
+        stats[f'{key}_accuracy'] = 100.0 * correct / total if total > 0 else 0.0
+    
+    return stats
+
+
+def compute_statistics_by_position(gt_tokens, pred_tokens, score_start_idx):
+    """
+    Compute accuracy by comparing tokens at score triplet POSITIONS, not by parsing.
+    This matches train.py's evaluation logic exactly.
+    
+    Uses same loop termination: pos + 5 < len (need 6 tokens for score + control)
+    """
+    stats = {
+        'time_correct': 0, 'time_total': 0,
+        'dur_correct': 0, 'dur_total': 0,
+        'pitch_correct': 0, 'pitch_total': 0,
+        'overall_correct': 0, 'overall_total': 0,
+        'num_gt_notes': 0,
+        'num_pred_notes': 0,
+    }
+    
+    # Match train.py's loop exactly
+    pos = score_start_idx
+    while pos + 5 < len(gt_tokens) and pos + 5 < len(pred_tokens):
+        # Check if GT has a score triplet here (all < CONTROL_OFFSET, pitch != REST)
+        gt_t0, gt_t1, gt_t2 = gt_tokens[pos], gt_tokens[pos+1], gt_tokens[pos+2]
+        
+        if (gt_t0 < CONTROL_OFFSET and gt_t1 < CONTROL_OFFSET and 
+            gt_t2 < CONTROL_OFFSET and gt_t2 != REST):
+            # This is a score triplet position - compare with generated
+            pred_t0, pred_t1, pred_t2 = pred_tokens[pos], pred_tokens[pos+1], pred_tokens[pos+2]
+            
+            stats['num_gt_notes'] += 1
+            stats['num_pred_notes'] += 1
+            
+            # Time accuracy
+            stats['time_total'] += 1
+            if gt_t0 == pred_t0:
+                stats['time_correct'] += 1
+            
+            # Duration accuracy
+            stats['dur_total'] += 1
+            if gt_t1 == pred_t1:
+                stats['dur_correct'] += 1
+            
+            # Pitch accuracy (this is what train.py tracks)
+            stats['pitch_total'] += 1
+            if gt_t2 == pred_t2:
+                stats['pitch_correct'] += 1
+            
+            # Overall
+            stats['overall_total'] += 1
+            if gt_t0 == pred_t0 and gt_t1 == pred_t1 and gt_t2 == pred_t2:
+                stats['overall_correct'] += 1
+            
+            # Move past score triplet (3 tokens)
+            pos += 3
+            
+            # Skip control triplet (3 tokens) - matching train.py
+            if pos + 2 < len(gt_tokens):
+                pos += 3
+        else:
+            # Not a score triplet - skip one token (matching train.py's else branch)
+            pos += 1
     
     # Compute percentages
     for key in ['time', 'dur', 'pitch', 'overall']:
@@ -320,7 +374,7 @@ def evaluate_checkpoint(checkpoint_path, test_lines, original_indices, output_di
             aggregate['num_failed'] += 1
             continue
         
-        # Extract ground truth components
+        # Extract ground truth components (for MIDI saving, not accuracy)
         gt_perf, gt_score, _ = extract_components(tokens, score_start_idx)
         
         if len(gt_score) < 10:
@@ -330,16 +384,18 @@ def evaluate_checkpoint(checkpoint_path, test_lines, original_indices, output_di
         # Generate predictions
         try:
             predicted_tokens = autoregressive_generate_score(model, tokens, score_start_idx, device)
-            _, pred_score, _ = extract_components(predicted_tokens, score_start_idx)
         except Exception as e:
             print(f"  Sequence {orig_idx}: Generation failed - {e}")
             aggregate['num_failed'] += 1
             continue
         
-        # Compute statistics
-        stats = compute_statistics(gt_score, pred_score)
+        # Compute statistics by POSITION (matching train.py logic)
+        stats = compute_statistics_by_position(tokens, predicted_tokens, score_start_idx)
         stats['original_index'] = orig_idx
         per_sequence_stats.append(stats)
+        
+        # Extract predicted triplets for MIDI saving only
+        _, pred_score, _ = extract_components(predicted_tokens, score_start_idx)
         
         # Update aggregate
         for key in ['time_correct', 'time_total', 'dur_correct', 'dur_total', 
@@ -401,20 +457,23 @@ def print_summary(checkpoint_name, stats):
     print()
 
 
-def main():
+def main(test_file=None):
+    if test_file is None:
+        test_file = TEST_FILE
+    
     print("="*80)
-    print("CHECKPOINT EVALUATION ON test_combined.txt")
+    print(f"CHECKPOINT EVALUATION ON {os.path.basename(test_file)}")
     print("="*80)
     print()
     
     # Check test file exists
-    if not os.path.exists(TEST_FILE):
-        print(f"ERROR: Test file not found: {TEST_FILE}")
+    if not os.path.exists(test_file):
+        print(f"ERROR: Test file not found: {test_file}")
         sys.exit(1)
     
     # Load test data
-    print(f"Loading test data from {TEST_FILE}...")
-    with open(TEST_FILE, 'r') as f:
+    print(f"Loading test data from {test_file}...")
+    with open(test_file, 'r') as f:
         all_lines = [line.strip() for line in f if line.strip()]
     print(f"  Found {len(all_lines)} total test sequences")
     
@@ -481,4 +540,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description='Evaluate checkpoints with autoregressive generation')
+    parser.add_argument('--test-file', type=str, default=TEST_FILE, 
+                        help=f'Path to test file (default: {TEST_FILE})')
+    args = parser.parse_args()
+    main(test_file=args.test_file)
