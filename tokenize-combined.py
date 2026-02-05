@@ -460,8 +460,14 @@ def _build_sequences(normalized_matched_tuples, prefix_controls=33):
                 for triplet in perf_triplets
             ]
         
-        # Extract already-normalized score triplets
+        # Extract score triplets and normalize to start at time 0
         score_triplets = [match[2] for match in subset]
+        score_times = [triplet[0] - TIME_OFFSET for triplet in score_triplets if triplet[0] is not None]
+        score_min_time = min(score_times) if score_times else 0
+        score_triplets = [
+            [triplet[0] - score_min_time, triplet[1], triplet[2]] if triplet[0] is not None else triplet
+            for triplet in score_triplets
+        ]
         
         # Prefix: control + rest pairs
         for i in range(k):
