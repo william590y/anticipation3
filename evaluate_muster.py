@@ -792,7 +792,9 @@ def save_midi(events, filepath):
         midi_obj.save(filepath)
         return True
     except Exception as e:
-        print(f"    Warning: Could not save {filepath}: {e}")
+        import traceback
+        print(f"    Warning: Could not save {filepath}: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return False
 
 
