@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 25.9398,
+  "missing_note_rate": 26.6917,
+  "extra_note_rate": 84.9653,
+  "onset_time_error_rate": 40.0,
+  "offset_time_error_rate": 39.4872,
+  "mean_error_rate": 43.4168,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 36.1807,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.56877,
+  "hand_error_rate": 0.0,
+  "piece": "Chopin/Etudes_op_10/1/Jussow03.mid",
+  "num_gt_notes": 1297,
+  "num_pred_notes": 1313
+}
