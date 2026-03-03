@@ -245,13 +245,14 @@ def normalize_triplet_times(triplets):
 
 def triplets_to_musicxml(triplets, xml_path):
     """
-    Convert score triplets directly to single-part MusicXML (bypassing MIDI entirely).
+    Convert score triplets directly to single-part MusicXML using raw ElementTree.
     
-    Builds a music21 Score from scratch with a single Part/Voice so MUSTER's
-    HMM converter sees exactly one channel (nevts_ch.size()==1).
+    Bypasses music21's notation pipeline entirely (avoids makeBeams/makeNotation
+    crashes) and guarantees a single part/voice for MUSTER's HMM converter.
     
     Time resolution: 10ms bins (TIME_RESOLUTION=100 bins/sec).
-    We use 120 BPM so 1 quarter = 0.5s = 50 bins.
+    We use 120 BPM so 1 quarter = 0.5s = 50 bins.  divisions=50 means each
+    MusicXML <duration> unit is 1 bin = 10ms.
     
     Args:
         triplets: list of [time_token, dur_token, pitch_token] (with vocab offsets)
@@ -261,69 +262,142 @@ def triplets_to_musicxml(triplets, xml_path):
         True if successful, False otherwise
     """
     try:
-        from fractions import Fraction
-        from xml.etree import ElementTree as ET
-        from music21.musicxml.m21ToXml import ScoreExporter
+        from xml.etree.ElementTree import Element, SubElement, ElementTree, indent
         
-        BINS_PER_SECOND = TIME_RESOLUTION        # 100
-        BPM = 120
-        BINS_PER_QUARTER = int(BINS_PER_SECOND * 60 / BPM)  # 50
+        BINS_PER_SECOND  = TIME_RESOLUTION   # 100
+        BPM              = 120
+        BINS_PER_QUARTER = BINS_PER_SECOND * 60 // BPM  # 50
+        DIVISIONS        = BINS_PER_QUARTER              # 50 units per quarter note
+        BINS_PER_MEASURE = BINS_PER_QUARTER * 4          # 200 bins per 4/4 bar
         
-        # Decode triplets to (onset_bins, dur_bins, midi_pitch)
+        # Decode tokens
         notes = []
         for t in triplets:
-            onset_bins = t[0] - TIME_OFFSET
-            dur_bins   = t[1] - DUR_OFFSET
-            pitch      = t[2] - NOTE_OFFSET
+            onset = t[0] - TIME_OFFSET
+            dur   = t[1] - DUR_OFFSET
+            pitch = t[2] - NOTE_OFFSET
             if pitch < 0 or pitch > 127:
                 continue
-            if dur_bins <= 0:
-                dur_bins = 1
-            notes.append((onset_bins, dur_bins, pitch))
+            if dur <= 0:
+                dur = 1
+            notes.append((onset, dur, pitch))
         
         if not notes:
             return False
         
-        # Sort by onset
         notes.sort(key=lambda x: x[0])
+        total_bins = max(onset + dur for onset, dur, _ in notes)
+        num_measures = max(1, (total_bins + BINS_PER_MEASURE - 1) // BINS_PER_MEASURE)
         
-        # Build music21 score with a single part and voice
-        s = music21.stream.Score()
-        s.insert(0, music21.tempo.MetronomeMark(number=BPM))
+        # Pitch helpers
+        MIDI_TO_STEP  = ['C','D','E','F','G','A','B']
+        MIDI_TO_ALTER = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0]   # sharps
+        SEMITONES_IN_OCTAVE = 12
+
+        def midi_to_pitch_elements(parent, midi):
+            pitch_el  = SubElement(parent, 'pitch')
+            pc        = midi % SEMITONES_IN_OCTAVE
+            octave    = midi // SEMITONES_IN_OCTAVE - 1
+            # Note name table (with sharps)
+            names  = ['C','C','D','D','E','F','F','G','G','A','A','B']
+            alters = [ 0,  1,  0,  1,  0,  0,  1,  0,  1,  0,  1,  0]
+            SubElement(pitch_el, 'step').text    = names[pc]
+            if alters[pc]:
+                SubElement(pitch_el, 'alter').text = '1'
+            SubElement(pitch_el, 'octave').text  = str(octave)
         
-        part = music21.stream.Part()
-        part.insert(0, music21.instrument.Piano())
+        # Duration-to-type mapping (in bins at DIVISIONS=50 per quarter)
+        def dur_to_type(dur_bins):
+            """Return closest MusicXML note type (no dots)."""
+            quarter = DIVISIONS
+            mapping = [
+                (quarter * 8,  'breve'),
+                (quarter * 4,  'whole'),
+                (quarter * 2,  'half'),
+                (quarter,      'quarter'),
+                (quarter // 2, 'eighth'),
+                (quarter // 4, '16th'),
+                (quarter // 8, '32nd'),
+            ]
+            best_type, best_dur = 'quarter', quarter
+            best_dist = abs(dur_bins - quarter)
+            for d, t in mapping:
+                if d > 0 and abs(dur_bins - d) < best_dist:
+                    best_dist = abs(dur_bins - d)
+                    best_type = t
+                    best_dur  = d
+            # Clamp duration to match type (MUSTER needs consistent dur/type)
+            return best_type, best_dur
         
-        # Insert notes at offset in quarter notes
-        for onset_bins, dur_bins, pitch in notes:
-            onset_quarters = Fraction(onset_bins, BINS_PER_QUARTER)
-            dur_quarters   = Fraction(dur_bins,   BINS_PER_QUARTER)
+        # Build XML
+        root = Element('score-partwise', version='3.0')
+        
+        # Part list
+        part_list = SubElement(root, 'part-list')
+        sp = SubElement(part_list, 'score-part', id='P1')
+        SubElement(sp, 'part-name').text = 'Piano'
+        
+        # Part
+        part_el = SubElement(root, 'part', id='P1')
+        
+        # Group notes by measure
+        for m_idx in range(num_measures):
+            m_start = m_idx * BINS_PER_MEASURE
+            m_end   = m_start + BINS_PER_MEASURE
             
-            n = music21.note.Note()
-            n.pitch.midi = pitch
-            n.quarterLength = float(dur_quarters)
-            if n.quarterLength <= 0:
-                n.quarterLength = 0.25
+            measure_el = SubElement(part_el, 'measure', number=str(m_idx + 1))
             
-            part.insert(float(onset_quarters), n)
+            # Attributes on first measure
+            if m_idx == 0:
+                attrs = SubElement(measure_el, 'attributes')
+                SubElement(attrs, 'divisions').text = str(DIVISIONS)
+                key_el = SubElement(attrs, 'key')
+                SubElement(key_el, 'fifths').text = '0'
+                time_el = SubElement(attrs, 'time')
+                SubElement(time_el, 'beats').text = '4'
+                SubElement(time_el, 'beat-type').text = '4'
+                clef_el = SubElement(attrs, 'clef')
+                SubElement(clef_el, 'sign').text = 'G'
+                SubElement(clef_el, 'line').text  = '2'
+            
+            # Collect notes in this measure
+            m_notes = [(o, d, p) for o, d, p in notes if o >= m_start and o < m_end]
+            
+            # Emit notes sorted by onset; use <chord> for simultaneous notes
+            prev_onset = None
+            for onset, dur, pitch in m_notes:
+                note_el = SubElement(measure_el, 'note')
+                # Chord tag if same onset as previous
+                if prev_onset is not None and onset == prev_onset:
+                    SubElement(note_el, 'chord')
+                midi_to_pitch_elements(note_el, pitch)
+                
+                note_type, clamped_dur = dur_to_type(dur)
+                SubElement(note_el, 'duration').text = str(clamped_dur)
+                SubElement(note_el, 'type').text = note_type
+                prev_onset = onset
+            
+            # If no notes, emit a whole rest so the measure is not empty
+            if not m_notes:
+                rest_el = SubElement(measure_el, 'note')
+                SubElement(rest_el, 'rest')
+                SubElement(rest_el, 'duration').text = str(DIVISIONS * 4)
+                SubElement(rest_el, 'type').text = 'whole'
         
-        part.makeRests(fillGaps=True, inPlace=True)
-        part.makeMeasures(inPlace=True)
-        part.makeNotation(inPlace=True, cautionaryNotImmediateRepeat=False)
+        # Write to file
+        tree = ElementTree(root)
+        try:
+            indent(tree, space='  ')   # Python 3.9+
+        except TypeError:
+            pass   # older Python — no pretty-printing, still valid XML
         
-        s.insert(0, part)
-        
-        # Export to MusicXML 3.0
-        exporter = ScoreExporter(s)
-        xml_root = exporter.parse()
-        xml_root.set('version', '3.0')
-        
-        xml_str  = b'<?xml version="1.0" encoding="UTF-8"?>\n'
-        xml_str += b'<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
-        xml_str += ET.tostring(xml_root, encoding='unicode').encode('utf-8')
-        
+        header = (b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                  b'<!DOCTYPE score-partwise PUBLIC '
+                  b'"-//Recordare//DTD MusicXML 3.0 Partwise//EN" '
+                  b'"http://www.musicxml.org/dtds/partwise.dtd">\n')
         with open(xml_path, 'wb') as f:
-            f.write(xml_str)
+            f.write(header)
+            tree.write(f, encoding='utf-8', xml_declaration=False)
         
         return True
     except Exception as e:
