@@ -1,0 +1,19 @@
+{
+  "pitch_error_rate": 10.4839,
+  "missing_note_rate": 25.0,
+  "extra_note_rate": 32.1168,
+  "onset_time_error_rate": 66.6667,
+  "offset_time_error_rate": 29.0323,
+  "mean_error_rate": 32.6599,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 27.2166,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.46074,
+  "hand_error_rate": 0.0,
+  "original_index": 580462,
+  "num_gt_notes": 137,
+  "num_pred_notes": 137,
+  "beam_log_prob": -83.66837069049808
+}
