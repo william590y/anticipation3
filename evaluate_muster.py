@@ -187,43 +187,87 @@ def extract_components(tokens, score_start_idx):
     return performance, score_triplets
 
 
-def autoregressive_generate_score(model, tokens, score_start_idx, device):
-    """Generate score tokens autoregressively while keeping control tokens fixed."""
+def autoregressive_generate_score(model, tokens, score_start_idx, device, forced=False, forced_max_attempts=1000):
+    """
+    Generate score tokens autoregressively while keeping control tokens fixed.
+
+    Args:
+        model: the language model
+        tokens: ground-truth token sequence
+        score_start_idx: position where score triplets begin
+        device: torch device
+        forced: if True, sample from the model distribution until the GT token is
+                drawn (oracle / "forced" decoding).  Guarantees the context stays
+                on the correct path so MUSTER receives a perfect score sequence.
+        forced_max_attempts: give up sampling and use the GT token directly after
+                             this many attempts (avoids infinite loops).
+
+    Returns:
+        predicted token list  (identical to GT for score positions when forced=True)
+        forced_stats dict (only populated when forced=True):
+            'total_draws': total samples drawn across all tokens
+            'tokens_forced': how many tokens hit max_attempts and were injected as GT
+    """
     context = list(tokens[:score_start_idx])
-    
+    forced_stats = {'total_draws': 0, 'tokens_forced': 0}
+
     pos = score_start_idx
     while pos + 5 < len(tokens):
-        if (tokens[pos] < CONTROL_OFFSET and 
-            tokens[pos+1] < CONTROL_OFFSET and 
+        if (tokens[pos] < CONTROL_OFFSET and
+            tokens[pos+1] < CONTROL_OFFSET and
             tokens[pos+2] < CONTROL_OFFSET and
             tokens[pos+2] != REST):
-            
-            with torch.no_grad():
-                input_tensor = torch.tensor([context], device=device)
-                outputs = model(input_tensor)
-                pred_time = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_time)
-                
-                input_tensor = torch.tensor([context], device=device)
-                outputs = model(input_tensor)
-                pred_dur = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_dur)
-                
-                input_tensor = torch.tensor([context], device=device)
-                outputs = model(input_tensor)
-                pred_pitch = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_pitch)
-            
+
+            if forced:
+                # Forced / oracle decoding: sample until we hit the GT token
+                for slot, gt_tok in enumerate([tokens[pos], tokens[pos+1], tokens[pos+2]]):
+                    with torch.no_grad():
+                        input_tensor = torch.tensor([context], device=device)
+                        logits = model(input_tensor).logits[0, -1, :]
+                        probs  = torch.softmax(logits, dim=-1)
+
+                    attempts = 0
+                    sampled = torch.multinomial(probs, 1).item()
+                    forced_stats['total_draws'] += 1
+                    while sampled != gt_tok and attempts < forced_max_attempts:
+                        sampled = torch.multinomial(probs, 1).item()
+                        forced_stats['total_draws'] += 1
+                        attempts += 1
+
+                    if sampled != gt_tok:
+                        # Exceeded budget — inject GT token directly
+                        sampled = gt_tok
+                        forced_stats['tokens_forced'] += 1
+
+                    context.append(sampled)
+            else:
+                with torch.no_grad():
+                    input_tensor = torch.tensor([context], device=device)
+                    outputs = model(input_tensor)
+                    pred_time = outputs.logits[0, -1, :].argmax().item()
+                    context.append(pred_time)
+
+                    input_tensor = torch.tensor([context], device=device)
+                    outputs = model(input_tensor)
+                    pred_dur = outputs.logits[0, -1, :].argmax().item()
+                    context.append(pred_dur)
+
+                    input_tensor = torch.tensor([context], device=device)
+                    outputs = model(input_tensor)
+                    pred_pitch = outputs.logits[0, -1, :].argmax().item()
+                    context.append(pred_pitch)
+
             pos += 3
-            
+
+            # Add ground truth control triplet
             if pos + 2 < len(tokens):
                 context.extend([tokens[pos], tokens[pos+1], tokens[pos+2]])
                 pos += 3
         else:
             context.append(tokens[pos])
             pos += 1
-    
-    return context
+
+    return context, forced_stats
 
 
 def triplets_to_events(triplets):
@@ -609,10 +653,15 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         return None
 
 
-def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, output_dir):
+def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, output_dir,
+                               forced=False, forced_max_attempts=1000):
     """
     Evaluate a checkpoint using MUSTER metrics.
-    
+
+    Args:
+        forced: use oracle/forced decoding (sample until GT token drawn).
+        forced_max_attempts: max samples per token before injecting GT directly.
+
     Returns aggregate MUSTER statistics.
     """
     model, device = load_model(checkpoint_path)
@@ -630,6 +679,9 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         'voice_error_rate': [],
         'mean_error_rate_with_voice': []
     }
+    if forced:
+        aggregate_metrics['forced_total_draws']   = []
+        aggregate_metrics['forced_tokens_forced'] = []
     
     per_sequence_metrics = []
     num_successful = 0
@@ -655,7 +707,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         
         # Generate predictions
         try:
-            predicted_tokens = autoregressive_generate_score(model, tokens, score_start_idx, device)
+            predicted_tokens, forced_stats = autoregressive_generate_score(
+                model, tokens, score_start_idx, device,
+                forced=forced, forced_max_attempts=forced_max_attempts
+            )
         except Exception as e:
             print(f"  Sequence {orig_idx}: Generation failed - {e}")
             num_failed += 1
@@ -708,12 +763,18 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
             metrics['original_index'] = orig_idx
             metrics['num_gt_notes'] = len(gt_score)
             metrics['num_pred_notes'] = len(pred_score)
+            if forced:
+                metrics['forced_total_draws']  = forced_stats['total_draws']
+                metrics['forced_tokens_forced'] = forced_stats['tokens_forced']
             per_sequence_metrics.append(metrics)
             
             # Update aggregates
             for key in aggregate_metrics:
                 if key in metrics:
                     aggregate_metrics[key].append(metrics[key])
+            if forced:
+                aggregate_metrics['forced_total_draws'].append(forced_stats['total_draws'])
+                aggregate_metrics['forced_tokens_forced'].append(forced_stats['tokens_forced'])
             
             num_successful += 1
             
@@ -774,10 +835,18 @@ def print_muster_summary(checkpoint_name, stats):
         std_key = f'{key}_std'
         if mean_key in stats:
             print(f"  {name:<30} {stats[mean_key]:>8.2f}% (±{stats[std_key]:.2f})")
+    
+    # Forced decoding stats
+    if 'forced_total_draws_mean' in stats:
+        print()
+        print("  Forced Decoding Stats:")
+        print("  " + "-"*50)
+        print(f"  {'Avg draws per sequence':<30} {stats['forced_total_draws_mean']:>8.1f}")
+        print(f"  {'Avg tokens forced (GT injected)':<30} {stats['forced_tokens_forced_mean']:>8.1f}")
     print()
 
 
-def main(checkpoint=None, test_file=None, num_examples=None):
+def main(checkpoint=None, test_file=None, num_examples=None, forced=False, forced_max_attempts=1000):
     if checkpoint is None:
         checkpoint = DEFAULT_CHECKPOINT
     if test_file is None:
@@ -786,10 +855,12 @@ def main(checkpoint=None, test_file=None, num_examples=None):
         num_examples = NUM_EXAMPLES
     
     print("="*80)
-    print("MUSTER EVALUATION")
+    print("MUSTER EVALUATION" + (" [FORCED/ORACLE DECODING]" if forced else ""))
     print("="*80)
     print(f"Checkpoint: {checkpoint}")
     print(f"Test file: {test_file}")
+    if forced:
+        print(f"Forced decoding: ON (max {forced_max_attempts} samples per token)")
     print()
     
     # Check MUSTER installation
@@ -823,8 +894,9 @@ def main(checkpoint=None, test_file=None, num_examples=None):
         sampled_indices = list(range(len(all_lines)))
     print()
     
-    # Create output directory
-    output_dir = Path(OUTPUT_BASE) / checkpoint
+    # Create output directory (separate subdir for forced runs)
+    subdir = f'{checkpoint}_forced' if forced else checkpoint
+    output_dir = Path(OUTPUT_BASE) / subdir
     os.makedirs(output_dir, exist_ok=True)
     
     # Save sampled indices
@@ -836,7 +908,10 @@ def main(checkpoint=None, test_file=None, num_examples=None):
         }, f, indent=2)
     
     # Evaluate
-    stats = evaluate_checkpoint_muster(checkpoint, test_lines, sampled_indices, str(output_dir))
+    stats = evaluate_checkpoint_muster(
+        checkpoint, test_lines, sampled_indices, str(output_dir),
+        forced=forced, forced_max_attempts=forced_max_attempts
+    )
     
     # Print summary
     print_muster_summary(checkpoint, stats)
@@ -861,6 +936,12 @@ if __name__ == '__main__':
                         help=f'Path to test file (default: {TEST_FILE})')
     parser.add_argument('--num-examples', type=int, default=NUM_EXAMPLES,
                         help=f'Number of examples to evaluate (default: {NUM_EXAMPLES})')
+    parser.add_argument('--forced', action='store_true',
+                        help='Forced/oracle decoding: sample from model until GT token is drawn, '
+                             'guaranteeing the model stays on the correct path')
+    parser.add_argument('--forced-max-attempts', type=int, default=1000,
+                        help='Max samples per token before injecting GT directly (default: 1000)')
     args = parser.parse_args()
     
-    main(checkpoint=args.checkpoint, test_file=args.test_file, num_examples=args.num_examples)
+    main(checkpoint=args.checkpoint, test_file=args.test_file, num_examples=args.num_examples,
+         forced=args.forced, forced_max_attempts=args.forced_max_attempts)
