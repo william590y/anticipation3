@@ -32,7 +32,7 @@ from anticipation.config import *
 from anticipation.convert import events_to_midi
 from tqdm import tqdm
 import music21
-from music21 import converter, midi as m21midi
+from music21 import converter
 
 # Configuration
 DEFAULT_CHECKPOINT = 'checkpoint-1750'
@@ -243,61 +243,82 @@ def normalize_triplet_times(triplets):
     return [[t[0] - min_time, t[1], t[2]] for t in triplets]
 
 
-def midi_to_musicxml(midi_path, xml_path):
+def triplets_to_musicxml(triplets, xml_path):
     """
-    Convert MIDI file to MusicXML format using music21.
+    Convert score triplets directly to single-part MusicXML (bypassing MIDI entirely).
     
-    Creates a simplified single-part MusicXML compatible with MUSTER's parser.
-    MUSTER expects single-channel piano scores.
+    Builds a music21 Score from scratch with a single Part/Voice so MUSTER's
+    HMM converter sees exactly one channel (nevts_ch.size()==1).
+    
+    Time resolution: 10ms bins (TIME_RESOLUTION=100 bins/sec).
+    We use 120 BPM so 1 quarter = 0.5s = 50 bins.
     
     Args:
-        midi_path: Path to input MIDI file
-        xml_path: Path to output MusicXML file
+        triplets: list of [time_token, dur_token, pitch_token] (with vocab offsets)
+        xml_path: output MusicXML path
         
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Load MIDI file
-        score = converter.parse(midi_path)
-        
-        # Flatten all parts into a single part for MUSTER compatibility
-        # MUSTER's HMM converter expects nevts_ch.size()==1 (single channel)
-        if len(score.parts) > 1:
-            # Merge all parts into one
-            merged_part = score.parts[0]
-            for part in score.parts[1:]:
-                for elem in part.recurse().notesAndRests:
-                    merged_part.insert(elem.offset, elem)
-            # Create new score with single part
-            new_score = music21.stream.Score()
-            new_score.insert(0, merged_part)
-            score = new_score
-        
-        # Quantize to improve alignment and make valid MusicXML
-        score = score.quantize(quarterLengthDivisors=[4, 3, 2])
-        
-        # Force the score to use simpler note values
-        for part in score.parts:
-            part.makeNotation(inPlace=True, cautionaryNotImmediateRepeat=False)
-        
-        # Write to MusicXML with specific format
+        from fractions import Fraction
+        from xml.etree import ElementTree as ET
         from music21.musicxml.m21ToXml import ScoreExporter
         
-        # Create exporter with MusicXML 3.0
-        exporter = ScoreExporter(score)
+        BINS_PER_SECOND = TIME_RESOLUTION        # 100
+        BPM = 120
+        BINS_PER_QUARTER = int(BINS_PER_SECOND * 60 / BPM)  # 50
         
-        # Get the XML element and modify DOCTYPE to use 3.0
+        # Decode triplets to (onset_bins, dur_bins, midi_pitch)
+        notes = []
+        for t in triplets:
+            onset_bins = t[0] - TIME_OFFSET
+            dur_bins   = t[1] - DUR_OFFSET
+            pitch      = t[2] - NOTE_OFFSET
+            if pitch < 0 or pitch > 127:
+                continue
+            if dur_bins <= 0:
+                dur_bins = 1
+            notes.append((onset_bins, dur_bins, pitch))
+        
+        if not notes:
+            return False
+        
+        # Sort by onset
+        notes.sort(key=lambda x: x[0])
+        
+        # Build music21 score with a single part and voice
+        s = music21.stream.Score()
+        s.insert(0, music21.tempo.MetronomeMark(number=BPM))
+        
+        part = music21.stream.Part()
+        part.insert(0, music21.instrument.Piano())
+        
+        # Insert notes at offset in quarter notes
+        for onset_bins, dur_bins, pitch in notes:
+            onset_quarters = Fraction(onset_bins, BINS_PER_QUARTER)
+            dur_quarters   = Fraction(dur_bins,   BINS_PER_QUARTER)
+            
+            n = music21.note.Note()
+            n.pitch.midi = pitch
+            n.quarterLength = float(dur_quarters)
+            if n.quarterLength <= 0:
+                n.quarterLength = 0.25
+            
+            part.insert(float(onset_quarters), n)
+        
+        part.makeRests(fillGaps=True, inPlace=True)
+        part.makeMeasures(inPlace=True)
+        part.makeNotation(inPlace=True, cautionaryNotImmediateRepeat=False)
+        
+        s.insert(0, part)
+        
+        # Export to MusicXML 3.0
+        exporter = ScoreExporter(s)
         xml_root = exporter.parse()
-        
-        # Write manually with MusicXML 3.0 DOCTYPE
-        from xml.etree import ElementTree as ET
-        
-        # Set version to 3.0
         xml_root.set('version', '3.0')
         
-        # Write with proper DOCTYPE
-        xml_str = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        xml_str  = b'<?xml version="1.0" encoding="UTF-8"?>\n'
         xml_str += b'<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
         xml_str += ET.tostring(xml_root, encoding='unicode').encode('utf-8')
         
@@ -306,9 +327,32 @@ def midi_to_musicxml(midi_path, xml_path):
         
         return True
     except Exception as e:
-        print(f"    Warning: Could not convert {midi_path} to MusicXML: {e}")
+        print(f"    Warning: Could not create MusicXML from triplets: {e}")
         import traceback
         traceback.print_exc()
+        return False
+
+
+def midi_to_musicxml(midi_path, xml_path):
+    """Legacy MIDI-based conversion (kept for reference but not used)."""
+    try:
+        score = converter.parse(midi_path)
+        score = score.quantize(quarterLengthDivisors=[4, 3, 2])
+        for part in score.parts:
+            part.makeNotation(inPlace=True, cautionaryNotImmediateRepeat=False)
+        from music21.musicxml.m21ToXml import ScoreExporter
+        from xml.etree import ElementTree as ET
+        exporter = ScoreExporter(score)
+        xml_root = exporter.parse()
+        xml_root.set('version', '3.0')
+        xml_str  = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        xml_str += b'<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n'
+        xml_str += ET.tostring(xml_root, encoding='unicode').encode('utf-8')
+        with open(xml_path, 'wb') as f:
+            f.write(xml_str)
+        return True
+    except Exception as e:
+        print(f"    Warning: Could not convert {midi_path} to MusicXML: {e}")
         return False
         import traceback
         traceback.print_exc()
@@ -555,32 +599,23 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         seq_dir = Path(output_dir) / f'sequence_{orig_idx:04d}'
         os.makedirs(seq_dir, exist_ok=True)
         
-        # Normalize and save MIDI files
-        gt_score_normalized = normalize_triplet_times(gt_score)
-        gt_score_events = triplets_to_events(gt_score_normalized)
-        gt_midi_path = seq_dir / 'ground_truth_score.mid'
-        
+        # Normalize triplets (shift onset to start at 0)
+        gt_score_normalized  = normalize_triplet_times(gt_score)
         pred_score_normalized = normalize_triplet_times(pred_score)
-        pred_score_events = triplets_to_events(pred_score_normalized)
-        pred_midi_path = seq_dir / 'output_score.mid'
         
-        if not save_midi(gt_score_events, str(gt_midi_path)):
-            num_failed += 1
-            continue
-            
-        if not save_midi(pred_score_events, str(pred_midi_path)):
-            num_failed += 1
-            continue
+        # Save MIDI for reference
+        save_midi(triplets_to_events(gt_score_normalized),   str(seq_dir / 'ground_truth_score.mid'))
+        save_midi(triplets_to_events(pred_score_normalized), str(seq_dir / 'output_score.mid'))
         
-        # Convert to MusicXML
-        gt_xml_path = seq_dir / 'ground_truth_score.xml'
+        # Convert DIRECTLY from triplets to single-part MusicXML (bypasses MIDI
+        # multi-channel issue that causes MUSTER's HMM assertion to fail)
+        gt_xml_path   = seq_dir / 'ground_truth_score.xml'
         pred_xml_path = seq_dir / 'output_score.xml'
         
-        if not midi_to_musicxml(str(gt_midi_path), str(gt_xml_path)):
+        if not triplets_to_musicxml(gt_score_normalized, str(gt_xml_path)):
             num_failed += 1
             continue
-            
-        if not midi_to_musicxml(str(pred_midi_path), str(pred_xml_path)):
+        if not triplets_to_musicxml(pred_score_normalized, str(pred_xml_path)):
             num_failed += 1
             continue
         
