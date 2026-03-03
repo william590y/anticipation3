@@ -442,9 +442,11 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
         """
         Re-normalize time tokens in the kept alternating section so they
         start at t=0, matching training-time windows.
+        Returns (new_alt, time_shift_in_bins) so the caller can accumulate
+        the absolute time offset for pred_score_triplets.
         """
         if not alt:
-            return alt
+            return alt, 0
         raw_times = []
         for i in range(0, len(alt) - 2, 6):
             if alt[i] < CONTROL_OFFSET:
@@ -452,19 +454,20 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
             if i + 3 < len(alt) and alt[i + 3] >= CONTROL_OFFSET:
                 raw_times.append(alt[i + 3] - ATIME_OFFSET)
         if not raw_times:
-            return alt
+            return alt, 0
         time_shift = min(raw_times)
         if time_shift <= 0:
-            return alt
+            return alt, 0
         new_alt = list(alt)
         for i in range(0, len(new_alt) - 2, 6):
             if new_alt[i] < CONTROL_OFFSET:
                 new_alt[i] = max(TIME_OFFSET, new_alt[i] - time_shift)
             if i + 3 < len(new_alt) and new_alt[i + 3] >= CONTROL_OFFSET:
                 new_alt[i + 3] = max(ATIME_OFFSET, new_alt[i + 3] - time_shift)
-        return new_alt
+        return new_alt, time_shift
 
     pos = score_start_idx
+    time_offset = 0   # cumulative bins subtracted by renormalization across slides
     while pos + 2 < len(full_gt_tokens):
         t0, t1, t2 = full_gt_tokens[pos], full_gt_tokens[pos+1], full_gt_tokens[pos+2]
         is_score = (t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and
@@ -500,7 +503,8 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                     past        = None
                     next_logits = None
                     stats['positions_forced'] += 1
-                pred_score_triplets.append([context[-3], context[-2], context[-1]])
+                pred_score_triplets.append([context[-3] + time_offset,
+                                            context[-2], context[-1]])
 
             elif beam_size > 1:
                 # Beam search: each beam needs its own cache — run without KV
@@ -522,7 +526,8 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                     beams = candidates[:beam_size]
                 best_ctx, best_lp = max(beams, key=lambda x: x[1])
                 stats['beam_log_prob'] += best_lp
-                pred_score_triplets.append([best_ctx[-3], best_ctx[-2], best_ctx[-1]])
+                pred_score_triplets.append([best_ctx[-3] + time_offset,
+                                            best_ctx[-2], best_ctx[-1]])
                 # Sync context; cache diverged across beams — invalidate
                 context[:]  = best_ctx
                 past        = None
@@ -532,7 +537,7 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                 tok_t = _greedy_next()
                 tok_d = _greedy_next()
                 tok_p = _greedy_next()
-                pred_score_triplets.append([tok_t, tok_d, tok_p])
+                pred_score_triplets.append([tok_t + time_offset, tok_d, tok_p])
 
             pos += 3
 
@@ -559,15 +564,12 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
             alt  = context[score_start_idx:]
             half = (len(alt) // 2) // 6 * 6   # align to score+ctrl pair boundary
             if half > 0:
-                remaining = _renormalize_alt_times(alt[half:])
+                remaining, time_shift = _renormalize_alt_times(alt[half:])
                 context   = header + remaining
+                time_offset += time_shift   # keep pred_score_triplets on absolute timeline
 
                 # Renormalization changed the token values in the kept section,
-                # so the sliced KV cache (computed from the old, large-time tokens)
-                # would be inconsistent with the new context.  Invalidate it and
-                # let _prime() rebuild on the next forward pass.
-                # (Cost: one full O(context_len) forward pass per slide, which is
-                # negligible — slides happen only a handful of times per piece.)
+                # so the sliced KV cache would be inconsistent — invalidate it.
                 past        = None
                 next_logits = None
 
