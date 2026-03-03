@@ -189,7 +189,7 @@ def extract_components(tokens, score_start_idx):
 
 def autoregressive_generate_score(model, tokens, score_start_idx, device,
                                    forced=False, forced_max_attempts=1000,
-                                   beam_size=1):
+                                   beam_size=1, temperature=0.0):
     """
     Generate score tokens autoregressively while keeping control tokens fixed.
 
@@ -209,6 +209,11 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device,
         time/dur are kept and only the GT pitch is injected.
 
     default  – greedy (argmax) decoding at each score token.
+
+    temperature  – when > 0, the greedy path samples from softmax(logits/T)
+        instead of taking the argmax.  Also applied in forced mode (changes
+        the sampling distribution) and beam search (rescales log-probs).
+        temperature=0 (default) always uses argmax/pure beam.
 
     Returns:
         (predicted_token_list, stats_dict)
@@ -242,8 +247,10 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device,
                     for ctx, lp in beams:
                         with torch.no_grad():
                             inp = torch.tensor([ctx], device=device)
-                            log_probs = torch.log_softmax(
-                                model(inp).logits[0, -1, :], dim=-1)
+                            logits = model(inp).logits[0, -1, :]
+                            if temperature > 0:
+                                logits = logits / temperature
+                            log_probs = torch.log_softmax(logits, dim=-1)
                         top_lps, top_toks = torch.topk(log_probs, beam_size)
                         for tok, tlp in zip(top_toks.tolist(), top_lps.tolist()):
                             candidates.append((ctx + [tok], lp + tlp))
@@ -285,20 +292,16 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device,
                     stats['total_triplet_attempts'] += 1
                     ctx_before = list(context)      # save for rollback
                     with torch.no_grad():
-                        inp = torch.tensor([context], device=device)
-                        tok_t = torch.multinomial(
-                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
-                        context.append(tok_t)
+                        def _sample(ctx):
+                            inp = torch.tensor([ctx], device=device)
+                            logits = model(inp).logits[0, -1, :]
+                            if temperature > 0:
+                                logits = logits / temperature
+                            return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
 
-                        inp = torch.tensor([context], device=device)
-                        tok_d = torch.multinomial(
-                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
-                        context.append(tok_d)
-
-                        inp = torch.tensor([context], device=device)
-                        tok_p = torch.multinomial(
-                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
-                        context.append(tok_p)
+                        tok_t = _sample(context); context.append(tok_t)
+                        tok_d = _sample(context); context.append(tok_d)
+                        tok_p = _sample(context); context.append(tok_p)
 
                     if tok_p == gt_pitch:
                         matched = True
@@ -310,16 +313,19 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device,
                     context[-1] = gt_pitch
                     stats['positions_forced'] += 1
             else:
-                # Greedy decoding
+                # Greedy / temperature-sampled decoding
                 with torch.no_grad():
-                    inp = torch.tensor([context], device=device)
-                    context.append(model(inp).logits[0, -1, :].argmax().item())
+                    def _decode(ctx):
+                        inp = torch.tensor([ctx], device=device)
+                        logits = model(inp).logits[0, -1, :]
+                        if temperature > 0:
+                            logits = logits / temperature
+                            return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+                        return logits.argmax().item()
 
-                    inp = torch.tensor([context], device=device)
-                    context.append(model(inp).logits[0, -1, :].argmax().item())
-
-                    inp = torch.tensor([context], device=device)
-                    context.append(model(inp).logits[0, -1, :].argmax().item())
+                    context.append(_decode(context))
+                    context.append(_decode(context))
+                    context.append(_decode(context))
 
             pos += 3
 
@@ -718,7 +724,8 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
 
 
 def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, output_dir,
-                               forced=False, forced_max_attempts=1000, beam_size=1):
+                               forced=False, forced_max_attempts=1000, beam_size=1,
+                               temperature=0.0):
     """
     Evaluate a checkpoint using MUSTER metrics.
 
@@ -726,6 +733,7 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         forced: retry-triplet-until-pitch-matches oracle decoding.
         forced_max_attempts: max triplet draws per position before injecting GT pitch.
         beam_size: beam width for beam-search decoding (1 = greedy).
+        temperature: sampling temperature (0 = greedy/argmax).
 
     Returns aggregate MUSTER statistics.
     """
@@ -777,7 +785,7 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
             predicted_tokens, gen_stats = autoregressive_generate_score(
                 model, tokens, score_start_idx, device,
                 forced=forced, forced_max_attempts=forced_max_attempts,
-                beam_size=beam_size
+                beam_size=beam_size, temperature=temperature
             )
         except Exception as e:
             print(f"  Sequence {orig_idx}: Generation failed - {e}")
@@ -926,7 +934,7 @@ def print_muster_summary(checkpoint_name, stats):
 
 
 def main(checkpoint=None, test_file=None, num_examples=None,
-         forced=False, forced_max_attempts=1000, beam_size=1):
+         forced=False, forced_max_attempts=1000, beam_size=1, temperature=0.0):
     if checkpoint is None:
         checkpoint = DEFAULT_CHECKPOINT
     if test_file is None:
@@ -935,8 +943,9 @@ def main(checkpoint=None, test_file=None, num_examples=None,
         num_examples = NUM_EXAMPLES
     
     print("="*80)
+    temp_tag = f" [TEMP={temperature}]" if temperature > 0 else ""
     mode_tag = " [FORCED/ORACLE]" if forced else (f" [BEAM={beam_size}]" if beam_size > 1 else "")
-    print("MUSTER EVALUATION" + mode_tag)
+    print("MUSTER EVALUATION" + mode_tag + temp_tag)
     print("="*80)
     print(f"Checkpoint: {checkpoint}")
     print(f"Test file: {test_file}")
@@ -944,6 +953,8 @@ def main(checkpoint=None, test_file=None, num_examples=None,
         print(f"Forced decoding: ON (max {forced_max_attempts} triplet attempts per position)")
     if beam_size > 1:
         print(f"Beam search: ON (beam_size={beam_size})")
+    if temperature > 0:
+        print(f"Temperature: {temperature}")
     print()
     
     # Check MUSTER installation
@@ -978,12 +989,13 @@ def main(checkpoint=None, test_file=None, num_examples=None,
     print()
     
     # Create output directory (separate subdir per mode)
+    temp_suffix = f'_temp{temperature}' if temperature > 0 else ''
     if forced:
-        subdir = f'{checkpoint}_forced'
+        subdir = f'{checkpoint}_forced{temp_suffix}'
     elif beam_size > 1:
-        subdir = f'{checkpoint}_beam{beam_size}'
+        subdir = f'{checkpoint}_beam{beam_size}{temp_suffix}'
     else:
-        subdir = checkpoint
+        subdir = f'{checkpoint}{temp_suffix}'
     output_dir = Path(OUTPUT_BASE) / subdir
     os.makedirs(output_dir, exist_ok=True)
     
@@ -999,7 +1011,7 @@ def main(checkpoint=None, test_file=None, num_examples=None,
     stats = evaluate_checkpoint_muster(
         checkpoint, test_lines, sampled_indices, str(output_dir),
         forced=forced, forced_max_attempts=forced_max_attempts,
-        beam_size=beam_size
+        beam_size=beam_size, temperature=temperature
     )
     
     # Print summary
@@ -1033,6 +1045,9 @@ if __name__ == '__main__':
     parser.add_argument('--beam', type=int, default=1, metavar='BEAM_SIZE',
                         help='Beam size for beam-search decoding (default: 1 = greedy). '
                              'Mutually exclusive with --forced.')
+    parser.add_argument('--temperature', type=float, default=0.0,
+                        help='Sampling temperature (default: 0 = greedy argmax). '
+                             'Values < 1 sharpen the distribution; > 1 flatten it.')
     args = parser.parse_args()
 
     if args.forced and args.beam > 1:
@@ -1041,4 +1056,4 @@ if __name__ == '__main__':
 
     main(checkpoint=args.checkpoint, test_file=args.test_file, num_examples=args.num_examples,
          forced=args.forced, forced_max_attempts=args.forced_max_attempts,
-         beam_size=args.beam)
+         beam_size=args.beam, temperature=args.temperature)
