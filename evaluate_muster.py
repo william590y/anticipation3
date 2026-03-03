@@ -344,24 +344,25 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                                         forced=False, forced_max_attempts=1000,
                                         beam_size=1, temperature=0.0):
     """
-    Generate score tokens for an ENTIRE piece using a sliding context window.
+    Generate score tokens for an ENTIRE piece using a sliding context window
+    with a persistent KV cache for O(1) cost per token between slides.
 
     `full_gt_tokens` may be arbitrarily longer than CONTEXT_SIZE (1024). The
     fixed header (first `score_start_idx` tokens) is always kept in the context.
     Whenever `context` grows to CONTEXT_SIZE, the first half of the alternating
-    section is dropped, aligned to 6-token (score+control pair) boundaries:
+    section is dropped, aligned to 6-token (score+control pair) boundaries.
 
-        context = header + alternating_section[half:]
+    On a slide the KV cache is sliced in-place (layers × heads × seq_dim) to
+    discard the dropped token positions, so the cached K/V vectors for the
+    kept tokens are reused without a recompute.
 
     GT control tokens are always inserted from `full_gt_tokens`.
-
-    Supports the same decoding modes as `autoregressive_generate_score`
-    (greedy, temperature, forced, beam).
 
     Returns:
         pred_score_triplets: list of [time_tok, dur_tok, pitch_tok] with vocab offsets
         stats: {num_slides, total_triplet_attempts, positions_forced, beam_log_prob}
     """
+    vocab_size = model.config.vocab_size
     header  = list(full_gt_tokens[:score_start_idx])
     context = list(header)
     pred_score_triplets = []
@@ -372,27 +373,89 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
         'beam_log_prob':           0.0,
     }
 
-    vocab_size = model.config.vocab_size
+    # ------------------------------------------------------------------ #
+    #  KV-cache state                                                      #
+    #  `past` – HF past_key_values covering context[0..len(context)-1]   #
+    #  `next_logits` – logits for the position AFTER the current context  #
+    #  Both are None until the cache is primed by _ensure_primed().       #
+    # ------------------------------------------------------------------ #
+    past        = None   # tuple[tuple[Tensor, Tensor], ...]
+    next_logits = None   # Tensor  (vocab_size,)
 
-    def _run_model(ctx):
-        """Single forward pass; returns logits for the last position."""
+    def _clamp(toks):
+        return [min(max(t, 0), vocab_size - 1) for t in toks]
+
+    def _prime():
+        """Full forward pass over `context`; (re)builds cache from scratch."""
+        nonlocal past, next_logits
         with torch.no_grad():
-            # Clamp to valid embedding range — large time tokens from long pieces
-            # can otherwise exceed vocab size and trigger a CUDA device-side assert.
-            safe = [min(max(t, 0), vocab_size - 1) for t in ctx]
-            return model(torch.tensor([safe], device=device)).logits[0, -1, :]
+            out = model(torch.tensor([_clamp(context)], device=device), use_cache=True)
+        past        = out.past_key_values
+        next_logits = out.logits[0, -1, :]
+
+    def _feed(new_toks):
+        """
+        Incremental forward for tokens already appended to `context`.
+        Extends the KV cache by len(new_toks) positions — O(1) per token.
+        """
+        nonlocal past, next_logits
+        with torch.no_grad():
+            out = model(
+                torch.tensor([_clamp(new_toks)], device=device),
+                past_key_values=past,
+                use_cache=True,
+            )
+        past        = out.past_key_values
+        next_logits = out.logits[0, -1, :]
+
+    def _ensure_primed():
+        if past is None:
+            _prime()
+
+    def _get_logits():
+        _ensure_primed()
+        return next_logits
+
+    def _sample_next():
+        """Sample next token, append to context, advance cache."""
+        logits = _get_logits()
+        if temperature > 0:
+            logits = logits / temperature
+        tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+        context.append(tok)
+        _feed([tok])
+        return tok
+
+    def _greedy_next():
+        """Greedy/temperature next token, append to context, advance cache."""
+        logits = _get_logits()
+        if temperature > 0:
+            logits = logits / temperature
+            tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+        else:
+            tok = logits.argmax().item()
+        context.append(tok)
+        _feed([tok])
+        return tok
+
+    def _slice_cache(kv_past, lo, hi):
+        """
+        Slice the KV cache to drop positions [lo:hi] along the sequence
+        dimension (dim=2), keeping [0:lo] + [hi:].
+        Used to remove the first `half` tokens of the alternating section.
+        """
+        return tuple(
+            (
+                torch.cat([k[:, :, :lo, :], k[:, :, hi:, :]], dim=2),
+                torch.cat([v[:, :, :lo, :], v[:, :, hi:, :]], dim=2),
+            )
+            for k, v in kv_past
+        )
 
     def _renormalize_alt_times(alt):
         """
-        After a context slide the alternating section contains mid-piece events
-        whose absolute times may be very large.  Re-normalize so the earliest
-        time in the remaining section becomes 0, matching what the model saw
-        during training (each window starts at t=0).
-
-        Pattern inside `alt` (repeating groups of 6):
-            [score_time, score_dur, score_pitch, ctrl_time, ctrl_dur, ctrl_pitch]
-        Score time tokens < CONTROL_OFFSET; ctrl time tokens >= CONTROL_OFFSET.
-        Both are shifted by the same `time_shift` in raw bins.
+        Re-normalize time tokens in the kept alternating section so they
+        start at t=0, matching training-time windows.
         """
         if not alt:
             return alt
@@ -415,19 +478,6 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                 new_alt[i + 3] = max(ATIME_OFFSET, new_alt[i + 3] - time_shift)
         return new_alt
 
-    def _sample_tok(ctx):
-        logits = _run_model(ctx)
-        if temperature > 0:
-            logits = logits / temperature
-        return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
-
-    def _greedy_tok(ctx):
-        logits = _run_model(ctx)
-        if temperature > 0:
-            logits = logits / temperature
-            return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
-        return logits.argmax().item()
-
     pos = score_start_idx
     while pos + 2 < len(full_gt_tokens):
         t0, t1, t2 = full_gt_tokens[pos], full_gt_tokens[pos+1], full_gt_tokens[pos+2]
@@ -441,67 +491,101 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
                 matched = False
                 for _attempt in range(forced_max_attempts):
                     stats['total_triplet_attempts'] += 1
-                    ctx_before = list(context)
-                    tok_t = _sample_tok(context); context.append(tok_t)
-                    tok_d = _sample_tok(context); context.append(tok_d)
-                    tok_p = _sample_tok(context); context.append(tok_p)
+                    # Save full state for rollback
+                    ctx_before   = list(context)
+                    past_before  = past
+                    logits_before = next_logits
+
+                    tok_t = _sample_next()
+                    tok_d = _sample_next()
+                    tok_p = _sample_next()
+
                     if tok_p == gt_pitch:
                         matched = True
                         break
-                    context = ctx_before
+                    # Rollback context and cache
+                    context[:]  = ctx_before
+                    past        = past_before
+                    next_logits = logits_before
+
                 if not matched:
+                    # Inject GT pitch; cache is stale for the last token — invalidate
                     context[-1] = gt_pitch
+                    past        = None
+                    next_logits = None
                     stats['positions_forced'] += 1
                 pred_score_triplets.append([context[-3], context[-2], context[-1]])
 
             elif beam_size > 1:
+                # Beam search: each beam needs its own cache — run without KV
+                # cache to keep implementation simple.
                 beams = [(list(context), 0.0)]
                 for _slot in range(3):
                     candidates = []
-                    for ctx, lp in beams:
+                    for ctx_b, lp in beams:
                         with torch.no_grad():
-                            logits = _run_model(ctx)
+                            safe_b = [min(max(t, 0), vocab_size - 1) for t in ctx_b]
+                            logits_b = model(torch.tensor([safe_b], device=device)).logits[0, -1, :]
                             if temperature > 0:
-                                logits = logits / temperature
-                            log_probs = torch.log_softmax(logits, dim=-1)
+                                logits_b = logits_b / temperature
+                            log_probs = torch.log_softmax(logits_b, dim=-1)
                         top_lps, top_toks = torch.topk(log_probs, beam_size)
                         for tok, tlp in zip(top_toks.tolist(), top_lps.tolist()):
-                            candidates.append((ctx + [tok], lp + tlp))
+                            candidates.append((ctx_b + [tok], lp + tlp))
                     candidates.sort(key=lambda x: x[1], reverse=True)
                     beams = candidates[:beam_size]
                 best_ctx, best_lp = max(beams, key=lambda x: x[1])
                 stats['beam_log_prob'] += best_lp
                 pred_score_triplets.append([best_ctx[-3], best_ctx[-2], best_ctx[-1]])
-                context = best_ctx
+                # Sync context; cache diverged across beams — invalidate
+                context[:]  = best_ctx
+                past        = None
+                next_logits = None
 
             else:
-                context.append(_greedy_tok(context))
-                context.append(_greedy_tok(context))
-                context.append(_greedy_tok(context))
-                pred_score_triplets.append([context[-3], context[-2], context[-1]])
+                tok_t = _greedy_next()
+                tok_d = _greedy_next()
+                tok_p = _greedy_next()
+                pred_score_triplets.append([tok_t, tok_d, tok_p])
 
             pos += 3
 
-            # Append GT control triplet
+            # Append GT control triplet and feed to cache
             if pos + 2 < len(full_gt_tokens):
-                context.extend([full_gt_tokens[pos],
+                ct0, ct1, ct2 = (full_gt_tokens[pos],
                                  full_gt_tokens[pos+1],
-                                 full_gt_tokens[pos+2]])
+                                 full_gt_tokens[pos+2])
+                context.extend([ct0, ct1, ct2])
+                if past is not None:
+                    _feed([ct0, ct1, ct2])
                 pos += 3
 
         else:
-            # Control/non-score token: append GT directly
-            context.append(full_gt_tokens[pos])
+            # Non-score token: append GT directly
+            gt_tok = full_gt_tokens[pos]
+            context.append(gt_tok)
+            if past is not None:
+                _feed([gt_tok])
             pos += 1
 
         # ---- Slide if context is at capacity ----
         if len(context) >= CONTEXT_SIZE:
             alt  = context[score_start_idx:]
-            # Drop the older half, aligned to 6-token (score+ctrl pair) boundaries
-            half = (len(alt) // 2) // 6 * 6
+            half = (len(alt) // 2) // 6 * 6   # align to score+ctrl pair boundary
             if half > 0:
-                remaining = _renormalize_alt_times(alt[half:])
-                context = header + remaining
+                remaining   = _renormalize_alt_times(alt[half:])
+                context     = header + remaining
+
+                # Slice KV cache: drop positions [score_start_idx : score_start_idx+half]
+                # The kept K/V vectors are still valid (causal attention means
+                # past representations don't depend on future tokens).
+                if past is not None:
+                    past = _slice_cache(past,
+                                        lo=score_start_idx,
+                                        hi=score_start_idx + half)
+                    # next_logits remains valid — it represents what follows the
+                    # last kept token, unchanged by the dropped prefix.
+
                 stats['num_slides'] += 1
 
     return pred_score_triplets, stats
