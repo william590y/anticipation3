@@ -438,20 +438,6 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
         _feed([tok])
         return tok
 
-    def _slice_cache(kv_past, lo, hi):
-        """
-        Slice the KV cache to drop positions [lo:hi] along the sequence
-        dimension (dim=2), keeping [0:lo] + [hi:].
-        Used to remove the first `half` tokens of the alternating section.
-        """
-        return tuple(
-            (
-                torch.cat([k[:, :, :lo, :], k[:, :, hi:, :]], dim=2),
-                torch.cat([v[:, :, :lo, :], v[:, :, hi:, :]], dim=2),
-            )
-            for k, v in kv_past
-        )
-
     def _renormalize_alt_times(alt):
         """
         Re-normalize time tokens in the kept alternating section so they
@@ -573,18 +559,17 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
             alt  = context[score_start_idx:]
             half = (len(alt) // 2) // 6 * 6   # align to score+ctrl pair boundary
             if half > 0:
-                remaining   = _renormalize_alt_times(alt[half:])
-                context     = header + remaining
+                remaining = _renormalize_alt_times(alt[half:])
+                context   = header + remaining
 
-                # Slice KV cache: drop positions [score_start_idx : score_start_idx+half]
-                # The kept K/V vectors are still valid (causal attention means
-                # past representations don't depend on future tokens).
-                if past is not None:
-                    past = _slice_cache(past,
-                                        lo=score_start_idx,
-                                        hi=score_start_idx + half)
-                    # next_logits remains valid — it represents what follows the
-                    # last kept token, unchanged by the dropped prefix.
+                # Renormalization changed the token values in the kept section,
+                # so the sliced KV cache (computed from the old, large-time tokens)
+                # would be inconsistent with the new context.  Invalidate it and
+                # let _prime() rebuild on the next forward pass.
+                # (Cost: one full O(context_len) forward pass per slide, which is
+                # negligible — slides happen only a handful of times per piece.)
+                past        = None
+                next_logits = None
 
                 stats['num_slides'] += 1
 
