@@ -1,0 +1,221 @@
+ExtraNote:	EstID	P1-8-4	sitch	C6	onstime	348
+ExtraNote:	EstID	P1-8-2	sitch	C6	onstime	348
+ExtraNote:	EstID	P1-7-1	sitch	Db4	onstime	288
+ExtraNote:	EstID	P3-7-1	sitch	F3	onstime	288
+ExtraNote:	EstID	P1-6-12	sitch	Eb4	onstime	284
+ExtraNote:	EstID	P3-6-12	sitch	F3	onstime	284
+ExtraNote:	EstID	P3-6-5	sitch	Db4	onstime	248
+ExtraNote:	EstID	P3-6-4	sitch	Bb3	onstime	248
+ExtraNote:	EstID	P3-9-4	sitch	C2	onstime	408
+ExtraNote:	EstID	P1-6-4	sitch	F4	onstime	252
+ExtraNote:	EstID	P1-5-11	sitch	A4	onstime	228
+ExtraNote:	EstID	P1-4-5	sitch	Bb4	onstime	180
+ExtraNote:	EstID	P3-4-2	sitch	Ab4	onstime	144
+ExtraNote:	EstID	P1-3-5	sitch	F5	onstime	114
+ExtraNote:	EstID	P1-3-4	sitch	Db5	onstime	108
+ExtraNote:	EstID	P3-2-7	sitch	C5	onstime	72
+ExtraNote:	EstID	P3-2-6	sitch	A4	onstime	72
+ExtraNote:	EstID	P1-2-1	sitch	Db5	onstime	48
+ExtraNote:	EstID	P1-1-7	sitch	Ab5	onstime	30
+MissNote:	GtID	P1-8-12	sitch	Ab2	onstime	423
+MissNote:	GtID	P1-8-11	sitch	Eb3	onstime	414
+MissNote:	GtID	P1-8-9	sitch	Gb3	onstime	414
+MissNote:	GtID	P1-8-7	sitch	Ab3	onstime	414
+MissNote:	GtID	P1-8-5	sitch	C4	onstime	414
+MissNote:	GtID	P1-8-4	sitch	Db4	onstime	396
+MissNote:	GtID	P1-8-3	sitch	Eb4	onstime	390
+MissNote:	GtID	P1-4-1	sitch	Bb4	onstime	162
+PitchError:	GtID	P1-9-7	EstID	P3-9-2	GtSitch	Db2	EstSitch	C2	GtOnstime	432	EstOnstime	408
+OnsetError(shift):	GtID	P1-1-7	EstID	P1-1-6	GtSitch	F5	EstSitch	F5	GtOnstime	12	EstOnstime	30
+OnsetError(shift):	GtID	P1-1-3	EstID	P3-2-1	GtSitch	Db5	EstSitch	Ab4	GtOnstime	36	EstOnstime	48
+OnsetError(shift):	GtID	P1-4-3	EstID	P3-3-11	GtSitch	Ab4	EstSitch	Ab4	GtOnstime	168	EstOnstime	135
+OnsetError(shift):	GtID	P1-4-5	EstID	P1-3-10	GtSitch	Bb4	EstSitch	Bb4	GtOnstime	174	EstOnstime	138
+OnsetError(shift):	GtID	P1-4-7	EstID	P3-4-1	GtSitch	Ab4	EstSitch	Gb4	GtOnstime	180	EstOnstime	144
+OnsetError(shift):	GtID	P1-4-8	EstID	P1-3-12	GtSitch	C5	EstSitch	C5	GtOnstime	180	EstOnstime	142
+OnsetError(shift):	GtID	P1-5-10	EstID	P3-4-5	GtSitch	Gb4	EstSitch	Gb4	GtOnstime	216	EstOnstime	168
+OffsetError:	GtID	P1-1-12	EstID	P3-1-3	GtSitch	F4	EstSitch	F4	GtOnstime	6	EstOnstime	18	GtLength	48	EstLength(rescaled)	6
+OffsetError:	GtID	P1-1-13	EstID	P1-1-3	GtSitch	Ab4	EstSitch	Ab4	GtOnstime	6	EstOnstime	18	GtLength	48	EstLength(rescaled)	6
+OffsetError:	GtID	P1-1-3	EstID	P3-2-1	GtSitch	Db5	EstSitch	Ab4	GtOnstime	36	EstOnstime	48	GtLength	24	EstLength(rescaled)	18
+OffsetError:	GtID	P1-1-4	EstID	P1-2-2	GtSitch	F5	EstSitch	F5	GtOnstime	36	EstOnstime	48	GtLength	24	EstLength(rescaled)	18
+OffsetError:	GtID	P1-2-9	EstID	P3-2-8	GtSitch	Gb4	EstSitch	Gb4	GtOnstime	54	EstOnstime	60	GtLength	54	EstLength(rescaled)	18
+OffsetError:	GtID	P1-2-10	EstID	P3-2-2	GtSitch	A4	EstSitch	A4	GtOnstime	54	EstOnstime	60	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-2-7	EstID	P3-2-5	GtSitch	C5	EstSitch	Gb4	GtOnstime	72	EstOnstime	72	GtLength	42	EstLength(rescaled)	36
+OffsetError:	GtID	P1-2-8	EstID	P1-2-6	GtSitch	Eb5	EstSitch	Eb5	GtOnstime	72	EstOnstime	72	GtLength	42	EstLength(rescaled)	36
+OffsetError:	GtID	P1-3-12	EstID	P3-3-1	GtSitch	F4	EstSitch	F4	GtOnstime	108	EstOnstime	96	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-3-13	EstID	P3-3-2	GtSitch	Ab4	EstSitch	Ab4	GtOnstime	108	EstOnstime	96	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-3-11	EstID	P3-3-6	GtSitch	Bb4	EstSitch	Bb4	GtOnstime	126	EstOnstime	108	GtLength	36	EstLength(rescaled)	9
+OffsetError:	GtID	P1-3-10	EstID	P1-3-7	GtSitch	Db5	EstSitch	Db5	GtOnstime	153	EstOnstime	126	GtLength	15	EstLength(rescaled)	9
+OffsetError:	GtID	P1-4-9	EstID	P3-3-12	GtSitch	Eb4	EstSitch	Eb4	GtOnstime	162	EstOnstime	132	GtLength	54	EstLength(rescaled)	18
+OffsetError:	GtID	P1-4-10	EstID	P3-3-10	GtSitch	Gb4	EstSitch	Gb4	GtOnstime	162	EstOnstime	132	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-4-3	EstID	P3-3-11	GtSitch	Ab4	EstSitch	Ab4	GtOnstime	168	EstOnstime	135	GtLength	6	EstLength(rescaled)	12
+OffsetError:	GtID	P1-4-8	EstID	P1-3-12	GtSitch	C5	EstSitch	C5	GtOnstime	180	EstOnstime	142	GtLength	42	EstLength(rescaled)	0
+OffsetError:	GtID	P1-5-10	EstID	P3-4-5	GtSitch	Gb4	EstSitch	Gb4	GtOnstime	216	EstOnstime	168	GtLength	36	EstLength(rescaled)	18
+OffsetError:	GtID	P1-5-12	EstID	P3-4-4	GtSitch	Eb4	EstSitch	Eb4	GtOnstime	216	EstOnstime	168	GtLength	36	EstLength(rescaled)	18
+OffsetError:	GtID	P1-5-14	EstID	P3-4-3	GtSitch	Db4	EstSitch	Db4	GtOnstime	216	EstOnstime	168	GtLength	36	EstLength(rescaled)	18
+OffsetError:	GtID	P1-5-4	EstID	P3-4-6	GtSitch	Bb4	EstSitch	Gb4	GtOnstime	234	EstOnstime	180	GtLength	6	EstLength(rescaled)	18
+OffsetError:	GtID	P1-5-11	EstID	P1-5-2	GtSitch	Gb4	EstSitch	Gb4	GtOnstime	252	EstOnstime	192	GtLength	18	EstLength(rescaled)	6
+OffsetError:	GtID	P1-5-13	EstID	P1-5-1	GtSitch	Eb4	EstSitch	Eb4	GtOnstime	252	EstOnstime	192	GtLength	18	EstLength(rescaled)	6
+OffsetError:	GtID	P1-5-9	EstID	P1-5-5	GtSitch	Ab4	EstSitch	Ab4	GtOnstime	264	EstOnstime	200	GtLength	12	EstLength(rescaled)	6
+OffsetError:	GtID	P1-6-5	EstID	P1-5-10	GtSitch	F4	EstSitch	F4	GtOnstime	306	EstOnstime	228	GtLength	24	EstLength(rescaled)	18
+OffsetError:	GtID	P1-7-10	EstID	P3-6-2	GtSitch	Db4	EstSitch	Db4	GtOnstime	324	EstOnstime	240	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-7-12	EstID	P3-6-1	GtSitch	Bb3	EstSitch	Bb3	GtOnstime	324	EstOnstime	240	GtLength	54	EstLength(rescaled)	6
+OffsetError:	GtID	P1-7-14	EstID	P3-6-13	GtSitch	Ab3	EstSitch	Ab3	GtOnstime	324	EstOnstime	240	GtLength	36	EstLength(rescaled)	18
+OffsetError:	GtID	P1-7-4	EstID	P3-6-6	GtSitch	F4	EstSitch	Ab3	GtOnstime	342	EstOnstime	252	GtLength	6	EstLength(rescaled)	18
+OffsetError:	GtID	P1-7-9	EstID	P1-6-9	GtSitch	Eb4	EstSitch	Eb4	GtOnstime	372	EstOnstime	272	GtLength	12	EstLength(rescaled)	6
+OffsetError:	GtID	P1-8-6	EstID	P3-6-10	GtSitch	Bb3	EstSitch	Bb3	GtOnstime	378	EstOnstime	276	GtLength	36	EstLength(rescaled)	6
+OffsetError:	GtID	P1-8-8	EstID	P3-6-9	GtSitch	Ab3	EstSitch	Ab3	GtOnstime	378	EstOnstime	276	GtLength	36	EstLength(rescaled)	6
+OffsetError:	GtID	P1-8-10	EstID	P3-6-8	GtSitch	F3	EstSitch	F3	GtOnstime	378	EstOnstime	276	GtLength	36	EstLength(rescaled)	6
+OffsetError:	GtID	P1-8-2	EstID	P1-6-11	GtSitch	Db4	EstSitch	Db4	GtOnstime	384	EstOnstime	280	GtLength	6	EstLength(rescaled)	1
+OffsetError:	GtID	P1-9-7	EstID	P3-9-2	GtSitch	Db2	EstSitch	C2	GtOnstime	432	EstOnstime	408	GtLength	6	EstLength(rescaled)	18
+VoiceError:	GtID	P1-1-13	EstID	P1-1-3	GtSitch	Ab4	EstSitch	Ab4	GtVoice	4	EstVoice	0
+HandError:	GtID	P1-1-13	EstID	P1-1-3	GtSitch	Ab4	EstSitch	Ab4	GtVoice	4	EstVoice	0
+VoiceError:	GtID	P1-1-7	EstID	P1-1-6	GtSitch	F5	EstSitch	F5	GtVoice	1	EstVoice	0
+VoiceError:	GtID	P1-1-8	EstID	P1-1-5	GtSitch	Ab5	EstSitch	Ab4	GtVoice	1	EstVoice	0
+VoiceError:	GtID	P1-1-3	EstID	P3-2-1	GtSitch	Db5	EstSitch	Ab4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-1-3	EstID	P3-2-1	GtSitch	Db5	EstSitch	Ab4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-2-9	EstID	P3-2-8	GtSitch	Gb4	EstSitch	Gb4	GtVoice	4	EstVoice	5
+VoiceError:	GtID	P1-2-3	EstID	P3-2-3	GtSitch	C5	EstSitch	C5	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-2-3	EstID	P3-2-3	GtSitch	C5	EstSitch	C5	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-2-5	EstID	P3-2-4	GtSitch	Db5	EstSitch	Db5	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-2-5	EstID	P3-2-4	GtSitch	Db5	EstSitch	Db5	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-2-7	EstID	P3-2-5	GtSitch	C5	EstSitch	Gb4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-2-7	EstID	P3-2-5	GtSitch	C5	EstSitch	Gb4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-3-3	EstID	P3-3-3	GtSitch	Bb4	EstSitch	Bb4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-3-3	EstID	P3-3-3	GtSitch	Bb4	EstSitch	Bb4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-3-5	EstID	P3-3-4	GtSitch	C5	EstSitch	C5	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-3-5	EstID	P3-3-4	GtSitch	C5	EstSitch	C5	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-3-7	EstID	P3-3-5	GtSitch	Db5	EstSitch	F4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-3-7	EstID	P3-3-5	GtSitch	Db5	EstSitch	F4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-3-11	EstID	P3-3-6	GtSitch	Bb4	EstSitch	Bb4	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-3-11	EstID	P3-3-6	GtSitch	Bb4	EstSitch	Bb4	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-3-8	EstID	P3-3-7	GtSitch	F5	EstSitch	Ab4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-3-8	EstID	P3-3-7	GtSitch	F5	EstSitch	Ab4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-4-9	EstID	P3-3-12	GtSitch	Eb4	EstSitch	Eb4	GtVoice	4	EstVoice	5
+VoiceError:	GtID	P1-4-3	EstID	P3-3-11	GtSitch	Ab4	EstSitch	Ab4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-4-3	EstID	P3-3-11	GtSitch	Ab4	EstSitch	Ab4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-4-7	EstID	P3-4-1	GtSitch	Ab4	EstSitch	Gb4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-4-7	EstID	P3-4-1	GtSitch	Ab4	EstSitch	Gb4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-5-10	EstID	P3-4-5	GtSitch	Gb4	EstSitch	Gb4	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-5-10	EstID	P3-4-5	GtSitch	Gb4	EstSitch	Gb4	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-5-14	EstID	P3-4-3	GtSitch	Db4	EstSitch	Db4	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-5-4	EstID	P3-4-6	GtSitch	Bb4	EstSitch	Gb4	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-5-4	EstID	P3-4-6	GtSitch	Bb4	EstSitch	Gb4	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-5-11	EstID	P1-5-2	GtSitch	Gb4	EstSitch	Gb4	GtVoice	1	EstVoice	0
+VoiceError:	GtID	P1-5-13	EstID	P1-5-1	GtSitch	Eb4	EstSitch	Eb4	GtVoice	4	EstVoice	0
+HandError:	GtID	P1-5-13	EstID	P1-5-1	GtSitch	Eb4	EstSitch	Eb4	GtVoice	4	EstVoice	0
+VoiceError:	GtID	P1-5-15	EstID	P3-5-1	GtSitch	C4	EstSitch	C4	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-6-6	EstID	P3-5-4	GtSitch	Eb4	EstSitch	Eb4	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-6-6	EstID	P3-5-4	GtSitch	Eb4	EstSitch	Eb4	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-6-10	EstID	P3-5-2	GtSitch	Bb3	EstSitch	Bb3	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-6-7	EstID	P3-5-7	GtSitch	Eb4	EstSitch	Eb4	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-6-7	EstID	P3-5-7	GtSitch	Eb4	EstSitch	Eb4	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-6-11	EstID	P3-5-5	GtSitch	A3	EstSitch	A3	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-7-10	EstID	P3-6-2	GtSitch	Db4	EstSitch	Db4	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-7-10	EstID	P3-6-2	GtSitch	Db4	EstSitch	Db4	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-7-4	EstID	P3-6-6	GtSitch	F4	EstSitch	Ab3	GtVoice	0	EstVoice	4
+HandError:	GtID	P1-7-4	EstID	P3-6-6	GtSitch	F4	EstSitch	Ab3	GtVoice	0	EstVoice	4
+VoiceError:	GtID	P1-7-15	EstID	P3-6-7	GtSitch	Gb3	EstSitch	Gb3	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-8-6	EstID	P3-6-10	GtSitch	Bb3	EstSitch	Bb3	GtVoice	1	EstVoice	4
+HandError:	GtID	P1-8-6	EstID	P3-6-10	GtSitch	Bb3	EstSitch	Bb3	GtVoice	1	EstVoice	4
+VoiceError:	GtID	P1-8-10	EstID	P3-6-8	GtSitch	F3	EstSitch	F3	GtVoice	5	EstVoice	4
+VoiceError:	GtID	P1-9-7	EstID	P3-9-2	GtSitch	Db2	EstSitch	C2	GtVoice	5	EstVoice	4
+# Correspondence of matched notes (GtID vs EstID)
+P1-1-12	P3-1-3
+P1-1-13	P1-1-3
+P1-1-7	P1-1-6
+P1-1-8	P1-1-5
+P1-1-3	P3-2-1
+P1-1-4	P1-2-2
+P1-2-9	P3-2-8
+P1-2-10	P3-2-2
+P1-2-3	P3-2-3
+P1-2-4	P1-2-4
+P1-2-5	P3-2-4
+P1-2-6	P1-2-5
+P1-2-7	P3-2-5
+P1-2-8	P1-2-6
+P1-3-12	P3-3-1
+P1-3-13	P3-3-2
+P1-3-3	P3-3-3
+P1-3-4	P1-3-2
+P1-3-5	P3-3-4
+P1-3-6	P1-3-3
+P1-3-7	P3-3-5
+P1-3-11	P3-3-6
+P1-3-8	P3-3-7
+P1-3-10	P1-3-7
+P1-4-9	P3-3-12
+P1-4-10	P3-3-10
+P1-4-3	P3-3-11
+P1-4-4	P1-3-9
+P1-4-5	P1-3-10
+P1-4-6	P1-3-11
+P1-4-7	P3-4-1
+P1-4-8	P1-3-12
+P1-5-10	P3-4-5
+P1-5-12	P3-4-4
+P1-5-14	P3-4-3
+P1-5-2	P1-4-3
+P1-5-3	P1-4-4
+P1-5-4	P3-4-6
+P1-5-5	P1-4-6
+P1-5-6	P1-4-7
+P1-5-7	P1-5-3
+P1-5-11	P1-5-2
+P1-5-13	P1-5-1
+P1-5-15	P3-5-1
+P1-5-8	P1-5-4
+P1-5-9	P1-5-5
+P1-6-6	P3-5-4
+P1-6-8	P3-5-3
+P1-6-10	P3-5-2
+P1-6-2	P1-5-7
+P1-6-3	P1-5-8
+P1-6-4	P1-5-9
+P1-6-5	P1-5-10
+P1-6-7	P3-5-7
+P1-6-9	P3-5-6
+P1-6-11	P3-5-5
+P1-7-10	P3-6-2
+P1-7-12	P3-6-1
+P1-7-14	P3-6-13
+P1-7-2	P1-6-2
+P1-7-3	P1-6-3
+P1-7-4	P3-6-6
+P1-7-5	P1-6-5
+P1-7-6	P1-6-6
+P1-7-7	P1-6-7
+P1-7-15	P3-6-7
+P1-7-8	P1-6-8
+P1-7-9	P1-6-9
+P1-8-6	P3-6-10
+P1-8-8	P3-6-9
+P1-8-10	P3-6-8
+P1-8-2	P1-6-11
+P1-9-7	P3-9-2
+
+#notes in GT score:	81
+#notes in EST score:	92
+nPitchError:	1
+nMissNote:	8
+nExtraNote:	19
+nOnsetError(RhythmCorrectionCost):	9
+nOffsetError:	34
+nVoiceError:	32
+nHandError:	20
+
+PitchER(%):	1.23457
+MissRate(%):	9.87654
+ExtraRate(%):	20.6522
+OnsetER(%):	12.3288
+OffsetER(%):	46.5753
+MeanER(%):	18.1335
+VoiceER(%):	43.8356
+NewMeanER(%):	22.4172
+Pvoi(%):	47.8571
+Rvoi(%):	48.5507
+Fvoi(%):	48.2014
+ScaleErr:	1.74582
+HandER(%):	27.3973
+
+PitchER,MissRate,ExtraRate,OnsetER,OffsetER,MeanER,VoiceER,NewMeanER,Pvoi,Rvoi,Fvoi,ScaleErr,HandER:	1.23457	9.87654	20.6522	12.3288	46.5753	18.1335	43.8356	22.4172	47.8571	48.5507	48.2014	1.74582	27.3973

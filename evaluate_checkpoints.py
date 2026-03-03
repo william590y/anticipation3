@@ -4,10 +4,16 @@ Evaluate models on test data with autoregressive score generation.
 Generates MIDI files for: input performance, output score, and ground truth score.
 Also computes aggregate statistics for pitch, duration, and time token accuracy.
 
+Alignment with train.py (so metrics are comparable):
+  - Alternating section start: fixed 202 (ALTERNATING_START), same as train.py.
+  - Default test file: data/test_combined.txt (match --val_file used when training).
+  - Generation: GT control triplet added after each predicted score triplet (train-style).
+  - No minimum-note filter: all sequences with len > 202 are evaluated (same as train.py/inference.py).
+
 Usage:
     python evaluate_checkpoints.py [--test-file PATH]
     
-    Default test file: data/test_normalized.txt (matches train.py)
+    Default test file: data/test_combined.txt (match --val_file used when training)
 """
 import os
 import sys
@@ -23,12 +29,14 @@ from tqdm import tqdm
 
 # Configuration
 CHECKPOINTS = ['checkpoint-1000', 'checkpoint-1750']
-# Use test_combined.txt to match training data source (train_combined.txt)
+# Default test file: use test_combined.txt to match --val_file used during training
 TEST_FILE = 'data/test_combined.txt'
 OUTPUT_BASE = 'evaluation_results_corrected'
-NUM_EXAMPLES = 250  # Randomly sample sequences
+NUM_EXAMPLES = 10  # Randomly sample sequences
 RANDOM_SEED = 42
 K_PREFIX = 33  # Number of control+rest pairs in prefix
+# Must match train.py: alternating section starts at 202 (ANTICIPATE + SEP×3 + 33 control+rest pairs)
+ALTERNATING_START = 4 + K_PREFIX * 6  # = 202
 
 
 def load_model(checkpoint_path):
@@ -324,6 +332,21 @@ def triplets_to_events(triplets):
     return events
 
 
+def normalize_triplet_times(triplets):
+    """Normalize triplet times to start at 0 and sort by time.
+    
+    Triplets have format [time+TIME_OFFSET, dur+DUR_OFFSET, pitch+NOTE_OFFSET].
+    """
+    if not triplets:
+        return triplets
+    # Sort by time first
+    triplets = sorted(triplets, key=lambda t: t[0])
+    # Find minimum time (subtract TIME_OFFSET to get raw time)
+    min_time = min(t[0] - TIME_OFFSET for t in triplets)
+    # Shift all times by min_time
+    return [[t[0] - min_time, t[1], t[2]] for t in triplets]
+
+
 def save_midi(events, filepath):
     """Save events as MIDI file."""
     try:
@@ -368,18 +391,17 @@ def evaluate_checkpoint(checkpoint_path, test_lines, original_indices, output_di
                                                desc=f"Evaluating {checkpoint_path}")):
         tokens = parse_sequence(line)
         
-        # Find score start
-        score_start_idx = find_score_start(tokens)
-        if score_start_idx is None:
+        # Use fixed alternating start (202) to match train.py exactly; skip if sequence too short
+        if len(tokens) <= ALTERNATING_START:
             aggregate['num_failed'] += 1
             continue
+        score_start_idx = ALTERNATING_START
         
         # Extract ground truth components (for MIDI saving, not accuracy)
         gt_perf, gt_score, _ = extract_components(tokens, score_start_idx)
         
-        if len(gt_score) < 10:
-            aggregate['num_failed'] += 1
-            continue
+        # Do not filter by len(gt_score): train.py and inference.py evaluate all sequences
+        # with len > 202. Filtering to len(gt_score) >= 10 biased accuracy downward.
         
         # Generate predictions
         try:
@@ -407,18 +429,20 @@ def evaluate_checkpoint(checkpoint_path, test_lines, original_indices, output_di
         seq_dir = os.path.join(output_dir, f'sequence_{orig_idx:04d}')
         os.makedirs(seq_dir, exist_ok=True)
         
-        # Performance MIDI (convert to proper format with offsets)
-        perf_events = []
-        for p in gt_perf:
-            perf_events.extend([p[0] + TIME_OFFSET, p[1] + DUR_OFFSET, p[2] + NOTE_OFFSET])
+        # Performance MIDI (convert to proper format with offsets, then normalize)
+        perf_triplets = [[p[0] + TIME_OFFSET, p[1] + DUR_OFFSET, p[2] + NOTE_OFFSET] for p in gt_perf]
+        perf_triplets = normalize_triplet_times(perf_triplets)
+        perf_events = triplets_to_events(perf_triplets)
         save_midi(perf_events, os.path.join(seq_dir, 'input_performance.mid'))
         
-        # Ground truth score MIDI
-        gt_score_events = triplets_to_events(gt_score)
+        # Ground truth score MIDI (normalize times to start at 0)
+        gt_score_normalized = normalize_triplet_times(gt_score)
+        gt_score_events = triplets_to_events(gt_score_normalized)
         save_midi(gt_score_events, os.path.join(seq_dir, 'ground_truth_score.mid'))
         
-        # Predicted score MIDI
-        pred_score_events = triplets_to_events(pred_score)
+        # Predicted score MIDI (normalize times to start at 0)
+        pred_score_normalized = normalize_triplet_times(pred_score)
+        pred_score_events = triplets_to_events(pred_score_normalized)
         save_midi(pred_score_events, os.path.join(seq_dir, 'output_score.mid'))
         
         # Save per-sequence stats

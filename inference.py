@@ -1,13 +1,25 @@
 """
-Extract test examples using newest_model with greedy decoding (top_k=1).
-Creates MIDI files for: ground_truth_score, performance, and model_predictions.
+Evaluate autoregressive pitch accuracy with train-style protocol only:
+score tokens are predicted one triplet at a time with ground-truth control (performance)
+tokens interleaved, matching train.py validation. Use --checkpoints to evaluate
+multiple checkpoints (e.g. checkpoint-1000 checkpoint-1750).
 """
+import argparse
 import os
+import json
 import torch
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 from anticipation.vocab import *
 from anticipation.config import *
 from anticipation.convert import events_to_midi
+
+# #region agent log
+DEBUG_LOG_PATH = os.path.join(os.path.abspath(os.path.dirname(__file__)), "debug-e30de5.log")
+def _dbg(payload):
+    with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"sessionId": "e30de5", "timestamp": __import__("time").time() * 1000, **payload}) + "\n")
+# #endregion
 
 def greedy_decode_sequence(model, input_ids, max_new_tokens=1024):
     """Greedy decoding with KV caching."""
@@ -129,148 +141,91 @@ def extract_aligned_pairs(tokens):
     
     return all_performance, all_score
 
-print("="*80)
-print("EXTRACTING GREEDY EXAMPLES FROM newest_model")
-print("="*80)
-print()
 
-# Load model
-print("Loading model from newest_model/...")
-model = AutoModelForCausalLM.from_pretrained('newest_model/')
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-model = model.to(device)
-model.eval()
-print(f"Model loaded on {device}")
-print()
+def run_autoregressive_eval(model, lines, num_examples, device):
+    """
+    Run train-style autoregressive eval only: predict score triplets with GT control
+    (performance) tokens interleaved. Returns (train_style_correct, train_style_total).
+    """
+    train_style_correct = 0
+    train_style_total = 0
+    for example_idx in tqdm(range(num_examples), desc='Train-style (GT control interleaved)', unit='ex', leave=True):
+        line = lines[example_idx]
+        if '|' in line:
+            token_str, _ = line.split('|')
+            tokens = [int(t) for t in token_str.strip().split()]
+        else:
+            tokens = [int(t) for t in line.strip().split()]
+        # Match train.py / evaluate_checkpoints: clamp invalid tokens
+        tokens = [max(0, t) for t in tokens]
+        alternating_start = 202
+        if len(tokens) <= alternating_start:
+            continue
+        context = list(tokens[:alternating_start])
+        pos = alternating_start
+        while pos + 5 < len(tokens):
+            if (tokens[pos] < CONTROL_OFFSET and tokens[pos+1] < CONTROL_OFFSET and tokens[pos+2] < CONTROL_OFFSET and tokens[pos+2] != REST):
+                with torch.no_grad():
+                    inp = torch.tensor([context], device=device)
+                    out = model(inp)
+                    pred_time = out.logits[0, -1, :].argmax().item()
+                    context.append(pred_time)
+                    inp = torch.tensor([context], device=device)
+                    out = model(inp)
+                    pred_dur = out.logits[0, -1, :].argmax().item()
+                    context.append(pred_dur)
+                    inp = torch.tensor([context], device=device)
+                    out = model(inp)
+                    pred_pitch = out.logits[0, -1, :].argmax().item()
+                    context.append(pred_pitch)
+                true_pitch = tokens[pos + 2]
+                if pred_pitch == true_pitch:
+                    train_style_correct += 1
+                train_style_total += 1
+                pos += 3
+                if pos + 2 < len(tokens):
+                    context.extend([tokens[pos], tokens[pos+1], tokens[pos+2]])
+                    pos += 3
+            else:
+                context.append(tokens[pos])
+                pos += 1
+    return train_style_correct, train_style_total
 
-# Load test data
-print("Loading test data...")
-with open('data/test_clean.txt', 'r') as f:
-    lines = f.readlines()
 
-num_examples = 5
-print(f"Extracting {num_examples} examples with greedy decoding (top_k=1)")
-print()
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate autoregressive pitch accuracy on checkpoints.')
+    parser.add_argument('--checkpoints', nargs='+', default=['newest_model'],
+                        help='Checkpoint dirs to evaluate (e.g. checkpoint-1000 checkpoint-1750). Default: newest_model')
+    parser.add_argument('--data', default='data/test_combined.txt', help='Test data file (default matches train.py --val_file and evaluate_checkpoints.py)')
+    parser.add_argument('--num_examples', type=int, default=30, help='Number of examples (first N lines). For comparison with evaluate_checkpoints use same file and similar N.')
+    args = parser.parse_args()
 
-total_correct = 0
-total_notes = 0
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    with open(args.data, 'r') as f:
+        lines = f.readlines()
+    num_examples = min(args.num_examples, len(lines))
 
-for example_idx in range(num_examples):
-    print(f"Processing example {example_idx + 1}/{num_examples}...")
-    
-    line = lines[example_idx]
-    
-    # Parse sequence
-    if '|' in line:
-        token_str, _ = line.split('|')
-        tokens = [int(t) for t in token_str.strip().split()]
-    else:
-        tokens = [int(t) for t in line.strip().split()]
-    
-    # Find where score notes start
-    score_start_idx = None
-    for i in range(1, len(tokens), 3):
-        if i+2 < len(tokens):
-            if (tokens[i] < CONTROL_OFFSET and 
-                tokens[i+1] < CONTROL_OFFSET and 
-                tokens[i+2] < CONTROL_OFFSET and
-                tokens[i+2] != REST):
-                score_start_idx = i
-                break
-    
-    if score_start_idx is None:
-        print(f"  Skipping - no score notes found")
-        continue
-    
-    # Use bootstrap prefix as context
-    context_tokens = tokens[:score_start_idx]
-    
-    # Convert to tensor and generate
-    input_ids = torch.tensor([context_tokens])
-    generated = greedy_decode_sequence(model, input_ids, max_new_tokens=len(tokens) - score_start_idx)
-    
-    # Get predicted tokens (remove context)
-    predicted_tokens = generated[0, len(context_tokens):].cpu().tolist()
-    
-    # Reconstruct full sequences for saving
-    full_ground_truth = tokens
-    full_predicted = tokens[:score_start_idx] + predicted_tokens[:len(tokens) - score_start_idx]
-    
-    # Extract performance, ground truth score, and predicted score with proper alignment
-    gt_perf, gt_score = extract_aligned_pairs(full_ground_truth)
-    pred_perf, pred_score = extract_aligned_pairs(full_predicted)
-    
-    # Verify alignment: performance pitches should match (100% by design)
-    gt_perf_pitches = [p[2] for p in gt_perf]
-    gt_score_pitches = [s[2] - NOTE_OFFSET for s in gt_score]
-    
-    alignment_correct = sum(1 for i in range(min(len(gt_perf_pitches), len(gt_score_pitches))) 
-                           if gt_perf_pitches[i] == gt_score_pitches[i])
-    alignment_total = min(len(gt_perf_pitches), len(gt_score_pitches))
-    
-    # Calculate pitch accuracy: compare predicted score to ground truth score
-    pred_score_pitches = [s[2] - NOTE_OFFSET for s in pred_score]
-    
-    min_len = min(len(gt_score_pitches), len(pred_score_pitches))
-    if min_len > 0:
-        correct = sum(1 for i in range(min_len) if gt_score_pitches[i] == pred_score_pitches[i])
-        accuracy = 100.0 * correct / min_len
-        total_correct += correct
-        total_notes += min_len
-    else:
-        correct = 0
-        accuracy = 0.0
-    
-    # Convert to flat lists for MIDI conversion
-    performance_events = []
-    for p in gt_perf:
-        performance_events.extend([p[0] + TIME_OFFSET, p[1] + DUR_OFFSET, p[2] + NOTE_OFFSET])
-    
-    gt_score_events = []
-    for s in gt_score:
-        gt_score_events.extend(s)  # Already has offsets
-    
-    pred_score_events = []
-    for s in pred_score:
-        pred_score_events.extend(s)  # Already has offsets
-    
-    # Create output directory
-    output_dir = f'test_examples/example_{example_idx + 1}'
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save as MIDI files
-    print(f"  Saving MIDI files to {output_dir}/")
-    
-    # Performance MIDI
-    perf_midi_path = os.path.join(output_dir, 'performance.mid')
-    perf_midi = events_to_midi(performance_events)
-    perf_midi.save(perf_midi_path)
-    
-    # Ground truth score MIDI
-    gt_midi_path = os.path.join(output_dir, 'ground_truth_score.mid')
-    gt_midi = events_to_midi(gt_score_events)
-    gt_midi.save(gt_midi_path)
-    
-    # Predicted score MIDI
-    pred_midi_path = os.path.join(output_dir, 'model_predictions.mid')
-    pred_midi = events_to_midi(pred_score_events)
-    pred_midi.save(pred_midi_path)
-    
-    print(f"  Performance notes: {len(gt_perf)}")
-    print(f"  Ground truth score notes: {len(gt_score)}")
-    print(f"  Predicted score notes: {len(pred_score)}")
-    print(f"  Alignment accuracy: {100.0 * alignment_correct / alignment_total:.2f}% ({alignment_correct}/{alignment_total})")
-    print(f"  Pitch accuracy: {accuracy:.2f}% ({correct}/{min_len})")
+    results = []
+    for ckpt in tqdm(args.checkpoints, desc='Checkpoints'):
+        tqdm.write(f"Loading {ckpt}...")
+        model = AutoModelForCausalLM.from_pretrained(ckpt)
+        model = model.to(device)
+        model.eval()
+        train_style_correct, train_style_total = run_autoregressive_eval(model, lines, num_examples, device)
+        results.append((ckpt, train_style_correct, train_style_total))
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     print()
+    print("=" * 70)
+    print("Autoregressive pitch accuracy (train-style: GT control interleaved)")
+    print("=" * 70)
+    for ckpt, train_style_correct, train_style_total in results:
+        acc = 100.0 * train_style_correct / train_style_total if train_style_total else 0.0
+        print(f"  {ckpt}: {acc:.2f}% ({train_style_correct}/{train_style_total})")
+    print("=" * 70)
 
-print("="*80)
-print("DONE!")
-print("="*80)
-print(f"Saved {num_examples} examples to test_examples/")
-print()
-print(f"Overall pitch accuracy: {100.0 * total_correct / total_notes:.2f}% ({total_correct}/{total_notes})")
-print()
-print("Each example contains:")
-print("  • performance.mid - The input performance")
-print("  • ground_truth_score.mid - The actual score")
-print("  • model_predictions.mid - Model's greedy predictions (top_k=1)")
+
+if __name__ == '__main__':
+    main()

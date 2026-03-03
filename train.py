@@ -1,6 +1,8 @@
 import argparse
+import json
 import os
 from pathlib import Path
+import time
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
@@ -385,7 +387,16 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     pos += 1
     
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
-    
+
+    # #region agent log
+    _debug_log_path = os.path.join(os.path.dirname(__file__), "debug-e30de5.log")
+    try:
+        with open(_debug_log_path, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId": "e30de5", "timestamp": time.time() * 1000, "location": "train.py:evaluate_model", "message": "train_ar_metrics", "data": {"protocol": "train_gt_control", "uses_gt_control": True, "autoregressive_correct": autoregressive_correct, "autoregressive_total": autoregressive_total, "autoregressive_acc_pct": round(autoregressive_accuracy * 100, 2)}, "hypothesisId": "A"}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
 def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
