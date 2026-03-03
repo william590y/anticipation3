@@ -864,10 +864,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
     
     for key, values in aggregate_metrics.items():
         if values:
-            final_aggregate[f'{key}_mean'] = np.mean(values)
-            final_aggregate[f'{key}_std'] = np.std(values)
-            final_aggregate[f'{key}_min'] = np.min(values)
-            final_aggregate[f'{key}_max'] = np.max(values)
+            final_aggregate[f'{key}_mean'] = float(np.mean(values))
+            final_aggregate[f'{key}_std']  = float(np.std(values))
+            final_aggregate[f'{key}_min']  = float(np.min(values))
+            final_aggregate[f'{key}_max']  = float(np.max(values))
     
     # Save aggregate statistics
     with open(Path(output_dir) / 'aggregate_muster_stats.json', 'w') as f:
