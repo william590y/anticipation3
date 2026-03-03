@@ -59,10 +59,15 @@ class TokenizedDataset(Dataset):
     - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
     - Augmentation (perturbation + masking) applied during training, not tokenization
     """
-    def __init__(self, file_path, perturb_std_ms=0.0, mask_prob=0.0, is_training=True):
+    def __init__(self, file_path, onset_jitter_std=0.0, dur_jitter_range=0.0,
+                 mask_prob=0.0, transpose_range_semitones=0, tempo_scale_range=0.0,
+                 is_training=True):
         self.sequences = []
-        self.perturb_std_ms = perturb_std_ms if is_training else 0.0
+        self.onset_jitter_std = onset_jitter_std if is_training else 0.0
+        self.dur_jitter_range = dur_jitter_range if is_training else 0.0
         self.mask_prob = mask_prob if is_training else 0.0
+        self.transpose_range_semitones = transpose_range_semitones if is_training else 0
+        self.tempo_scale_range = tempo_scale_range if is_training else 0.0
         self.is_training = is_training
         
         with open(file_path, 'r') as f:
@@ -85,7 +90,11 @@ class TokenizedDataset(Dataset):
         self.sequence_length = len(self.sequences[0]) if self.sequences else 0
         print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
         if self.is_training:
-            print(f"  Training mode: perturb_std={self.perturb_std_ms}ms, mask_prob={self.mask_prob}")
+            print(f"  Training mode: onset_jitter_std={self.onset_jitter_std} (N(1,std²) IOI scaling), "
+                  f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
+                  f"mask_prob={self.mask_prob}, "
+                  f"transpose_range={self.transpose_range_semitones} semitones, "
+                  f"tempo_scale_range=U(1±{self.tempo_scale_range})")
         else:
             print(f"  Validation mode: no augmentation")
         
@@ -110,74 +119,163 @@ class TokenizedDataset(Dataset):
         return len(self.sequences)
     
     def _augment_sequence(self, tokens):
-        """Apply on-the-fly augmentation: time perturbation + masking.
+        """Apply on-the-fly augmentation to a single training sequence.
         
-        Only augments CONTROL triplets, not score triplets or special tokens.
-        Control triplets have all 3 tokens >= CONTROL_OFFSET.
-        Score triplets have all 3 tokens < CONTROL_OFFSET.
+        Global augmentations (one value sampled per sequence):
+          - Transposition: uniform ±transpose_range semitones applied to all pitch tokens;
+            pitches outside MIDI [0,127] are folded inward by octave steps.
+          - Tempo scaling: λ ~ U(1-range, 1+range) scales all time/duration tokens.
+        
+        Local augmentations on control (performance) triplets:
+          - Onset jitter:  ô_{i+1} - ô_i = (o_{i+1} - o_i) · N(1, std²)
+            Each inter-onset interval is scaled by an independent Gaussian factor.
+            Requires a two-pass approach: collect all onsets first, then reconstruct.
+          - Duration jitter: each note duration scaled by U(1-range, 1+range).
+          - Masking: randomly suppress triplets from attention/loss.
         
         Returns:
-            augmented_tokens: Perturbed tokens
-            mask_indices: List of positions to mask from attention
+            augmented_tokens: Tensor of augmented token ids
+            mask_indices: List of positions to exclude from attention and loss
         """
         from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST, VOCAB_SIZE,
-                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET)
-        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR
+                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
+                                        TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
+        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
         
-        if not self.is_training or (self.perturb_std_ms == 0 and self.mask_prob == 0):
-            # No augmentation for validation or if disabled
+        no_augmentation = (
+            self.onset_jitter_std == 0 and
+            self.dur_jitter_range == 0 and
+            self.mask_prob == 0 and
+            self.transpose_range_semitones == 0 and
+            self.tempo_scale_range == 0.0
+        )
+        if not self.is_training or no_augmentation:
             return tokens.clone(), []
         
         augmented = tokens.clone()
         mask_indices = []
         
-        # Convert perturbation std from ms to time resolution units
-        perturb_std_units = (self.perturb_std_ms / 1000.0) * TIME_RESOLUTION if self.perturb_std_ms > 0 else 0
+        # ── Global augmentation parameters (sampled once per sequence) ──────────
         
-        # Iterate through sequence in triplets
-        # Skip first token (ANTICIPATE mode token)
+        # Transposition: uniform integer in [-range, +range] semitones
+        transpose_shift = 0
+        if self.transpose_range_semitones > 0:
+            transpose_shift = torch.randint(
+                -self.transpose_range_semitones,
+                self.transpose_range_semitones + 1,
+                (1,)
+            ).item()
+        
+        # Tempo scaling: λ ~ U(1 - range, 1 + range)
+        tempo_factor = 1.0
+        if self.tempo_scale_range > 0.0:
+            tempo_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.tempo_scale_range
+        
+        MIDI_MIN, MIDI_MAX = 0, MAX_PITCH - 1  # 0..127
+        
+        def _transpose_note(raw_tok, note_base):
+            """Transpose a note token; fold out-of-range pitches inward by octave steps."""
+            raw_note = raw_tok - note_base
+            instr = raw_note // MAX_PITCH
+            pitch = raw_note % MAX_PITCH
+            new_pitch = pitch + transpose_shift
+            while new_pitch > MIDI_MAX:
+                new_pitch -= 12
+            while new_pitch < MIDI_MIN:
+                new_pitch += 12
+            new_pitch = max(MIDI_MIN, min(MIDI_MAX, new_pitch))  # safety clamp
+            return note_base + instr * MAX_PITCH + new_pitch
+        
+        def _scale_time(raw_tok, time_base):
+            """Apply global tempo scaling to a time token."""
+            t = int(round((raw_tok - time_base) * tempo_factor))
+            return time_base + max(0, min(MAX_TIME - 1, t))
+        
+        def _scale_dur(raw_tok, dur_base):
+            """Apply global tempo scaling to a duration token."""
+            d = int(round((raw_tok - dur_base) * tempo_factor))
+            return dur_base + max(0, min(MAX_DUR - 1, d))
+        
+        # ── Pass 1: handle event triplets immediately; collect control triplets ──
+        # IOI-based onset jitter requires all control onsets before writing back,
+        # so control triplets are deferred to a second pass.
+        ctrl_positions = []  # list of (seq_pos, tok0, tok1, tok2)
+        
         i = 1
         while i < len(augmented) - 2:
-            # Check if this is a control triplet:
-            # - All 3 tokens must be >= CONTROL_OFFSET
-            # - First token must not be SEPARATOR or ANTICIPATE (these are also >= CONTROL_OFFSET)
-            if (augmented[i] >= CONTROL_OFFSET and 
-                augmented[i+1] >= CONTROL_OFFSET and 
-                augmented[i+2] >= CONTROL_OFFSET and
-                augmented[i] != SEPARATOR and 
-                augmented[i] != ANTICIPATE):
-                
-                # This is a control triplet (time, dur, pitch) with separate offsets
-                
-                # Decide whether to mask this triplet from attention
-                if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
-                    # Mark these 3 positions for masking
-                    mask_indices.extend([i, i+1, i+2])
-                
-                # Apply time perturbation to time and duration (NOT pitch)
-                
-                # Perturb time (first token)
-                # Valid range: [ATIME_OFFSET, ATIME_OFFSET + MAX_TIME - 1]
-                base_time = augmented[i].item() - ATIME_OFFSET
-                time_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_time = max(0, min(MAX_TIME - 1, base_time + time_perturbation))
-                augmented[i] = ATIME_OFFSET + perturbed_time
-                
-                # Perturb duration (second token)
-                # Valid range: [ADUR_OFFSET, ADUR_OFFSET + MAX_DUR - 1]
-                base_dur = augmented[i+1].item() - ADUR_OFFSET
-                dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_dur = max(0, min(MAX_DUR - 1, base_dur + dur_perturbation))
-                augmented[i+1] = ADUR_OFFSET + perturbed_dur
-                
-                # Leave pitch (third token) unchanged
-                # Valid range: [ANOTE_OFFSET, ANOTE_OFFSET + MAX_NOTE - 1]
-                
-                i += 3  # Skip to next triplet
+            tok0 = augmented[i].item()
+            tok1 = augmented[i + 1].item()
+            tok2 = augmented[i + 2].item()
+            
+            is_event_triplet = (tok0 < CONTROL_OFFSET and
+                                tok1 < CONTROL_OFFSET and
+                                tok2 < CONTROL_OFFSET)
+            is_control_triplet = (tok0 >= CONTROL_OFFSET and
+                                  tok1 >= CONTROL_OFFSET and
+                                  tok2 >= CONTROL_OFFSET and
+                                  tok0 != SEPARATOR and
+                                  tok0 != ANTICIPATE)
+            
+            if is_event_triplet:
+                # Apply global augmentations and write back immediately
+                if tempo_factor != 1.0:
+                    tok0 = _scale_time(tok0, TIME_OFFSET)
+                    tok1 = _scale_dur(tok1, DUR_OFFSET)
+                if transpose_shift != 0 and tok2 != REST:
+                    tok2 = _transpose_note(tok2, NOTE_OFFSET)
+                augmented[i] = tok0
+                augmented[i + 1] = tok1
+                augmented[i + 2] = tok2
+                i += 3
+            elif is_control_triplet:
+                ctrl_positions.append((i, tok0, tok1, tok2))
+                i += 3
             else:
-                # Not a control triplet - could be score, rest, separator, etc.
-                # Don't augment, just move to next token
+                # SEPARATOR, padding, or other special token – skip
                 i += 1
+        
+        # ── Pass 2: compute IOI-jittered onset times for control triplets ────────
+        # ô_{i+1} - ô_i = (o_{i+1} - o_i) · N(1, std²)
+        new_ctrl_times = None
+        if self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
+            raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
+            new_t = float(raw_times[0])  # first onset unchanged
+            jittered = [new_t]
+            for k in range(1, len(raw_times)):
+                ioi = raw_times[k] - raw_times[k - 1]
+                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                new_t = new_t + ioi * scale
+                jittered.append(new_t)
+            new_ctrl_times = [max(0, min(MAX_TIME - 1, int(round(t)))) for t in jittered]
+        
+        # ── Pass 3: write back all control triplet modifications ──────────────────
+        for k, (pos_i, tok0, tok1, tok2) in enumerate(ctrl_positions):
+            # IOI-based onset jitter
+            if new_ctrl_times is not None:
+                tok0 = ATIME_OFFSET + new_ctrl_times[k]
+            
+            # Duration jitter: scale by U(1 - range, 1 + range) per note
+            if self.dur_jitter_range > 0:
+                d_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                base_dur = tok1 - ADUR_OFFSET
+                tok1 = ADUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * d_factor))))
+            
+            # Global tempo scaling (applied after local jitter)
+            if tempo_factor != 1.0:
+                tok0 = _scale_time(tok0, ATIME_OFFSET)
+                tok1 = _scale_dur(tok1, ADUR_OFFSET)
+            
+            # Global transposition
+            if transpose_shift != 0:
+                tok2 = _transpose_note(tok2, ANOTE_OFFSET)
+            
+            # Masking
+            if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
+                mask_indices.extend([pos_i, pos_i + 1, pos_i + 2])
+            
+            augmented[pos_i] = tok0
+            augmented[pos_i + 1] = tok1
+            augmented[pos_i + 2] = tok2
         
         return augmented, mask_indices
     
@@ -463,10 +561,10 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./smoketest'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./transposition'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -477,8 +575,15 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--perturb_std_ms', type=float, default=100.0, help='Standard deviation of time perturbation in milliseconds (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0, help='Probability of masking control triplets (training only, 0.0 to 1.0)')
+    parser.add_argument('--onset_jitter_std', type=float, default=0.05,
+                        help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
+    parser.add_argument('--dur_jitter_range', type=float, default=0.05,
+                        help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
+    parser.add_argument('--mask_prob', type=float, default=.3, help='Probability of masking control triplets (training only, 0.0 to 1.0)')
+    parser.add_argument('--transpose_range_semitones', type=int, default=12,
+                        help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
+    parser.add_argument('--tempo_scale_range', type=float, default=0.2,
+                        help='Tempo scale half-range: λ ~ U(1-range, 1+range), e.g. 0.2 gives U(0.8,1.2) (training only)')
     args = parser.parse_args()
     
     # Override device if requested
@@ -512,9 +617,12 @@ def main():
         # Load training dataset
         print(f"Loading training dataset from {args.data_file}...")
         train_dataset = TokenizedDataset(
-            args.data_file, 
-            perturb_std_ms=args.perturb_std_ms,
+            args.data_file,
+            onset_jitter_std=args.onset_jitter_std,
+            dur_jitter_range=args.dur_jitter_range,
             mask_prob=args.mask_prob,
+            transpose_range_semitones=args.transpose_range_semitones,
+            tempo_scale_range=args.tempo_scale_range,
             is_training=True
         )
         
@@ -537,8 +645,6 @@ def main():
         print(f"Loading validation dataset from {args.val_file}...")
         val_dataset = TokenizedDataset(
             args.val_file,
-            perturb_std_ms=0.0,
-            mask_prob=0.0,
             is_training=False
         )
         
