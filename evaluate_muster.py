@@ -247,7 +247,8 @@ def midi_to_musicxml(midi_path, xml_path):
     """
     Convert MIDI file to MusicXML format using music21.
     
-    Creates a simplified MusicXML compatible with MUSTER's parser.
+    Creates a simplified single-part MusicXML compatible with MUSTER's parser.
+    MUSTER expects single-channel piano scores.
     
     Args:
         midi_path: Path to input MIDI file
@@ -260,6 +261,19 @@ def midi_to_musicxml(midi_path, xml_path):
         # Load MIDI file
         score = converter.parse(midi_path)
         
+        # Flatten all parts into a single part for MUSTER compatibility
+        # MUSTER's HMM converter expects nevts_ch.size()==1 (single channel)
+        if len(score.parts) > 1:
+            # Merge all parts into one
+            merged_part = score.parts[0]
+            for part in score.parts[1:]:
+                for elem in part.recurse().notesAndRests:
+                    merged_part.insert(elem.offset, elem)
+            # Create new score with single part
+            new_score = music21.stream.Score()
+            new_score.insert(0, merged_part)
+            score = new_score
+        
         # Quantize to improve alignment and make valid MusicXML
         score = score.quantize(quarterLengthDivisors=[4, 3, 2])
         
@@ -268,11 +282,6 @@ def midi_to_musicxml(midi_path, xml_path):
             part.makeNotation(inPlace=True, cautionaryNotImmediateRepeat=False)
         
         # Write to MusicXML with specific format
-        # Use 'xml' instead of 'musicxml' for MusicXML 3.0 compatibility
-        gex = music21.musicxml.m21ToXml.GeneralObjectExporter(score)
-        
-        # music21 9.x uses different API - try the standard write method
-        # but force MusicXML 3.0 format
         from music21.musicxml.m21ToXml import ScoreExporter
         
         # Create exporter with MusicXML 3.0
@@ -298,6 +307,9 @@ def midi_to_musicxml(midi_path, xml_path):
         return True
     except Exception as e:
         print(f"    Warning: Could not convert {midi_path} to MusicXML: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
         import traceback
         traceback.print_exc()
         return False
