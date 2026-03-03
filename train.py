@@ -62,7 +62,6 @@ class TokenizedDataset(Dataset):
     def __init__(self, file_path, onset_jitter_std=0.0, dur_jitter_range=0.0,
                  mask_prob=0.0, transpose_range_semitones=0, tempo_scale_range=0.0,
                  is_training=True):
-        self.sequences = []
         self.onset_jitter_std = onset_jitter_std if is_training else 0.0
         self.dur_jitter_range = dur_jitter_range if is_training else 0.0
         self.mask_prob = mask_prob if is_training else 0.0
@@ -70,25 +69,36 @@ class TokenizedDataset(Dataset):
         self.tempo_scale_range = tempo_scale_range if is_training else 0.0
         self.is_training = is_training
         
-        with open(file_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if '|' in line:
-                    # New format: "token1 token2 ... | mask_idx1 mask_idx2 ..." (ignored, we augment on-the-fly)
-                    token_str, _ = line.split('|')
-                    tokens = list(map(int, token_str.strip().split()))
-                else:
-                    # Old format: just tokens
-                    tokens = list(map(int, line.split()))
-                
-                # Replace invalid tokens (e.g., -1 from negative time calculations) with 0 (TIME_OFFSET)
-                # This preserves sequence length and structure while fixing tokenization bugs
-                tokens = [max(0, t) for t in tokens]
-                
-                self.sequences.append(torch.tensor(tokens, dtype=torch.long))
-        
-        self.sequence_length = len(self.sequences[0]) if self.sequences else 0
-        print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
+        from anticipation.vocab import ANTICIPATE, VOCAB_SIZE
+
+        # Lazy loading: store byte offsets only — sequences are read on demand in __getitem__.
+        # This keeps startup fast and RAM usage minimal regardless of file size.
+        self.file_path = str(file_path)
+        self.offsets = []          # byte offset of each non-empty line
+        self.sequence_length = 0   # filled from first line
+
+        print(f"Scanning {file_path} for line offsets...")
+        with open(self.file_path, 'rb') as f:
+            offset = 0
+            for raw_line in f:
+                stripped = raw_line.strip()
+                if stripped:
+                    self.offsets.append(offset)
+                offset += len(raw_line)
+
+        print(f"Found {len(self.offsets)} sequences")
+
+        # Read a single line to determine sequence length and validate format
+        if self.offsets:
+            tokens = self._read_tokens(0)
+            self.sequence_length = len(tokens)
+            first_tok = tokens[0]
+            if first_tok == ANTICIPATE:
+                print(f"Tokenization format validated (starts with ANTICIPATE token)")
+            else:
+                print(f"Warning: First token is {first_tok}, expected ANTICIPATE ({ANTICIPATE})")
+            print(f"Sequence length: {self.sequence_length}")
+
         if self.is_training:
             print(f"  Training mode: onset_jitter_std={self.onset_jitter_std} (N(1,std²) IOI scaling), "
                   f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
@@ -97,26 +107,22 @@ class TokenizedDataset(Dataset):
                   f"tempo_scale_range=U(1±{self.tempo_scale_range})")
         else:
             print(f"  Validation mode: no augmentation")
-        
-        # Validate format and token ranges
-        if self.sequences:
-            from anticipation.vocab import ANTICIPATE, VOCAB_SIZE
-            sample = self.sequences[0].tolist()
-            if len(sample) >= 1:
-                if sample[0] == ANTICIPATE:
-                    print(f"✓ Tokenization format validated (starts with ANTICIPATE token)")
-                else:
-                    print(f"⚠ Warning: First token is {sample[0]}, expected ANTICIPATE ({ANTICIPATE})")
-            
-            # Validate all tokens are within vocabulary range
-            max_token = max(max(seq.tolist()) for seq in self.sequences)
-            min_token = min(min(seq.tolist()) for seq in self.sequences)
-            if max_token >= VOCAB_SIZE or min_token < 0:
-                raise ValueError(f"Invalid token range: [{min_token}, {max_token}], must be [0, {VOCAB_SIZE-1}]")
-            print(f"✓ Token range validated: [{min_token}, {max_token}] within [0, {VOCAB_SIZE-1}]")
     
     def __len__(self):
-        return len(self.sequences)
+        return len(self.offsets)
+    
+    def _read_tokens(self, idx):
+        """Read and parse tokens for sequence at index idx from disk."""
+        with open(self.file_path, 'rb') as f:
+            f.seek(self.offsets[idx])
+            raw_line = f.readline().decode('utf-8').strip()
+        if '|' in raw_line:
+            token_str, _ = raw_line.split('|', 1)
+            tokens = list(map(int, token_str.strip().split()))
+        else:
+            tokens = list(map(int, raw_line.split()))
+        # Clamp negatives that can arise from tokenization bugs
+        return [max(0, t) for t in tokens]
     
     def _augment_sequence(self, tokens):
         """Apply on-the-fly augmentation to a single training sequence.
@@ -280,7 +286,7 @@ class TokenizedDataset(Dataset):
         return augmented, mask_indices
     
     def __getitem__(self, idx):
-        tokens = self.sequences[idx]
+        tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
         
         # Apply on-the-fly augmentation (time perturbation + masking)
         augmented_tokens, mask_idxs = self._augment_sequence(tokens)
@@ -569,7 +575,7 @@ def main():
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
-    parser.add_argument('--max_steps', type=int, default=3500)
+    parser.add_argument('--max_steps', type=int, default=2500)
     parser.add_argument('--save_steps', type=int, default=250)
     parser.add_argument('--eval_steps', type=int, default=100)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
@@ -638,7 +644,7 @@ def main():
             shuffle=True,
             collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=0,  # Avoid multiprocessing issues
+            num_workers=32,  # Avoid multiprocessing issues
         )
         
         # Load validation dataset (NO augmentation)
@@ -654,7 +660,7 @@ def main():
             shuffle=False,  # No need to shuffle validation data
             collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=0,
+            num_workers=32,
         )
         
         # Load model with memory optimizations
