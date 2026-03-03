@@ -187,75 +187,139 @@ def extract_components(tokens, score_start_idx):
     return performance, score_triplets
 
 
-def autoregressive_generate_score(model, tokens, score_start_idx, device, forced=False, forced_max_attempts=1000):
+def autoregressive_generate_score(model, tokens, score_start_idx, device,
+                                   forced=False, forced_max_attempts=1000,
+                                   beam_size=1):
     """
     Generate score tokens autoregressively while keeping control tokens fixed.
 
-    Args:
-        model: the language model
-        tokens: ground-truth token sequence
-        score_start_idx: position where score triplets begin
-        device: torch device
-        forced: if True, sample from the model distribution until the GT token is
-                drawn (oracle / "forced" decoding).  Guarantees the context stays
-                on the correct path so MUSTER receives a perfect score sequence.
-        forced_max_attempts: give up sampling and use the GT token directly after
-                             this many attempts (avoids infinite loops).
+    Modes (mutually exclusive, checked in this order):
+
+    beam_size > 1  – token-level beam search over score tokens.  At each of the
+        3 score-token slots the top-beam_size continuations from every active
+        beam are considered, and the global top-beam_size are kept.  Control
+        triplets are identical (GT) across all beams.  The highest
+        log-probability beam is returned at the end.
+
+    forced=True  – for each score triplet position, sample a full
+        (time, dur, pitch) triplet autoregressively.  If the generated PITCH
+        does not match the GT pitch, roll the context back and resample the
+        whole triplet.  Repeat until the pitch matches or forced_max_attempts
+        triplet draws are exhausted; on budget exhaustion the last predicted
+        time/dur are kept and only the GT pitch is injected.
+
+    default  – greedy (argmax) decoding at each score token.
 
     Returns:
-        predicted token list  (identical to GT for score positions when forced=True)
-        forced_stats dict (only populated when forced=True):
-            'total_draws': total samples drawn across all tokens
-            'tokens_forced': how many tokens hit max_attempts and were injected as GT
+        (predicted_token_list, stats_dict)
+
+        stats_dict keys when forced:
+            'total_triplet_attempts' – total triplet draws across all positions
+            'positions_forced'       – positions where GT pitch was injected
+        stats_dict keys when beam:
+            'beam_log_prob'          – log-prob of the winning beam
     """
+
+    # ------------------------------------------------------------------ #
+    #  BEAM SEARCH
+    # ------------------------------------------------------------------ #
+    if beam_size > 1:
+        # Each beam is (context_list, cumulative_log_prob)
+        beams = [(list(tokens[:score_start_idx]), 0.0)]
+
+        pos = score_start_idx
+        while pos + 5 < len(tokens):
+            is_score = (
+                tokens[pos]   < CONTROL_OFFSET and
+                tokens[pos+1] < CONTROL_OFFSET and
+                tokens[pos+2] < CONTROL_OFFSET and
+                tokens[pos+2] != REST
+            )
+            if is_score:
+                # Expand beams over each of the 3 score token slots
+                for _slot in range(3):
+                    candidates = []
+                    for ctx, lp in beams:
+                        with torch.no_grad():
+                            inp = torch.tensor([ctx], device=device)
+                            log_probs = torch.log_softmax(
+                                model(inp).logits[0, -1, :], dim=-1)
+                        top_lps, top_toks = torch.topk(log_probs, beam_size)
+                        for tok, tlp in zip(top_toks.tolist(), top_lps.tolist()):
+                            candidates.append((ctx + [tok], lp + tlp))
+                    candidates.sort(key=lambda x: x[1], reverse=True)
+                    beams = candidates[:beam_size]
+
+                pos += 3
+                # All beams receive the same GT control triplet
+                if pos + 2 < len(tokens):
+                    beams = [(ctx + [tokens[pos], tokens[pos+1], tokens[pos+2]], lp)
+                             for ctx, lp in beams]
+                    pos += 3
+            else:
+                beams = [(ctx + [tokens[pos]], lp) for ctx, lp in beams]
+                pos += 1
+
+        best_ctx, best_lp = max(beams, key=lambda x: x[1])
+        return best_ctx, {'beam_log_prob': best_lp}
+
+    # ------------------------------------------------------------------ #
+    #  FORCED / GREEDY
+    # ------------------------------------------------------------------ #
     context = list(tokens[:score_start_idx])
-    forced_stats = {'total_draws': 0, 'tokens_forced': 0}
+    stats = {'total_triplet_attempts': 0, 'positions_forced': 0}
 
     pos = score_start_idx
     while pos + 5 < len(tokens):
-        if (tokens[pos] < CONTROL_OFFSET and
+        if (tokens[pos]   < CONTROL_OFFSET and
             tokens[pos+1] < CONTROL_OFFSET and
             tokens[pos+2] < CONTROL_OFFSET and
             tokens[pos+2] != REST):
 
+            gt_pitch = tokens[pos+2]
+
             if forced:
-                # Forced / oracle decoding: sample until we hit the GT token
-                for slot, gt_tok in enumerate([tokens[pos], tokens[pos+1], tokens[pos+2]]):
+                # Sample a full triplet; retry until pitch matches GT
+                matched = False
+                for _attempt in range(forced_max_attempts):
+                    stats['total_triplet_attempts'] += 1
+                    ctx_before = list(context)      # save for rollback
                     with torch.no_grad():
-                        input_tensor = torch.tensor([context], device=device)
-                        logits = model(input_tensor).logits[0, -1, :]
-                        probs  = torch.softmax(logits, dim=-1)
+                        inp = torch.tensor([context], device=device)
+                        tok_t = torch.multinomial(
+                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
+                        context.append(tok_t)
 
-                    attempts = 0
-                    sampled = torch.multinomial(probs, 1).item()
-                    forced_stats['total_draws'] += 1
-                    while sampled != gt_tok and attempts < forced_max_attempts:
-                        sampled = torch.multinomial(probs, 1).item()
-                        forced_stats['total_draws'] += 1
-                        attempts += 1
+                        inp = torch.tensor([context], device=device)
+                        tok_d = torch.multinomial(
+                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
+                        context.append(tok_d)
 
-                    if sampled != gt_tok:
-                        # Exceeded budget — inject GT token directly
-                        sampled = gt_tok
-                        forced_stats['tokens_forced'] += 1
+                        inp = torch.tensor([context], device=device)
+                        tok_p = torch.multinomial(
+                            torch.softmax(model(inp).logits[0, -1, :], dim=-1), 1).item()
+                        context.append(tok_p)
 
-                    context.append(sampled)
+                    if tok_p == gt_pitch:
+                        matched = True
+                        break
+                    context = ctx_before   # pitch wrong – roll back
+
+                if not matched:
+                    # Budget exhausted: keep last predicted time/dur, inject GT pitch
+                    context[-1] = gt_pitch
+                    stats['positions_forced'] += 1
             else:
+                # Greedy decoding
                 with torch.no_grad():
-                    input_tensor = torch.tensor([context], device=device)
-                    outputs = model(input_tensor)
-                    pred_time = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_time)
+                    inp = torch.tensor([context], device=device)
+                    context.append(model(inp).logits[0, -1, :].argmax().item())
 
-                    input_tensor = torch.tensor([context], device=device)
-                    outputs = model(input_tensor)
-                    pred_dur = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_dur)
+                    inp = torch.tensor([context], device=device)
+                    context.append(model(inp).logits[0, -1, :].argmax().item())
 
-                    input_tensor = torch.tensor([context], device=device)
-                    outputs = model(input_tensor)
-                    pred_pitch = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_pitch)
+                    inp = torch.tensor([context], device=device)
+                    context.append(model(inp).logits[0, -1, :].argmax().item())
 
             pos += 3
 
@@ -267,7 +331,7 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device, forced
             context.append(tokens[pos])
             pos += 1
 
-    return context, forced_stats
+    return context, stats
 
 
 def triplets_to_events(triplets):
@@ -654,13 +718,14 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
 
 
 def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, output_dir,
-                               forced=False, forced_max_attempts=1000):
+                               forced=False, forced_max_attempts=1000, beam_size=1):
     """
     Evaluate a checkpoint using MUSTER metrics.
 
     Args:
-        forced: use oracle/forced decoding (sample until GT token drawn).
-        forced_max_attempts: max samples per token before injecting GT directly.
+        forced: retry-triplet-until-pitch-matches oracle decoding.
+        forced_max_attempts: max triplet draws per position before injecting GT pitch.
+        beam_size: beam width for beam-search decoding (1 = greedy).
 
     Returns aggregate MUSTER statistics.
     """
@@ -680,8 +745,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         'mean_error_rate_with_voice': []
     }
     if forced:
-        aggregate_metrics['forced_total_draws']   = []
-        aggregate_metrics['forced_tokens_forced'] = []
+        aggregate_metrics['forced_total_triplet_attempts'] = []
+        aggregate_metrics['forced_positions_forced']       = []
+    if beam_size > 1:
+        aggregate_metrics['beam_log_prob'] = []
     
     per_sequence_metrics = []
     num_successful = 0
@@ -707,9 +774,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
         
         # Generate predictions
         try:
-            predicted_tokens, forced_stats = autoregressive_generate_score(
+            predicted_tokens, gen_stats = autoregressive_generate_score(
                 model, tokens, score_start_idx, device,
-                forced=forced, forced_max_attempts=forced_max_attempts
+                forced=forced, forced_max_attempts=forced_max_attempts,
+                beam_size=beam_size
             )
         except Exception as e:
             print(f"  Sequence {orig_idx}: Generation failed - {e}")
@@ -764,8 +832,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
             metrics['num_gt_notes'] = len(gt_score)
             metrics['num_pred_notes'] = len(pred_score)
             if forced:
-                metrics['forced_total_draws']  = forced_stats['total_draws']
-                metrics['forced_tokens_forced'] = forced_stats['tokens_forced']
+                metrics['forced_total_triplet_attempts'] = gen_stats['total_triplet_attempts']
+                metrics['forced_positions_forced']       = gen_stats['positions_forced']
+            if beam_size > 1:
+                metrics['beam_log_prob'] = gen_stats.get('beam_log_prob', 0.0)
             per_sequence_metrics.append(metrics)
             
             # Update aggregates
@@ -773,8 +843,10 @@ def evaluate_checkpoint_muster(checkpoint_path, test_lines, original_indices, ou
                 if key in metrics:
                     aggregate_metrics[key].append(metrics[key])
             if forced:
-                aggregate_metrics['forced_total_draws'].append(forced_stats['total_draws'])
-                aggregate_metrics['forced_tokens_forced'].append(forced_stats['tokens_forced'])
+                aggregate_metrics['forced_total_triplet_attempts'].append(gen_stats['total_triplet_attempts'])
+                aggregate_metrics['forced_positions_forced'].append(gen_stats['positions_forced'])
+            if beam_size > 1:
+                aggregate_metrics['beam_log_prob'].append(gen_stats.get('beam_log_prob', 0.0))
             
             num_successful += 1
             
@@ -837,16 +909,24 @@ def print_muster_summary(checkpoint_name, stats):
             print(f"  {name:<30} {stats[mean_key]:>8.2f}% (±{stats[std_key]:.2f})")
     
     # Forced decoding stats
-    if 'forced_total_draws_mean' in stats:
+    if 'forced_total_triplet_attempts_mean' in stats:
         print()
         print("  Forced Decoding Stats:")
         print("  " + "-"*50)
-        print(f"  {'Avg draws per sequence':<30} {stats['forced_total_draws_mean']:>8.1f}")
-        print(f"  {'Avg tokens forced (GT injected)':<30} {stats['forced_tokens_forced_mean']:>8.1f}")
+        print(f"  {'Avg triplet attempts/seq':<30} {stats['forced_total_triplet_attempts_mean']:>8.1f}")
+        print(f"  {'Avg positions GT-injected':<30} {stats['forced_positions_forced_mean']:>8.1f}")
+
+    # Beam search stats
+    if 'beam_log_prob_mean' in stats:
+        print()
+        print("  Beam Search Stats:")
+        print("  " + "-"*50)
+        print(f"  {'Avg best-beam log-prob':<30} {stats['beam_log_prob_mean']:>8.2f}")
     print()
 
 
-def main(checkpoint=None, test_file=None, num_examples=None, forced=False, forced_max_attempts=1000):
+def main(checkpoint=None, test_file=None, num_examples=None,
+         forced=False, forced_max_attempts=1000, beam_size=1):
     if checkpoint is None:
         checkpoint = DEFAULT_CHECKPOINT
     if test_file is None:
@@ -855,12 +935,15 @@ def main(checkpoint=None, test_file=None, num_examples=None, forced=False, force
         num_examples = NUM_EXAMPLES
     
     print("="*80)
-    print("MUSTER EVALUATION" + (" [FORCED/ORACLE DECODING]" if forced else ""))
+    mode_tag = " [FORCED/ORACLE]" if forced else (f" [BEAM={beam_size}]" if beam_size > 1 else "")
+    print("MUSTER EVALUATION" + mode_tag)
     print("="*80)
     print(f"Checkpoint: {checkpoint}")
     print(f"Test file: {test_file}")
     if forced:
-        print(f"Forced decoding: ON (max {forced_max_attempts} samples per token)")
+        print(f"Forced decoding: ON (max {forced_max_attempts} triplet attempts per position)")
+    if beam_size > 1:
+        print(f"Beam search: ON (beam_size={beam_size})")
     print()
     
     # Check MUSTER installation
@@ -894,8 +977,13 @@ def main(checkpoint=None, test_file=None, num_examples=None, forced=False, force
         sampled_indices = list(range(len(all_lines)))
     print()
     
-    # Create output directory (separate subdir for forced runs)
-    subdir = f'{checkpoint}_forced' if forced else checkpoint
+    # Create output directory (separate subdir per mode)
+    if forced:
+        subdir = f'{checkpoint}_forced'
+    elif beam_size > 1:
+        subdir = f'{checkpoint}_beam{beam_size}'
+    else:
+        subdir = checkpoint
     output_dir = Path(OUTPUT_BASE) / subdir
     os.makedirs(output_dir, exist_ok=True)
     
@@ -910,7 +998,8 @@ def main(checkpoint=None, test_file=None, num_examples=None, forced=False, force
     # Evaluate
     stats = evaluate_checkpoint_muster(
         checkpoint, test_lines, sampled_indices, str(output_dir),
-        forced=forced, forced_max_attempts=forced_max_attempts
+        forced=forced, forced_max_attempts=forced_max_attempts,
+        beam_size=beam_size
     )
     
     # Print summary
@@ -940,8 +1029,16 @@ if __name__ == '__main__':
                         help='Forced/oracle decoding: sample from model until GT token is drawn, '
                              'guaranteeing the model stays on the correct path')
     parser.add_argument('--forced-max-attempts', type=int, default=1000,
-                        help='Max samples per token before injecting GT directly (default: 1000)')
+                        help='Max triplet draws per position before injecting GT pitch (default: 1000)')
+    parser.add_argument('--beam', type=int, default=1, metavar='BEAM_SIZE',
+                        help='Beam size for beam-search decoding (default: 1 = greedy). '
+                             'Mutually exclusive with --forced.')
     args = parser.parse_args()
-    
+
+    if args.forced and args.beam > 1:
+        print('ERROR: --forced and --beam are mutually exclusive.')
+        sys.exit(1)
+
     main(checkpoint=args.checkpoint, test_file=args.test_file, num_examples=args.num_examples,
-         forced=args.forced, forced_max_attempts=args.forced_max_attempts)
+         forced=args.forced, forced_max_attempts=args.forced_max_attempts,
+         beam_size=args.beam)
