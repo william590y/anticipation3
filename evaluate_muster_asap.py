@@ -530,7 +530,7 @@ def main():
     mode   = ('_forced' if args.forced
                else (f'_beam{args.beam}' if args.beam > 1 else ''))
     temp   = f'_temp{args.temperature}' if args.temperature > 0 else ''
-    subdir = f'{args.checkpoint}_asap{mode}{temp}'
+    subdir = f'{args.checkpoint}_asap_full{mode}{temp}'
     output_dir = str(Path(OUTPUT_BASE) / subdir)
     os.makedirs(output_dir, exist_ok=True)
 

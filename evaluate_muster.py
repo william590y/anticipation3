@@ -372,10 +372,48 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
         'beam_log_prob':           0.0,
     }
 
+    vocab_size = model.config.vocab_size
+
     def _run_model(ctx):
         """Single forward pass; returns logits for the last position."""
         with torch.no_grad():
-            return model(torch.tensor([ctx], device=device)).logits[0, -1, :]
+            # Clamp to valid embedding range — large time tokens from long pieces
+            # can otherwise exceed vocab size and trigger a CUDA device-side assert.
+            safe = [min(max(t, 0), vocab_size - 1) for t in ctx]
+            return model(torch.tensor([safe], device=device)).logits[0, -1, :]
+
+    def _renormalize_alt_times(alt):
+        """
+        After a context slide the alternating section contains mid-piece events
+        whose absolute times may be very large.  Re-normalize so the earliest
+        time in the remaining section becomes 0, matching what the model saw
+        during training (each window starts at t=0).
+
+        Pattern inside `alt` (repeating groups of 6):
+            [score_time, score_dur, score_pitch, ctrl_time, ctrl_dur, ctrl_pitch]
+        Score time tokens < CONTROL_OFFSET; ctrl time tokens >= CONTROL_OFFSET.
+        Both are shifted by the same `time_shift` in raw bins.
+        """
+        if not alt:
+            return alt
+        raw_times = []
+        for i in range(0, len(alt) - 2, 6):
+            if alt[i] < CONTROL_OFFSET:
+                raw_times.append(alt[i] - TIME_OFFSET)
+            if i + 3 < len(alt) and alt[i + 3] >= CONTROL_OFFSET:
+                raw_times.append(alt[i + 3] - ATIME_OFFSET)
+        if not raw_times:
+            return alt
+        time_shift = min(raw_times)
+        if time_shift <= 0:
+            return alt
+        new_alt = list(alt)
+        for i in range(0, len(new_alt) - 2, 6):
+            if new_alt[i] < CONTROL_OFFSET:
+                new_alt[i] = max(TIME_OFFSET, new_alt[i] - time_shift)
+            if i + 3 < len(new_alt) and new_alt[i + 3] >= CONTROL_OFFSET:
+                new_alt[i + 3] = max(ATIME_OFFSET, new_alt[i + 3] - time_shift)
+        return new_alt
 
     def _sample_tok(ctx):
         logits = _run_model(ctx)
@@ -462,7 +500,8 @@ def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, d
             # Drop the older half, aligned to 6-token (score+ctrl pair) boundaries
             half = (len(alt) // 2) // 6 * 6
             if half > 0:
-                context = header + alt[half:]
+                remaining = _renormalize_alt_times(alt[half:])
+                context = header + remaining
                 stats['num_slides'] += 1
 
     return pred_score_triplets, stats
