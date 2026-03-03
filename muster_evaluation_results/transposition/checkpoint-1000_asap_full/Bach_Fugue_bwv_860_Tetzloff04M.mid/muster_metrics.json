@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 26.9524,
+  "missing_note_rate": 50.1905,
+  "extra_note_rate": 69.2353,
+  "onset_time_error_rate": 69.4073,
+  "offset_time_error_rate": 67.304,
+  "mean_error_rate": 56.6179,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 47.1816,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 2.03206,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_860/Tetzloff04M.mid",
+  "num_gt_notes": 1700,
+  "num_pred_notes": 1716
+}

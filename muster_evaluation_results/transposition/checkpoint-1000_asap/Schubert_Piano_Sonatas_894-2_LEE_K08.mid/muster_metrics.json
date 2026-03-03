@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 1.47059,
+  "missing_note_rate": 1.47059,
+  "extra_note_rate": 2.18978,
+  "onset_time_error_rate": 29.1045,
+  "offset_time_error_rate": 2.98507,
+  "mean_error_rate": 7.4441,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 6.20342,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.01872,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Piano_Sonatas/894-2/LEE_K08.mid",
+  "num_gt_notes": 137,
+  "num_pred_notes": 137
+}

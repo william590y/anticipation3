@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 0.0,
+  "missing_note_rate": 0.0,
+  "extra_note_rate": 0.0,
+  "onset_time_error_rate": 28.4672,
+  "offset_time_error_rate": 0.0,
+  "mean_error_rate": 5.69343,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 4.74453,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.0,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/12-1/Garritson01.mid",
+  "num_gt_notes": 137,
+  "num_pred_notes": 137
+}

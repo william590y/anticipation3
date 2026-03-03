@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 31.1881,
+  "missing_note_rate": 51.3201,
+  "extra_note_rate": 53.3965,
+  "onset_time_error_rate": 75.9322,
+  "offset_time_error_rate": 61.6949,
+  "mean_error_rate": 54.7064,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 45.5886,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 2.02631,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_862/Song04M.mid",
+  "num_gt_notes": 633,
+  "num_pred_notes": 649
+}

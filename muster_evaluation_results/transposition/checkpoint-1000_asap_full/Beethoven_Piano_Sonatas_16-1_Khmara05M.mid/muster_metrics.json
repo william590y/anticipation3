@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 2.88136,
+  "missing_note_rate": 70.5085,
+  "extra_note_rate": 93.973,
+  "onset_time_error_rate": 51.7241,
+  "offset_time_error_rate": 11.4943,
+  "mean_error_rate": 46.1162,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 38.4302,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.08993,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/16-1/Khmara05M.mid",
+  "num_gt_notes": 2887,
+  "num_pred_notes": 2887
+}

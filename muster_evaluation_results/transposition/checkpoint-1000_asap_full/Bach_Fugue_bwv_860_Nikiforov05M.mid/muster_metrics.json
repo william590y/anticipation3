@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 31.2982,
+  "missing_note_rate": 49.7429,
+  "extra_note_rate": 53.7825,
+  "onset_time_error_rate": 62.4041,
+  "offset_time_error_rate": 64.1944,
+  "mean_error_rate": 52.2844,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 43.5704,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.96285,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_860/Nikiforov05M.mid",
+  "num_gt_notes": 1692,
+  "num_pred_notes": 1708
+}

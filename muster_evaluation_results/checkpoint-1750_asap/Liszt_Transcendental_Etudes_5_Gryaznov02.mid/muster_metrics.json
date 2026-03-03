@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 5.83942,
+  "missing_note_rate": 6.56934,
+  "extra_note_rate": 6.56934,
+  "onset_time_error_rate": 12.5,
+  "offset_time_error_rate": 7.03125,
+  "mean_error_rate": 7.70187,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 6.41823,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.08809,
+  "hand_error_rate": 0.0,
+  "piece": "Liszt/Transcendental_Etudes/5/Gryaznov02.mid",
+  "num_gt_notes": 137,
+  "num_pred_notes": 137
+}

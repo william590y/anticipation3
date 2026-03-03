@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 26.9103,
+  "missing_note_rate": 13.6213,
+  "extra_note_rate": 55.4795,
+  "onset_time_error_rate": 38.4615,
+  "offset_time_error_rate": 30.7692,
+  "mean_error_rate": 33.0484,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 27.5403,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.39473,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_866/SOLOM02.mid",
+  "num_gt_notes": 584,
+  "num_pred_notes": 600
+}

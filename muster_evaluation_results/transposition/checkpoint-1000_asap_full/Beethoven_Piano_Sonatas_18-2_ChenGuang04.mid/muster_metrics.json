@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 2.8897,
+  "missing_note_rate": 90.4762,
+  "extra_note_rate": 91.8153,
+  "onset_time_error_rate": 59.8291,
+  "offset_time_error_rate": 32.4786,
+  "mean_error_rate": 55.4978,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 46.2482,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.51278,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/18-2/ChenGuang04.mid",
+  "num_gt_notes": 2894,
+  "num_pred_notes": 2910
+}

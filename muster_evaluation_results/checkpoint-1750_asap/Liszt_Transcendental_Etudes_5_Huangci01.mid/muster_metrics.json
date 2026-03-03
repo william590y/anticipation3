@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 5.83942,
+  "missing_note_rate": 2.18978,
+  "extra_note_rate": 2.18978,
+  "onset_time_error_rate": 11.194,
+  "offset_time_error_rate": 4.47761,
+  "mean_error_rate": 5.17812,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 4.3151,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.03215,
+  "hand_error_rate": 0.0,
+  "piece": "Liszt/Transcendental_Etudes/5/Huangci01.mid",
+  "num_gt_notes": 137,
+  "num_pred_notes": 137
+}

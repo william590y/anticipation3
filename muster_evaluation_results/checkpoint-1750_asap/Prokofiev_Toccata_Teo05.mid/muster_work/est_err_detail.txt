@@ -1,0 +1,173 @@
+ExtraNote:	EstID	P1-3-12	sitch	D2	onstime	624
+ExtraNote:	EstID	P1-3-11	sitch	D3	onstime	612
+ExtraNote:	EstID	P1-3-10	sitch	D3	onstime	600
+ExtraNote:	EstID	P1-3-9	sitch	D2	onstime	588
+ExtraNote:	EstID	P1-3-8	sitch	D3	onstime	576
+ExtraNote:	EstID	P1-3-7	sitch	D3	onstime	564
+ExtraNote:	EstID	P1-6-16	sitch	D3	onstime	1548
+ExtraNote:	EstID	P1-3-5	sitch	D3	onstime	540
+MissNote:	GtID	P1-5-14	sitch	D2	onstime	1416
+OnsetError(shift):	GtID	P1-2-20	EstID	P1-3-6	GtSitch	D2	EstSitch	D2	GtOnstime	540	EstOnstime	552
+OnsetError(shift):	GtID	P1-2-21	EstID	P1-3-13	GtSitch	D3	EstSitch	D3	GtOnstime	552	EstOnstime	636
+OnsetError(shift):	GtID	P1-5-15	EstID	P1-6-12	GtSitch	C3	EstSitch	C3	GtOnstime	1428	EstOnstime	1500
+OnsetError(shift):	GtID	P1-5-19	EstID	P1-6-17	GtSitch	D2	EstSitch	D2	GtOnstime	1476	EstOnstime	1560
+OffsetError:	GtID	P1-2-19	EstID	P1-3-4	GtSitch	D3	EstSitch	D3	GtOnstime	528	EstOnstime	528	GtLength	12	EstLength(rescaled)	6
+OffsetError:	GtID	P1-2-20	EstID	P1-3-6	GtSitch	D2	EstSitch	D2	GtOnstime	540	EstOnstime	552	GtLength	12	EstLength(rescaled)	1
+OffsetError:	GtID	P1-5-13	EstID	P1-6-11	GtSitch	D3	EstSitch	D3	GtOnstime	1404	EstOnstime	1488	GtLength	12	EstLength(rescaled)	24
+OffsetError:	GtID	P1-5-18	EstID	P1-6-15	GtSitch	D3	EstSitch	D2	GtOnstime	1464	EstOnstime	1536	GtLength	12	EstLength(rescaled)	6
+# Correspondence of matched notes (GtID vs EstID)
+P1-1-1	P1-1-1
+P1-1-2	P1-1-2
+P1-1-3	P1-1-3
+P1-1-4	P1-1-4
+P1-1-5	P1-1-5
+P1-1-6	P1-1-6
+P1-1-7	P1-1-7
+P1-1-8	P1-1-8
+P1-1-9	P1-1-9
+P1-1-10	P1-1-10
+P1-1-11	P1-1-11
+P1-1-12	P1-1-12
+P1-1-13	P1-1-13
+P1-1-14	P1-1-14
+P1-1-15	P1-1-15
+P1-1-16	P1-1-16
+P1-1-17	P1-1-17
+P1-1-18	P1-1-18
+P1-1-19	P1-1-19
+P1-1-20	P1-1-20
+P1-1-21	P1-1-21
+P1-1-22	P1-2-1
+P1-1-23	P1-2-2
+P1-1-24	P1-2-3
+P1-1-25	P1-2-4
+P1-1-26	P1-2-5
+P1-2-1	P1-2-6
+P1-2-2	P1-2-7
+P1-2-3	P1-2-8
+P1-2-4	P1-2-9
+P1-2-5	P1-2-10
+P1-2-6	P1-2-11
+P1-2-7	P1-2-12
+P1-2-8	P1-2-13
+P1-2-9	P1-2-14
+P1-2-10	P1-2-15
+P1-2-11	P1-2-16
+P1-2-12	P1-2-17
+P1-2-13	P1-2-18
+P1-2-14	P1-2-19
+P1-2-15	P1-2-20
+P1-2-16	P1-3-1
+P1-2-17	P1-3-2
+P1-2-18	P1-3-3
+P1-2-19	P1-3-4
+P1-2-20	P1-3-6
+P1-2-21	P1-3-13
+P1-2-22	P1-3-14
+P1-2-23	P1-3-15
+P1-2-24	P1-3-16
+P1-2-25	P1-3-17
+P1-3-1	P1-3-18
+P1-3-2	P1-3-19
+P1-3-3	P1-3-20
+P1-3-4	P1-3-21
+P1-3-5	P1-3-22
+P1-3-6	P1-3-23
+P1-3-7	P1-4-1
+P1-3-8	P1-4-2
+P1-3-9	P1-4-3
+P1-3-10	P1-4-4
+P1-3-11	P1-4-5
+P1-3-12	P1-4-6
+P1-3-13	P1-4-7
+P1-3-14	P1-4-8
+P1-3-15	P1-4-9
+P1-3-16	P1-4-10
+P1-3-17	P1-4-11
+P1-3-18	P1-4-12
+P1-3-19	P1-4-13
+P1-3-20	P1-4-14
+P1-3-21	P1-4-15
+P1-3-22	P1-4-16
+P1-3-23	P1-4-17
+P1-3-24	P1-4-18
+P1-3-25	P1-4-19
+P1-3-26	P1-4-20
+P1-3-27	P1-4-21
+P1-3-28	P1-4-22
+P1-3-29	P1-4-23
+P1-4-1	P1-4-24
+P1-4-2	P1-4-25
+P1-4-3	P1-4-26
+P1-4-4	P1-4-27
+P1-4-5	P1-4-28
+P1-4-6	P1-4-29
+P1-4-7	P1-5-1
+P1-4-8	P1-5-2
+P1-4-9	P1-5-3
+P1-4-10	P1-5-4
+P1-4-11	P1-5-5
+P1-4-12	P1-5-6
+P1-4-13	P1-5-7
+P1-4-14	P1-5-8
+P1-4-15	P1-5-9
+P1-4-16	P1-5-10
+P1-4-17	P1-5-11
+P1-4-18	P1-5-12
+P1-4-19	P1-5-13
+P1-4-20	P1-5-14
+P1-4-21	P1-5-15
+P1-4-22	P1-5-16
+P1-4-23	P1-5-17
+P1-4-24	P1-5-18
+P1-4-25	P1-5-19
+P1-5-1	P1-5-20
+P1-5-2	P1-5-21
+P1-5-3	P1-6-1
+P1-5-4	P1-6-2
+P1-5-5	P1-6-3
+P1-5-6	P1-6-4
+P1-5-7	P1-6-5
+P1-5-8	P1-6-6
+P1-5-9	P1-6-7
+P1-5-10	P1-6-8
+P1-5-11	P1-6-9
+P1-5-12	P1-6-10
+P1-5-13	P1-6-11
+P1-5-15	P1-6-12
+P1-5-16	P1-6-13
+P1-5-17	P1-6-14
+P1-5-18	P1-6-15
+P1-5-19	P1-6-17
+P1-5-20	P1-6-18
+P1-5-21	P1-6-19
+P1-5-22	P1-6-20
+P1-5-23	P1-6-21
+P1-5-24	P1-6-22
+P1-5-25	P1-6-23
+
+#notes in GT score:	130
+#notes in EST score:	137
+nPitchError:	0
+nMissNote:	1
+nExtraNote:	8
+nOnsetError(RhythmCorrectionCost):	4
+nOffsetError:	4
+nVoiceError:	0
+nHandError:	0
+
+PitchER(%):	0
+MissRate(%):	0.769231
+ExtraRate(%):	5.83942
+OnsetER(%):	3.10078
+OffsetER(%):	3.10078
+MeanER(%):	2.56204
+VoiceER(%):	0
+NewMeanER(%):	2.13503
+Pvoi(%):	100
+Rvoi(%):	100
+Fvoi(%):	100
+ScaleErr:	1.03602
+HandER(%):	0
+
+PitchER,MissRate,ExtraRate,OnsetER,OffsetER,MeanER,VoiceER,NewMeanER,Pvoi,Rvoi,Fvoi,ScaleErr,HandER:	0	0.769231	5.83942	3.10078	3.10078	2.56204	0	2.13503	100	100	100	1.03602	0
