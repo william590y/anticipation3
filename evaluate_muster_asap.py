@@ -33,6 +33,7 @@ from alignment import align_tokens2, load_annotation_file
 from evaluate_muster import (
     load_model,
     autoregressive_generate_score,
+    autoregressive_generate_full_piece,
     extract_components,
     normalize_triplet_times,
     triplets_to_musicxml,
@@ -140,7 +141,7 @@ def tokenize_asap_piece(filegroup):
     """
     Worker: tokenize one ASAP piece.
     filegroup = ('asap', perf_midi, score_midi, perf_beats, score_beats)
-    Returns list of token sequences (each a list of ints), or [].
+    Returns normalized_matched_tuples (list of 4-tuples), or [].
     """
     _, perf_midi, score_midi, perf_beats, score_beats = filegroup
 
@@ -210,7 +211,7 @@ def tokenize_asap_piece(filegroup):
 
             normalized.append([perf_triplet, match[1], normalized_score, match[3]])
 
-        return _build_sequences(normalized, prefix_controls=33)
+        return normalized
 
     except Exception:
         return []
@@ -219,6 +220,69 @@ def tokenize_asap_piece(filegroup):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def build_full_piece_tokens(normalized_matched_tuples, prefix_controls=33):
+    """
+    Build a full (potentially >1024 token) GT token sequence for a whole piece.
+
+    The structure mirrors the 1024-token windows but with no truncation:
+        [ANTICIPATE, SEP×3, prefix_controls×(ctrl+rest), alternating(score+ctrl...)]
+
+    The fixed header is tokens[:ALTERNATING_START];
+    autoregressive_generate_full_piece slides over the rest.
+    """
+    tuples = normalized_matched_tuples
+    k = min(prefix_controls, len(tuples))
+
+    # Performance triplets – remove vocab offsets and normalise to t=0
+    perf_triplets = [
+        [m[0][0] - ATIME_OFFSET, m[0][1] - ADUR_OFFSET, m[0][2] - ANOTE_OFFSET]
+        for m in tuples
+    ]
+    if perf_triplets:
+        perf_min = min(t[0] for t in perf_triplets)
+        perf_triplets = [[t[0] - perf_min, t[1], t[2]] for t in perf_triplets]
+
+    # Score triplets (already beat-normalised); shift to t=0
+    score_triplets = [m[2] for m in tuples]
+    score_times = [t[0] - TIME_OFFSET for t in score_triplets if t[0] is not None]
+    score_min = min(score_times) if score_times else 0
+    score_triplets = [
+        [t[0] - score_min, t[1], t[2]] if t[0] is not None else t
+        for t in score_triplets
+    ]
+
+    interleaved = []
+
+    # Prefix: k control + rest pairs
+    for i in range(k):
+        pt = perf_triplets[i]
+        interleaved.extend([
+            pt[0] + ATIME_OFFSET,
+            pt[1] + ADUR_OFFSET,
+            pt[2] + ANOTE_OFFSET,
+        ])
+        cc_time = max(0, pt[0])
+        interleaved.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+
+    # Alternating body: score triplet then control triplet
+    for i in range(len(tuples)):
+        st = score_triplets[i]
+        if st[0] is not None:
+            interleaved.extend(st)
+        ii = i + k
+        if ii < len(tuples):
+            pt = perf_triplets[ii]
+            interleaved.extend([
+                pt[0] + ATIME_OFFSET,
+                pt[1] + ADUR_OFFSET,
+                pt[2] + ANOTE_OFFSET,
+            ])
+
+    # Prepend SEP×3 then ANTICIPATE
+    interleaved[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
+    return [ANTICIPATE] + interleaved
+
 
 def load_asap_metadata():
     """Load ASAP metadata and return list of valid piece dicts."""
@@ -273,7 +337,7 @@ def load_asap_test_perfs(split_file):
 def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
                           forced=False, forced_max_attempts=1000,
                           beam_size=1, temperature=0.0):
-    """Run model + MUSTER on freshly tokenized ASAP sequences."""
+    """Run model + MUSTER on full-piece ASAP sequences (sliding context window)."""
     model, device = load_model(checkpoint_path)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -288,28 +352,29 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
     num_failed = 0
 
     for piece_info in tqdm(piece_infos, desc='Evaluating'):
-        sequences  = piece_info['sequences']
-        piece_name = piece_info['perf_path']
+        matched_tuples = piece_info['matched_tuples']
+        piece_name     = piece_info['perf_path']
 
-        if not sequences:
+        if not matched_tuples:
             num_failed += 1
             continue
 
-        # Use the first window from this piece
-        tokens = sequences[0]
+        # Build a full-length GT token sequence (no 1024-token truncation)
+        full_tokens = build_full_piece_tokens(matched_tuples, prefix_controls=33)
 
-        if len(tokens) <= ALTERNATING_START:
+        if len(full_tokens) <= ALTERNATING_START:
             num_failed += 1
             continue
 
-        gt_perf, gt_score = extract_components(tokens, ALTERNATING_START)
+        # GT score triplets – extracted from the full token sequence
+        _, gt_score = extract_components(full_tokens, ALTERNATING_START)
         if len(gt_score) < 5:
             num_failed += 1
             continue
 
         try:
-            predicted_tokens, gen_stats = autoregressive_generate_score(
-                model, tokens, ALTERNATING_START, device,
+            pred_score, gen_stats = autoregressive_generate_full_piece(
+                model, full_tokens, ALTERNATING_START, device,
                 forced=forced, forced_max_attempts=forced_max_attempts,
                 beam_size=beam_size, temperature=temperature,
             )
@@ -318,7 +383,6 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
             num_failed += 1
             continue
 
-        _, pred_score = extract_components(predicted_tokens, ALTERNATING_START)
         if len(pred_score) < 3:
             num_failed += 1
             continue
@@ -329,6 +393,10 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
         gt_norm   = normalize_triplet_times(gt_score)
         pred_norm = normalize_triplet_times(pred_score)
+
+        if gen_stats.get('num_slides', 0):
+            print(f"  {piece_name}: {gen_stats['num_slides']} context slides, "
+                  f"{len(pred_norm)} predicted notes")
 
         save_midi(triplets_to_events(gt_norm),   str(seq_dir / 'ground_truth_score.mid'))
         save_midi(triplets_to_events(pred_norm),  str(seq_dir / 'output_score.mid'))
@@ -445,9 +513,9 @@ def main():
 
     piece_infos = []
     n_ok = n_fail = 0
-    for meta, seqs in zip(sampled, results):
-        if seqs:
-            piece_infos.append({**meta, 'sequences': seqs})
+    for meta, tuples in zip(sampled, results):
+        if tuples:
+            piece_infos.append({**meta, 'matched_tuples': tuples})
             n_ok += 1
         else:
             n_fail += 1

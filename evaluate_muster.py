@@ -340,6 +340,134 @@ def autoregressive_generate_score(model, tokens, score_start_idx, device,
     return context, stats
 
 
+def autoregressive_generate_full_piece(model, full_gt_tokens, score_start_idx, device,
+                                        forced=False, forced_max_attempts=1000,
+                                        beam_size=1, temperature=0.0):
+    """
+    Generate score tokens for an ENTIRE piece using a sliding context window.
+
+    `full_gt_tokens` may be arbitrarily longer than CONTEXT_SIZE (1024). The
+    fixed header (first `score_start_idx` tokens) is always kept in the context.
+    Whenever `context` grows to CONTEXT_SIZE, the first half of the alternating
+    section is dropped, aligned to 6-token (score+control pair) boundaries:
+
+        context = header + alternating_section[half:]
+
+    GT control tokens are always inserted from `full_gt_tokens`.
+
+    Supports the same decoding modes as `autoregressive_generate_score`
+    (greedy, temperature, forced, beam).
+
+    Returns:
+        pred_score_triplets: list of [time_tok, dur_tok, pitch_tok] with vocab offsets
+        stats: {num_slides, total_triplet_attempts, positions_forced, beam_log_prob}
+    """
+    header  = list(full_gt_tokens[:score_start_idx])
+    context = list(header)
+    pred_score_triplets = []
+    stats = {
+        'num_slides':              0,
+        'total_triplet_attempts':  0,
+        'positions_forced':        0,
+        'beam_log_prob':           0.0,
+    }
+
+    def _run_model(ctx):
+        """Single forward pass; returns logits for the last position."""
+        with torch.no_grad():
+            return model(torch.tensor([ctx], device=device)).logits[0, -1, :]
+
+    def _sample_tok(ctx):
+        logits = _run_model(ctx)
+        if temperature > 0:
+            logits = logits / temperature
+        return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+
+    def _greedy_tok(ctx):
+        logits = _run_model(ctx)
+        if temperature > 0:
+            logits = logits / temperature
+            return torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+        return logits.argmax().item()
+
+    pos = score_start_idx
+    while pos + 2 < len(full_gt_tokens):
+        t0, t1, t2 = full_gt_tokens[pos], full_gt_tokens[pos+1], full_gt_tokens[pos+2]
+        is_score = (t0 < CONTROL_OFFSET and t1 < CONTROL_OFFSET and
+                    t2 < CONTROL_OFFSET and t2 != REST)
+
+        if is_score:
+            gt_pitch = t2
+
+            if forced:
+                matched = False
+                for _attempt in range(forced_max_attempts):
+                    stats['total_triplet_attempts'] += 1
+                    ctx_before = list(context)
+                    tok_t = _sample_tok(context); context.append(tok_t)
+                    tok_d = _sample_tok(context); context.append(tok_d)
+                    tok_p = _sample_tok(context); context.append(tok_p)
+                    if tok_p == gt_pitch:
+                        matched = True
+                        break
+                    context = ctx_before
+                if not matched:
+                    context[-1] = gt_pitch
+                    stats['positions_forced'] += 1
+                pred_score_triplets.append([context[-3], context[-2], context[-1]])
+
+            elif beam_size > 1:
+                beams = [(list(context), 0.0)]
+                for _slot in range(3):
+                    candidates = []
+                    for ctx, lp in beams:
+                        with torch.no_grad():
+                            logits = _run_model(ctx)
+                            if temperature > 0:
+                                logits = logits / temperature
+                            log_probs = torch.log_softmax(logits, dim=-1)
+                        top_lps, top_toks = torch.topk(log_probs, beam_size)
+                        for tok, tlp in zip(top_toks.tolist(), top_lps.tolist()):
+                            candidates.append((ctx + [tok], lp + tlp))
+                    candidates.sort(key=lambda x: x[1], reverse=True)
+                    beams = candidates[:beam_size]
+                best_ctx, best_lp = max(beams, key=lambda x: x[1])
+                stats['beam_log_prob'] += best_lp
+                pred_score_triplets.append([best_ctx[-3], best_ctx[-2], best_ctx[-1]])
+                context = best_ctx
+
+            else:
+                context.append(_greedy_tok(context))
+                context.append(_greedy_tok(context))
+                context.append(_greedy_tok(context))
+                pred_score_triplets.append([context[-3], context[-2], context[-1]])
+
+            pos += 3
+
+            # Append GT control triplet
+            if pos + 2 < len(full_gt_tokens):
+                context.extend([full_gt_tokens[pos],
+                                 full_gt_tokens[pos+1],
+                                 full_gt_tokens[pos+2]])
+                pos += 3
+
+        else:
+            # Control/non-score token: append GT directly
+            context.append(full_gt_tokens[pos])
+            pos += 1
+
+        # ---- Slide if context is at capacity ----
+        if len(context) >= CONTEXT_SIZE:
+            alt  = context[score_start_idx:]
+            # Drop the older half, aligned to 6-token (score+ctrl pair) boundaries
+            half = (len(alt) // 2) // 6 * 6
+            if half > 0:
+                context = header + alt[half:]
+                stats['num_slides'] += 1
+
+    return pred_score_triplets, stats
+
+
 def triplets_to_events(triplets):
     """Convert list of [time, dur, pitch] triplets to flat event list."""
     events = []
