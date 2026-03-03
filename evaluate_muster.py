@@ -38,7 +38,7 @@ from music21 import converter
 DEFAULT_CHECKPOINT = 'checkpoint-1750'
 TEST_FILE = 'data/test_combined.txt'
 OUTPUT_BASE = 'muster_evaluation_results'
-NUM_EXAMPLES = 50  # Randomly sample sequences
+NUM_EXAMPLES = 25  # Randomly sample sequences
 RANDOM_SEED = 41
 K_PREFIX = 33  # Number of control+rest pairs in prefix
 ALTERNATING_START = 4 + K_PREFIX * 6  # = 202
