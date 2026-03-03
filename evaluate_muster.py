@@ -47,28 +47,84 @@ ALTERNATING_START = 4 + K_PREFIX * 6  # = 202
 MUSTER_DIR = Path(__file__).parent / 'MUSTER'
 MUSTER_PROGRAMS = MUSTER_DIR / 'Programs'
 
+# Determine executable extension based on platform
+IS_WINDOWS = sys.platform.startswith('win')
+EXE_EXT = '.exe' if IS_WINDOWS else ''
+
+
+def get_muster_exe(name):
+    """Get path to MUSTER executable, handling platform differences."""
+    return str(MUSTER_PROGRAMS / f'{name}{EXE_EXT}')
+
+
+def compile_muster_linux():
+    """Compile MUSTER programs on Linux."""
+    print("Compiling MUSTER programs for Linux...")
+    os.makedirs(MUSTER_PROGRAMS, exist_ok=True)
+    
+    code_dir = MUSTER_DIR / 'Code'
+    compilations = [
+        ('Fmt3xToSpr_v220118.cpp', 'Fmt3xToSpr'),
+        ('ScoreMatchEvaluation_VoicePlus_v220118.cpp', 'ScoreMatchEvaluation_VoicePlus'),
+        ('MusicXMLToFmt3x_v170104.cpp', 'MusicXMLToFmt3x'),
+        ('MusicXMLToHMM_v170104.cpp', 'MusicXMLToHMM'),
+        ('ScorePerfmMatcher_v170503.cpp', 'ScorePerfmMatcher'),
+        ('ErrorDetection_v170503.cpp', 'ErrorDetection'),
+        ('RealignmentMOHMM_v190326.cpp', 'RealignmentMOHMM'),
+    ]
+    
+    for src, name in compilations:
+        src_path = code_dir / src
+        out_path = MUSTER_PROGRAMS / name
+        if not out_path.exists():
+            print(f"  Compiling {name}...")
+            result = subprocess.run(
+                ['g++', '-O2', str(src_path), '-o', str(out_path)],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"    ERROR: {result.stderr}")
+                return False
+    
+    print("MUSTER compilation complete.")
+    return True
+
 
 def check_muster_installation():
     """Verify MUSTER programs are compiled."""
     required_programs = [
-        'MusicXMLToFmt3x.exe',
-        'MusicXMLToHMM.exe',
-        'Fmt3xToSpr.exe',
-        'ScorePerfmMatcher.exe',
-        'ErrorDetection.exe',
-        'RealignmentMOHMM.exe',
-        'ScoreMatchEvaluation_VoicePlus.exe'
+        'MusicXMLToFmt3x',
+        'MusicXMLToHMM',
+        'Fmt3xToSpr',
+        'ScorePerfmMatcher',
+        'ErrorDetection',
+        'RealignmentMOHMM',
+        'ScoreMatchEvaluation_VoicePlus'
     ]
     
     missing = []
     for prog in required_programs:
-        if not (MUSTER_PROGRAMS / prog).exists():
+        exe_path = MUSTER_PROGRAMS / f'{prog}{EXE_EXT}'
+        if not exe_path.exists():
             missing.append(prog)
     
     if missing:
-        print(f"ERROR: Missing MUSTER programs: {missing}")
-        print("Please compile MUSTER first by running compile.sh in the MUSTER folder")
-        sys.exit(1)
+        if IS_WINDOWS:
+            print(f"ERROR: Missing MUSTER programs: {missing}")
+            print("Please compile MUSTER first by running compile.sh in the MUSTER folder")
+            sys.exit(1)
+        else:
+            # Try to compile on Linux
+            print(f"Missing MUSTER programs: {missing}")
+            if not compile_muster_linux():
+                print("ERROR: Failed to compile MUSTER programs")
+                sys.exit(1)
+            # Re-check
+            still_missing = [p for p in required_programs 
+                           if not (MUSTER_PROGRAMS / f'{p}{EXE_EXT}').exists()]
+            if still_missing:
+                print(f"ERROR: Still missing after compilation: {still_missing}")
+                sys.exit(1)
     
     return True
 
@@ -293,7 +349,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         # Run MUSTER pipeline using relative filenames within work_dir
         # 1. Convert estimated score to score performance representation
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'MusicXMLToFmt3x.exe'),
+            get_muster_exe('MusicXMLToFmt3x'),
             f'{pred_name}.xml',
             f'{pred_name}_fmt3x.txt'
         ], cwd=str(work_dir), capture_output=True, text=True)
@@ -302,7 +358,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
             return None
         
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'Fmt3xToSpr.exe'),
+            get_muster_exe('Fmt3xToSpr'),
             f'{pred_name}_fmt3x.txt',
             f'{pred_name}_spr.txt'
         ], cwd=str(work_dir), capture_output=True, text=True)
@@ -312,7 +368,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         
         # 2. Convert ground truth to HMM and Fmt3x
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'MusicXMLToHMM.exe'),
+            get_muster_exe('MusicXMLToHMM'),
             f'{gt_name}.xml',
             f'{gt_name}_hmm.txt'
         ], cwd=str(work_dir), capture_output=True, text=True)
@@ -321,7 +377,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
             return None
         
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'MusicXMLToFmt3x.exe'),
+            get_muster_exe('MusicXMLToFmt3x'),
             f'{gt_name}.xml',
             f'{gt_name}_fmt3x.txt'
         ], cwd=str(work_dir), capture_output=True, text=True)
@@ -331,7 +387,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         
         # 3. Run score-performance matching
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'ScorePerfmMatcher.exe'),
+            get_muster_exe('ScorePerfmMatcher'),
             f'{gt_name}_hmm.txt',
             f'{pred_name}_spr.txt',
             f'{pred_name}_pre_match.txt',
@@ -343,7 +399,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         
         # 4. Error detection
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'ErrorDetection.exe'),
+            get_muster_exe('ErrorDetection'),
             f'{gt_name}_fmt3x.txt',
             f'{gt_name}_hmm.txt',
             f'{pred_name}_pre_match.txt',
@@ -355,7 +411,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         
         # 5. Realignment
         r = subprocess.run([
-            str(MUSTER_PROGRAMS / 'RealignmentMOHMM.exe'),
+            get_muster_exe('RealignmentMOHMM'),
             f'{gt_name}_fmt3x.txt',
             f'{gt_name}_hmm.txt',
             f'{pred_name}_err_match.txt',
@@ -368,7 +424,7 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         
         # 6. Score match evaluation
         result = subprocess.run([
-            str(MUSTER_PROGRAMS / 'ScoreMatchEvaluation_VoicePlus.exe'),
+            get_muster_exe('ScoreMatchEvaluation_VoicePlus'),
             f'{gt_name}_fmt3x.txt',
             f'{pred_name}_fmt3x.txt',
             f'{pred_name}_auto_match.txt',
