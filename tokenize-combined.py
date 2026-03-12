@@ -141,6 +141,8 @@ def _first_significant_word(text):
             continue
         if word in _GENERIC_WORK_WORDS:
             continue
+        if re.match(r'^book\d', word):   # volume labels: 'book2', 'book1', etc.
+            continue
         return word[:9]   # truncate for cross-language matching
     return None
 
@@ -151,10 +153,11 @@ def _extract_catalog(text):
     so that ASAP 'op_32_10' and ATEPP 'Op. 32 No. 10' resolve to the same key.
     """
     t = text.lower().replace('_', ' ').replace('-', ' ')
-    # BWV (Bach) — unique per piece, safe to use directly
-    m = re.search(r'\bbwv\s*(\d+)', t)
-    if m:
-        return f"bwv{m.group(1)}"
+    # BWV (Bach) — use LAST match to skip range prefixes like "BWV_870-893" in
+    # ATEPP WTC folder names; the individual piece BWV appears at the end.
+    bwv_matches = re.findall(r'\bbwv\s*(\d+)', t)
+    if bwv_matches:
+        return f"bwv{bwv_matches[-1]}"
     # Sonata number — checked BEFORE opus so that ATEPP "Piano Sonata No. 12, Op. 26"
     # extracts son12, matching ASAP's "Piano_Sonatas_12" numbering scheme
     m = re.search(r'\b(?:piano|keyboard)\s*sonatas?\s*(\d+)', t)
