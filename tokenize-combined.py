@@ -103,7 +103,7 @@ _GENERIC_WORK_WORDS = {
     'suite', 'piece', 'pieces', 'collection', 'album',
     'book', 'volume', 'heft',
     # instrument / language qualifiers
-    'piano', 'keyboard', 'clavier', 'wohltemperierte',
+    'piano', 'keyboard', 'clavier', 'klavier', 'wohltemperierte',
     # WTC-specific: prevents "tempered" being extracted as a distinctive word
     # (ATEPP's "The_Well-Tempered_Clavier,_Book_I" should fall through to BWV number)
     'tempered', 'welltemp',
