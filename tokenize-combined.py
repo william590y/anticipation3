@@ -42,7 +42,6 @@ ASAP_META_CSV = os.path.join(ASAP_PATH, 'metadata.csv')
 ATEPP_PATH = 'ATEPP'  # Base folder containing the dataset
 ATEPP_DATA_PATH = os.path.join(ATEPP_PATH, 'ATEPP-1.2')  # Subfolder with actual MIDI/score files
 ATEPP_META_CSV = os.path.join(ATEPP_PATH, 'ATEPP-metadata-1.2.csv')
-
 # Output paths
 TRAIN_OUTPUT = 'data/train_combined.txt'
 TEST_OUTPUT = 'data/test_combined.txt'
