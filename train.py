@@ -570,7 +570,7 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./transposition'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./cleaned_model_march'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -589,7 +589,7 @@ def main():
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
-                        help='Tempo scale half-range: λ ~ U(1-range, 1+range), e.g. 0.2 gives U(0.8,1.2) (training only)')
+                        help='Tempo scale half-range: lambda ~ U(1-range, 1+range), e.g. 0.2 gives U(0.8,1.2) (training only)')
     args = parser.parse_args()
     
     # Override device if requested

@@ -19,6 +19,8 @@ from multiprocessing import Pool
 import mido
 from music21 import converter as m21_converter
 import tempfile
+import re
+import unicodedata
 import warnings
 
 from anticipation.config import *
@@ -31,7 +33,7 @@ from alignment import align_tokens2, load_annotation_file
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Number of parallel workers
-NUM_WORKERS = 128
+NUM_WORKERS = 200
 
 # Dataset paths
 ASAP_PATH = 'asap-dataset-master'
@@ -56,11 +58,183 @@ print(f"  Output format: space-separated tokens (one sequence per line)")
 print()
 
 # ============================================================================
+# Composition Key Extraction
+# Ensures that performances of the same work from ASAP and ATEPP always land
+# on the same side of the train/test split, preventing cross-dataset leakage.
+# ============================================================================
+
+def _normalize_composer(name):
+    """Map full or short composer name to a consistent lowercase last name."""
+    _map = {
+        'Bach': 'bach', 'Johann Sebastian Bach': 'bach',
+        'Beethoven': 'beethoven', 'Ludwig van Beethoven': 'beethoven',
+        'Brahms': 'brahms', 'Johannes Brahms': 'brahms',
+        'Chopin': 'chopin', 'Frédéric Chopin': 'chopin', 'Frederic Chopin': 'chopin',
+        'Debussy': 'debussy', 'Claude Debussy': 'debussy',
+        'Haydn': 'haydn', 'Franz Joseph Haydn': 'haydn',
+        'Liszt': 'liszt', 'Franz Liszt': 'liszt',
+        'Mozart': 'mozart', 'Wolfgang Amadeus Mozart': 'mozart',
+        'Rachmaninoff': 'rachmaninoff', 'Sergei Rachmaninoff': 'rachmaninoff',
+        'Ravel': 'ravel', 'Maurice Ravel': 'ravel',
+        'Scarlatti': 'scarlatti', 'Domenico Scarlatti': 'scarlatti',
+        'Schubert': 'schubert', 'Franz Schubert': 'schubert',
+        'Schumann': 'schumann', 'Robert Schumann': 'schumann',
+        'Scriabin': 'scriabin', 'Alexander Scriabin': 'scriabin',
+        'Balakirev': 'balakirev', 'Glinka': 'glinka', 'Prokofiev': 'prokofiev',
+    }
+    return _map.get(name, name.split()[-1].lower())
+
+
+# Genre/function words that are too generic to identify a specific composition.
+# Works whose names start with one of these NEED a catalog number (op/BWV/K/…)
+# to be unambiguous; works whose names start with a distinctive word (arabeske,
+# mephisto, gaspard, …) are identified by that word instead.
+_GENERIC_WORK_WORDS = {
+    # genre terms
+    'etude', 'etudes', 'prelude', 'preludes', 'nocturne', 'nocturnes',
+    'impromptu', 'impromptus', 'moment', 'moments', 'morceaux',
+    'waltz', 'waltzes', 'mazurka', 'mazurkas', 'polonaise', 'polonaises',
+    'intermezzo', 'intermezzi', 'caprice', 'caprices',
+    'variation', 'variations', 'theme',
+    'sonata', 'sonatina', 'concerto', 'symphony', 'quartet', 'quintet',
+    'suite', 'piece', 'pieces', 'collection', 'album',
+    'book', 'volume', 'heft',
+    # instrument / language qualifiers
+    'piano', 'keyboard', 'clavier', 'wohltemperierte',
+    # size adjectives
+    'grand', 'grande', 'petit', 'petite', 'little', 'great', 'kleine',
+    # ordinals (written out)
+    'first', 'second', 'third', 'fourth', 'fifth',
+    # French/German preposition fragments that survive after stripping contractions
+    'execution', 'exécution', 'pour', 'dans', 'avec', 'sans', 'sous',
+    'vers', 'nach', 'über',
+    # key names
+    'major', 'minor', 'sharp', 'flat', 'natural',
+}
+
+
+def _first_significant_word(text):
+    """Return the first 'distinctive' word (≥5 chars, not a generic genre/function
+    word) from text, truncated to 9 characters so that French/English cognates
+    match (transcendante → transcend == transcendental → transcend).
+
+    Returns None if no such word is found (caller should fall back to catalog).
+    """
+    # strip French contractions d'/l'/s' so "d'exécution" → "execution"
+    t = text.replace("d'", " ").replace("l'", " ").replace("s'", " ")
+    t = text.replace("d\u2019", " ").replace("l\u2019", " ").replace("s\u2019", " ")
+    # remove diacritics (NFD decomposition + strip combining chars)
+    t = ''.join(c for c in unicodedata.normalize('NFD', t)
+                if unicodedata.category(c) != 'Mn')
+    t = t.lower()
+    t = re.sub(r'[^a-z0-9 ]', ' ', t)
+    for word in t.split():
+        if word.isdigit():
+            continue
+        if len(word) < 5:
+            continue
+        if word in _GENERIC_WORK_WORDS:
+            continue
+        return word[:9]   # truncate for cross-language matching
+    return None
+
+
+def _extract_catalog(text):
+    """Extract the most significant catalog number from text.
+    Groups all pieces within the same opus/BWV together (no sub-piece number)
+    so that ASAP 'op_32_10' and ATEPP 'Op. 32 No. 10' resolve to the same key.
+    """
+    t = text.lower().replace('_', ' ').replace('-', ' ')
+    # BWV (Bach) — unique per piece, safe to use directly
+    m = re.search(r'\bbwv\s*(\d+)', t)
+    if m:
+        return f"bwv{m.group(1)}"
+    # Sonata number — checked BEFORE opus so that ATEPP "Piano Sonata No. 12, Op. 26"
+    # extracts son12, matching ASAP's "Piano_Sonatas_12" numbering scheme
+    m = re.search(r'\b(?:piano|keyboard)\s*sonatas?\s*(\d+)', t)
+    if m:
+        return f"son{m.group(1)}"
+    m = re.search(r'\bsonata\s*no[\s.]*(\d+)', t)
+    if m:
+        return f"son{m.group(1)}"
+    # Hob. XVI (Haydn) — map to son{N} so ATEPP "Hob.XVI:48" == ASAP "Keyboard_Sonatas_48"
+    m = re.search(r'\bhob[.\s]*xvi[.\s:]*(\d+)', t)
+    if m:
+        return f"son{m.group(1)}"
+    # Opus number — intentionally omit piece-within-opus so ASAP and ATEPP unify
+    m = re.search(r'\bop[\s.]*(\d+)\b', t)
+    if m:
+        return f"op{m.group(1)}"
+    # K. / Kv. (Mozart, Scarlatti)
+    m = re.search(r'\bk[v]?[\s.]*(\d+)\b', t)
+    if m:
+        return f"k{m.group(1)}"
+    # D. NNN (Schubert) — require 3+ digits to avoid false positives
+    m = re.search(r'\bd[\s.]+(\d{3,})\b', t)
+    if m:
+        return f"d{m.group(1)}"
+    return None
+
+
+def composition_key_asap(composer, title, midi_score):
+    """Canonical composition key for an ASAP entry."""
+    comp = _normalize_composer(composer)
+    # 1. Try catalog patterns on title (handles op/BWV/K/D/sonata-number)
+    cat = _extract_catalog(title)
+    if cat:
+        return f"{comp}__{cat}"
+    # 2. Try catalog on work folder in score path
+    parts = midi_score.replace('\\', '/').split('/')
+    work_folder = parts[2] if len(parts) > 2 else parts[-1]
+    cat = _extract_catalog(work_folder)
+    if cat:
+        return f"{comp}__{cat}"
+    # 3. Fall back to first distinctive word of the title
+    word = _first_significant_word(title)
+    if word:
+        return f"{comp}__{word}"
+    return f"asap__{midi_score}"
+
+
+def composition_key_atepp(composer, score_path):
+    """Canonical composition key for an ATEPP entry.
+
+    Priority: distinctive work-name word > catalog number > raw path.
+    Trying the distinctive word FIRST ensures that titled pieces like
+    "Arabeske, Op. 18" or "Mephisto Waltz, S. 514" produce the same key as
+    the ASAP entries which only carry the work title without the catalog suffix.
+    Generic pieces (Preludes Op.23, Etudes S.139, …) have no distinctive word
+    so they fall through to the catalog number, which ASAP also extracts.
+    """
+    comp = _normalize_composer(composer)
+    parts = score_path.replace('\\', '/').split('/')
+    work_folder = parts[1] if len(parts) > 1 else score_path
+
+    # 1. First significant (non-generic) word from the work-level folder
+    word = _first_significant_word(work_folder)
+    if word:
+        return f"{comp}__{word}"
+
+    # 2. Catalog number from full path (handles generic collections: Preludes Op.23, etc.)
+    cat = _extract_catalog(score_path)
+    if cat:
+        return f"{comp}__{cat}"
+
+    # 3. Catalog from folder alone
+    cat = _extract_catalog(work_folder)
+    if cat:
+        return f"{comp}__{cat}"
+
+    return f"atepp__{score_path}"
+
+
+# ============================================================================
 # ASAP Dataset Loading
 # ============================================================================
 
 asap_datafiles = []
 asap_score_paths = []
+asap_composition_keys = []
 asap_piece_names = []
 
 if os.path.exists(ASAP_META_CSV):
@@ -76,6 +250,7 @@ if os.path.exists(ASAP_META_CSV):
         if all(os.path.exists(f) for f in [perf_midi, score_midi, perf_beats, score_beats]):
             asap_datafiles.append(('asap', perf_midi, score_midi, perf_beats, score_beats))
             asap_score_paths.append(score_midi)
+            asap_composition_keys.append(composition_key_asap(row['composer'], row['title'], row['midi_score']))
             asap_piece_names.append(row['midi_performance'])
     
     print(f"[ASAP] Found {len(asap_datafiles)} valid pieces with all required files")
@@ -88,6 +263,7 @@ else:
 
 atepp_datafiles = []
 atepp_score_paths = []
+atepp_composition_keys = []
 atepp_piece_names = []
 
 def musicxml_to_midi_path(musicxml_path):
@@ -131,6 +307,7 @@ if os.path.exists(ATEPP_META_CSV):
             # ATEPP entries: ('atepp', perf_midi, score_musicxml_path, composition_id)
             atepp_datafiles.append(('atepp', perf_midi, score_file, row.get('composition_id', 0)))
             atepp_score_paths.append(score_file)
+            atepp_composition_keys.append(composition_key_atepp(str(row.get('composer', '')), score_path))
             atepp_piece_names.append(midi_path)
             valid_atepp += 1
     
@@ -144,6 +321,7 @@ else:
 
 all_datafiles = asap_datafiles + atepp_datafiles
 all_score_paths = asap_score_paths + atepp_score_paths
+all_composition_keys = asap_composition_keys + atepp_composition_keys
 all_piece_names = asap_piece_names + atepp_piece_names
 
 print(f"\nTotal: {len(all_datafiles)} pieces ({len(asap_datafiles)} ASAP + {len(atepp_datafiles)} ATEPP)")
@@ -152,21 +330,22 @@ if len(all_datafiles) == 0:
     print("ERROR: No valid pieces found. Please check dataset paths.")
     exit(1)
 
-# Split by unique score to avoid data leakage
+# Split by canonical composition key (not raw score file path) so that all
+# ASAP and ATEPP performances of the same musical work always land on the
+# same side of the split, preventing cross-dataset leakage.
 rng = np.random.default_rng(42)
-unique_scores = list(sorted(set(all_score_paths)))
-rng.shuffle(unique_scores)
-n_test = int(np.ceil(0.2 * len(unique_scores)))
-test_scores = set(unique_scores[:n_test])
-train_scores = set(unique_scores[n_test:])
+unique_comp_keys = list(sorted(set(all_composition_keys)))
+rng.shuffle(unique_comp_keys)
+n_test = int(np.ceil(0.2 * len(unique_comp_keys)))
+test_comp_keys = set(unique_comp_keys[:n_test])
 
 train_pairs = []
 test_pairs = []
 train_piece_names = []
 test_piece_names = []
 
-for df_entry, score, piece_name in zip(all_datafiles, all_score_paths, all_piece_names):
-    if score in test_scores:
+for df_entry, comp_key, piece_name in zip(all_datafiles, all_composition_keys, all_piece_names):
+    if comp_key in test_comp_keys:
         test_pairs.append(df_entry)
         test_piece_names.append(piece_name)
     else:
