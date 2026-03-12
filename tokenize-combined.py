@@ -183,11 +183,27 @@ def _extract_catalog(text):
     m = re.search(r'\bd[\s.]+(\d{3,})\b', t)
     if m:
         return f"d{m.group(1)}"
+    # S. NNN (Liszt Searle catalogue) — require 3+ digits, must be standalone 's'
+    m = re.search(r'\bs[\s.]*(\d{3,})\b', t)
+    if m:
+        return f"s{m.group(1)}"
     return None
+
+
+# Explicit key overrides for ASAP works whose title/path contain insufficient
+# catalog information to match the corresponding ATEPP entry automatically.
+# Format: (composer_as_in_csv, title_as_in_csv) -> canonical_key
+_ASAP_WORK_OVERRIDES = {
+    ('Liszt', 'Sonata'): 'liszt__s178',  # Piano Sonata in B minor, S.178
+}
 
 
 def composition_key_asap(composer, title, midi_score):
     """Canonical composition key for an ASAP entry."""
+    # 0. Explicit override for works with insufficient metadata
+    override = _ASAP_WORK_OVERRIDES.get((composer, title))
+    if override:
+        return override
     comp = _normalize_composer(composer)
     # 1. Try catalog patterns on title (handles op/BWV/K/D/sonata-number)
     cat = _extract_catalog(title)
