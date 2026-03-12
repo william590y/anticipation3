@@ -157,6 +157,10 @@ def _extract_catalog(text):
     m = re.search(r'\bsonata\s*no[\s.]*(\d+)', t)
     if m:
         return f"son{m.group(1)}"
+    # ASAP-style: "Sonata_2_1st" or "Sonata_3_4th" — number immediately after 'sonata'
+    m = re.search(r'\bsonata[\s_]*(\d+)', t)
+    if m:
+        return f"son{m.group(1)}"
     # Hob. XVI (Haydn) — map to son{N} so ATEPP "Hob.XVI:48" == ASAP "Keyboard_Sonatas_48"
     m = re.search(r'\bhob[.\s]*xvi[.\s:]*(\d+)', t)
     if m:
@@ -183,9 +187,9 @@ def composition_key_asap(composer, title, midi_score):
     cat = _extract_catalog(title)
     if cat:
         return f"{comp}__{cat}"
-    # 2. Try catalog on work folder in score path
+    # 2. Try catalog on the work folder (parts[1] = work folder, not movement subfolder)
     parts = midi_score.replace('\\', '/').split('/')
-    work_folder = parts[2] if len(parts) > 2 else parts[-1]
+    work_folder = parts[1] if len(parts) > 1 else parts[-1]
     cat = _extract_catalog(work_folder)
     if cat:
         return f"{comp}__{cat}"
@@ -193,7 +197,10 @@ def composition_key_asap(composer, title, midi_score):
     word = _first_significant_word(title)
     if word:
         return f"{comp}__{word}"
-    return f"asap__{midi_score}"
+    # 4. Final fallback: composer/work_folder so all movements of the same work
+    #    stay together even when no catalog number or distinctive word is found
+    composer_folder = parts[0] if parts else 'unknown'
+    return f"asap__{composer_folder}/{work_folder}"
 
 
 def composition_key_atepp(composer, score_path):
