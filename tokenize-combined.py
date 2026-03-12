@@ -46,6 +46,9 @@ ATEPP_META_CSV = os.path.join(ATEPP_PATH, 'ATEPP-metadata-1.2.csv')
 TRAIN_OUTPUT = 'data/train_combined.txt'
 TEST_OUTPUT = 'data/test_combined.txt'
 SPLIT_FILE = 'data/combined_split.txt'
+# Curriculum learning: separate files by source quality
+TRAIN_ASAP_OUTPUT = 'data/train_asap.txt'
+TRAIN_ATEPP_OUTPUT = 'data/train_atepp.txt'
 
 print(f"Combined ASAP + ATEPP Tokenization")
 print(f"=" * 60)
@@ -746,13 +749,19 @@ if __name__ == '__main__':
     train_asap_success = 0
     train_atepp_success = 0
     
-    with open(TRAIN_OUTPUT, 'w') as f_train:
+    with open(TRAIN_OUTPUT, 'w') as f_train, \
+         open(TRAIN_ASAP_OUTPUT, 'w') as f_asap, \
+         open(TRAIN_ATEPP_OUTPUT, 'w') as f_atepp:
         with Pool(processes=NUM_WORKERS) as pool:
             with tqdm(total=len(train_pairs), desc='Train', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, train_pairs):
                     if count > 0:
                         for seq in sequences:
                             f_train.write(seq + '\n')
+                            if dataset_type == 'asap':
+                                f_asap.write(seq + '\n')
+                            else:
+                                f_atepp.write(seq + '\n')
                         train_sequences_total += count
                         train_pieces_success += 1
                         if dataset_type == 'asap':
@@ -850,6 +859,8 @@ if __name__ == '__main__':
     print(f"Total sequences: {train_sequences_total + test_sequences_total}")
     print(f"\nOutput files:")
     print(f"  {TRAIN_OUTPUT}")
+    print(f"  {TRAIN_ASAP_OUTPUT}")
+    print(f"  {TRAIN_ATEPP_OUTPUT}")
     print(f"  {TEST_OUTPUT}")
     print(f"  {SPLIT_FILE}")
     print("\nTokenization complete!")

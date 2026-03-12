@@ -307,6 +307,55 @@ class TokenizedDataset(Dataset):
         
         return {"input_ids": augmented_tokens, "attention_mask": attention_mask, "labels": labels}
 
+
+class CurriculumDataset(Dataset):
+    """Curriculum dataset that linearly transitions from ATEPP (low quality) to ASAP (high quality).
+
+    The training sequence is pre-planned: at position i out of total_samples,
+    a sample is drawn from ASAP with probability p = i / (total_samples - 1),
+    rising linearly from 0.0 to 1.0.  The DataLoader MUST use shuffle=False so
+    that earlier batches are ATEPP-heavy and later batches are ASAP-heavy.
+    """
+
+    def __init__(self, asap_dataset, atepp_dataset, total_samples, seed=42):
+        self.asap = asap_dataset
+        self.atepp = atepp_dataset
+
+        n_asap = len(asap_dataset)
+        n_atepp = len(atepp_dataset)
+        if n_asap == 0:
+            raise ValueError("ASAP dataset is empty")
+        if n_atepp == 0:
+            raise ValueError("ATEPP dataset is empty")
+
+
+        rng = np.random.default_rng(seed)
+
+        # p_asap rises linearly from 0 → 1 over total_samples positions
+        probs = np.linspace(0.0, 1.0, total_samples)
+        draws = rng.random(total_samples)
+        self._use_asap = draws < probs  # bool array, True → draw from ASAP
+
+        # Pre-sample local indices (with replacement) for each dataset
+        self._asap_idx = rng.integers(0, n_asap, size=total_samples).astype(np.int32)
+        self._atepp_idx = rng.integers(0, n_atepp, size=total_samples).astype(np.int32)
+
+        n_from_asap = int(self._use_asap.sum())
+        n_from_atepp = total_samples - n_from_asap
+        print(f"Curriculum plan: {total_samples:,} total samples")
+        print(f"  ASAP  (high quality): {n_from_asap:,} ({100 * n_from_asap / total_samples:.1f}%) — used more at end")
+        print(f"  ATEPP (low  quality): {n_from_atepp:,} ({100 * n_from_atepp / total_samples:.1f}%) — used more at start")
+
+    def __len__(self):
+        return len(self._use_asap)
+
+    def __getitem__(self, idx):
+        if self._use_asap[idx]:
+            return self.asap[int(self._asap_idx[idx])]
+        else:
+            return self.atepp[int(self._atepp_idx[idx])]
+
+
 def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
     """Calculate validation loss and pitch accuracy on a dataset
     
@@ -569,6 +618,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
+    parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap.txt'),
+                        help='ASAP-only training sequences (high quality, used at end of curriculum)')
+    parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp.txt'),
+                        help='ATEPP-only training sequences (low quality, used at start of curriculum)')
+    parser.add_argument('--curriculum', action='store_true',
+                        help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
     parser.add_argument('--output_dir', type=Path, default=Path('./cleaned_model_march'))
     parser.add_argument('--batch_size', type=int, default=8) 
@@ -621,30 +676,53 @@ def main():
         print_gpu_memory_stats()
         
         # Load training dataset
-        print(f"Loading training dataset from {args.data_file}...")
-        train_dataset = TokenizedDataset(
-            args.data_file,
-            onset_jitter_std=args.onset_jitter_std,
-            dur_jitter_range=args.dur_jitter_range,
-            mask_prob=args.mask_prob,
-            transpose_range_semitones=args.transpose_range_semitones,
-            tempo_scale_range=args.tempo_scale_range,
-            is_training=True
-        )
-        
         def collate_fn(batch):
             input_ids = torch.stack([item["input_ids"] for item in batch])
             attention_mask = torch.stack([item["attention_mask"] for item in batch])
             labels = torch.stack([item["labels"] for item in batch])
             return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
-            
+
+        dataset_kwargs = dict(
+            onset_jitter_std=args.onset_jitter_std,
+            dur_jitter_range=args.dur_jitter_range,
+            mask_prob=args.mask_prob,
+            transpose_range_semitones=args.transpose_range_semitones,
+            tempo_scale_range=args.tempo_scale_range,
+            is_training=True,
+        )
+
+        if args.curriculum:
+            if not args.asap_file.exists():
+                raise FileNotFoundError(
+                    f"Curriculum mode requires {args.asap_file}. "
+                    "Re-run tokenize-combined.py to generate per-source files."
+                )
+            if not args.atepp_file.exists():
+                raise FileNotFoundError(
+                    f"Curriculum mode requires {args.atepp_file}. "
+                    "Re-run tokenize-combined.py to generate per-source files."
+                )
+            print(f"Curriculum learning enabled.")
+            print(f"  Loading ASAP dataset (high quality) from {args.asap_file}...")
+            asap_dataset = TokenizedDataset(args.asap_file, **dataset_kwargs)
+            print(f"  Loading ATEPP dataset (low  quality) from {args.atepp_file}...")
+            atepp_dataset = TokenizedDataset(args.atepp_file, **dataset_kwargs)
+            # total_samples covers the full training run so one dataloader pass = full training
+            total_samples = args.max_steps * args.gradient_accumulation_steps * args.batch_size
+            train_dataset = CurriculumDataset(asap_dataset, atepp_dataset, total_samples)
+            shuffle_train = False  # order must be preserved for curriculum
+        else:
+            print(f"Loading training dataset from {args.data_file}...")
+            train_dataset = TokenizedDataset(args.data_file, **dataset_kwargs)
+            shuffle_train = True
+
         train_dataloader = DataLoader(
-            train_dataset, 
-            batch_size=args.batch_size, 
-            shuffle=True,
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=shuffle_train,
             collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=32,  # Avoid multiprocessing issues
+            num_workers=32,
         )
         
         # Load validation dataset (NO augmentation)
