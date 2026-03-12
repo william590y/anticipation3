@@ -92,6 +92,7 @@ def _normalize_composer(name):
 _GENERIC_WORK_WORDS = {
     # genre terms
     'etude', 'etudes', 'prelude', 'preludes', 'nocturne', 'nocturnes',
+    'fugue', 'fugues', 'toccata', 'toccatas',
     'impromptu', 'impromptus', 'moment', 'moments', 'morceaux',
     'waltz', 'waltzes', 'mazurka', 'mazurkas', 'polonaise', 'polonaises',
     'intermezzo', 'intermezzi', 'caprice', 'caprices',
@@ -101,6 +102,9 @@ _GENERIC_WORK_WORDS = {
     'book', 'volume', 'heft',
     # instrument / language qualifiers
     'piano', 'keyboard', 'clavier', 'wohltemperierte',
+    # WTC-specific: prevents "tempered" being extracted as a distinctive word
+    # (ATEPP's "The_Well-Tempered_Clavier,_Book_I" should fall through to BWV number)
+    'tempered', 'welltemp',
     # size adjectives
     'grand', 'grande', 'petit', 'petite', 'little', 'great', 'kleine',
     # ordinals (written out)
