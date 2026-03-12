@@ -1,1 +1,1 @@
-PitchER,MissRate,ExtraRate,OnsetER,OffsetER,MeanER,VoiceER,NewMeanER,Pvoi,Rvoi,Fvoi,ScaleErr,HandER:	2.8897	90.4762	91.8153	59.8291	32.4786	55.4978	0	46.2482	100	100	100	1.51278	0
+PitchER,MissRate,ExtraRate,OnsetER,OffsetER,MeanER,VoiceER,NewMeanER,Pvoi,Rvoi,Fvoi,ScaleErr,HandER:	15.2696	22.1913	22.3803	43.0934	27.671	26.1211	0	21.7676	100	100	100	1.3224	0

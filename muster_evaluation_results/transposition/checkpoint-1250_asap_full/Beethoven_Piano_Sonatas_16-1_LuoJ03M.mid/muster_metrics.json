@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 6.32129,
+  "missing_note_rate": 18.346,
+  "extra_note_rate": 19.1149,
+  "onset_time_error_rate": 50.6985,
+  "offset_time_error_rate": 13.3295,
+  "mean_error_rate": 21.562,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 17.9684,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.15141,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/16-1/LuoJ03M.mid",
+  "num_gt_notes": 2124,
+  "num_pred_notes": 2124
+}

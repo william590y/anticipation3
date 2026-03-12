@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 7.96671,
+  "missing_note_rate": 17.1819,
+  "extra_note_rate": 17.7686,
+  "onset_time_error_rate": 34.6734,
+  "offset_time_error_rate": 17.0854,
+  "mean_error_rate": 18.9352,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 15.7793,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.17472,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_860/Ko04M.mid",
+  "num_gt_notes": 1694,
+  "num_pred_notes": 1710
+}

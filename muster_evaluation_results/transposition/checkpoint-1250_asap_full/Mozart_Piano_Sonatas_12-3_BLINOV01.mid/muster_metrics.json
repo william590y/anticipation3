@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 15.7519,
+  "missing_note_rate": 27.2932,
+  "extra_note_rate": 30.8792,
+  "onset_time_error_rate": 45.8118,
+  "offset_time_error_rate": 28.1282,
+  "mean_error_rate": 29.5729,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.6441,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.35705,
+  "hand_error_rate": 0.0,
+  "piece": "Mozart/Piano_Sonatas/12-3/BLINOV01.mid",
+  "num_gt_notes": 2809,
+  "num_pred_notes": 2825
+}

@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 0.78853,
+  "missing_note_rate": 4.01434,
+  "extra_note_rate": 4.08309,
+  "onset_time_error_rate": 5.52651,
+  "offset_time_error_rate": 2.09111,
+  "mean_error_rate": 3.30072,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 2.7506,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.02192,
+  "hand_error_rate": 0.0,
+  "piece": "Chopin/Etudes_op_25/8/SOLOM03.mid",
+  "num_gt_notes": 1396,
+  "num_pred_notes": 1412
+}

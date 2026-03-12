@@ -1,0 +1,18 @@
+{
+  "pitch_error_rate": 14.6959,
+  "missing_note_rate": 25.4501,
+  "extra_note_rate": 25.7752,
+  "onset_time_error_rate": 54.047,
+  "offset_time_error_rate": 25.4569,
+  "mean_error_rate": 29.085,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.2375,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.34591,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/24-1_no_repeat/Lou02M.mid",
+  "num_gt_notes": 2064,
+  "num_pred_notes": 2080
+}
