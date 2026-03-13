@@ -42,7 +42,6 @@ from evaluate_muster import (
     run_muster_evaluation,
     print_muster_summary,
     check_muster_installation,
-    ALTERNATING_START,
     OUTPUT_BASE,
 )
 
@@ -57,6 +56,8 @@ DEFAULT_NUM_PIECES   = 30
 RANDOM_SEED          = 42
 NUM_WORKERS          = 32
 TARGET_BEAT_INTERVAL = 0.5   # seconds per normalized beat
+PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+ALTERNATING_START = 33 * 2 * EVENT_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ TARGET_BEAT_INTERVAL = 0.5   # seconds per normalized beat
 # ---------------------------------------------------------------------------
 
 def _build_sequences(normalized_matched_tuples, prefix_controls=33):
-    """Build 1024-token sequences using the sliding-window algorithm."""
+    """Build fixed-length interleaved sequences using the sliding-window algorithm."""
     sequences = []
     k = min(prefix_controls, len(normalized_matched_tuples))
 
@@ -118,10 +119,7 @@ def _build_sequences(normalized_matched_tuples, prefix_controls=33):
                     pt[2] + ANOTE_OFFSET,
                 ])
 
-        # Prepend 3 SEPs
-        interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
-
-        max_body = EVENT_SIZE * M
+        max_body = PACKED_SEQUENCE_LENGTH
         if len(interleaved_tokens) < max_body:
             break
         interleaved_tokens = interleaved_tokens[:max_body]
@@ -129,9 +127,9 @@ def _build_sequences(normalized_matched_tuples, prefix_controls=33):
         if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
             continue
 
-        sequence = [ANTICIPATE] + interleaved_tokens
-        assert len(sequence) == CONTEXT_SIZE, \
-            f"Expected {CONTEXT_SIZE} tokens, got {len(sequence)}"
+        sequence = interleaved_tokens
+        assert len(sequence) == PACKED_SEQUENCE_LENGTH, \
+            f"Expected {PACKED_SEQUENCE_LENGTH} tokens, got {len(sequence)}"
         sequences.append(sequence)
 
     return sequences
@@ -223,12 +221,12 @@ def tokenize_asap_piece(filegroup):
 
 def build_full_piece_tokens(normalized_matched_tuples, prefix_controls=33):
     """
-    Build a full (potentially >1024 token) GT token sequence for a whole piece.
+    Build a full GT token sequence for a whole piece.
 
-    The structure mirrors the 1024-token windows but with no truncation:
-        [ANTICIPATE, SEP×3, prefix_controls×(ctrl+rest), alternating(score+ctrl...)]
+    The structure mirrors the packed windows but with no truncation:
+        [prefix_controls×(ctrl+rest), alternating(score+ctrl...)]
 
-    The fixed header is tokens[:ALTERNATING_START];
+    The fixed control/rest prefix is tokens[:ALTERNATING_START];
     autoregressive_generate_full_piece slides over the rest.
     """
     tuples = normalized_matched_tuples
@@ -279,9 +277,7 @@ def build_full_piece_tokens(normalized_matched_tuples, prefix_controls=33):
                 pt[2] + ANOTE_OFFSET,
             ])
 
-    # Prepend SEP×3 then ANTICIPATE
-    interleaved[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
-    return [ANTICIPATE] + interleaved
+    return interleaved
 
 
 def load_asap_metadata():
@@ -359,7 +355,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
             num_failed += 1
             continue
 
-        # Build a full-length GT token sequence (no 1024-token truncation)
+        # Build a full-length GT token sequence (no packed-window truncation)
         full_tokens = build_full_piece_tokens(matched_tuples, prefix_controls=33)
 
         if len(full_tokens) <= ALTERNATING_START:

@@ -1,5 +1,6 @@
 """
-Tokenize ASAP and ATEPP datasets using sliding window to extract all possible 1024-token sequences.
+Tokenize ASAP and ATEPP datasets using sliding window to extract all possible
+interleaved sequences without ANTICIPATE or SEP header tokens.
 
 This combines both datasets:
 - ASAP: Uses beat annotations for precise alignment
@@ -50,11 +51,14 @@ SPLIT_FILE = 'data/combined_split.txt'
 TRAIN_ASAP_OUTPUT = 'data/train_asap.txt'
 TRAIN_ATEPP_OUTPUT = 'data/train_atepp.txt'
 
+PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+
 print(f"Combined ASAP + ATEPP Tokenization")
 print(f"=" * 60)
 print(f"Configuration:")
 print(f"  Workers: {NUM_WORKERS}")
 print(f"  Context size: {CONTEXT_SIZE}")
+print(f"  Serialized length: {PACKED_SEQUENCE_LENGTH}")
 print(f"  Prefix controls: 33 (fixed)")
 print(f"  Output format: space-separated tokens (one sequence per line)")
 print()
@@ -646,7 +650,7 @@ def tokenize_sliding_windows_atepp(filegroup, prefix_controls=33):
 
 def _build_sequences(normalized_matched_tuples, prefix_controls=33):
     """
-    Build 1024-token sequences from normalized matched tuples.
+    Build fixed-length interleaved sequences from normalized matched tuples.
     Shared by both ASAP and ATEPP tokenizers.
     """
     sequences = []
@@ -709,10 +713,7 @@ def _build_sequences(normalized_matched_tuples, prefix_controls=33):
                     perf_triplet[2] + ANOTE_OFFSET
                 ])
         
-        # Prepend 3 SEPs
-        interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
-        
-        max_body = EVENT_SIZE * M
+        max_body = PACKED_SEQUENCE_LENGTH
         if len(interleaved_tokens) < max_body:
             break
         
@@ -721,9 +722,11 @@ def _build_sequences(normalized_matched_tuples, prefix_controls=33):
         if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
             continue
         
-        sequence = [ANTICIPATE] + interleaved_tokens
+        sequence = interleaved_tokens
         
-        assert len(sequence) == CONTEXT_SIZE, f"Expected {CONTEXT_SIZE} tokens, got {len(sequence)}"
+        assert len(sequence) == PACKED_SEQUENCE_LENGTH, (
+            f"Expected {PACKED_SEQUENCE_LENGTH} tokens, got {len(sequence)}"
+        )
         
         token_str = ' '.join(str(tok) for tok in sequence)
         sequences.append(f"{token_str} | ")
@@ -833,15 +836,14 @@ if __name__ == '__main__':
             first_seq = [int(x) for x in tokens_part.split()]
         
         print(f"First training sequence length: {len(first_seq)} tokens")
-        print(f"Mode token: {first_seq[0]} (expected {ANTICIPATE})")
-        print(f"Bootstrap: {first_seq[1:4]} (expected {[SEPARATOR, SEPARATOR, SEPARATOR]})")
+        print("No mode/bootstrap tokens are serialized")
         
         control_count = 0
         score_count = 0
         rest_count = 0
         
-        for i in range(min(100, (len(first_seq) - 4) // 3)):
-            pos = 4 + i * 3
+        for i in range(min(100, len(first_seq) // 3)):
+            pos = i * 3
             if pos + 2 >= len(first_seq):
                 break
             

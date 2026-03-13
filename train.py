@@ -13,7 +13,7 @@ from tqdm import tqdm
 import gc
 import traceback
 import matplotlib.pyplot as plt
-from anticipation.vocab import ANTICIPATE, AUTOREGRESS  # Import the flag token constants
+from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -51,12 +51,16 @@ print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA version: {torch.version.cuda}")
 
+PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+PREFIX_CONTROLS = 33
+ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
+
 class TokenizedDataset(Dataset):
     """Dataset that loads clean sequences and applies augmentation on-the-fly.
     
-    Sequences are packed and formatted by tokenize-asap.py:
-    - Each sequence is exactly 1024 tokens
-    - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
+    Sequences are packed and formatted by tokenize-combined.py:
+    - Each sequence is exactly 1020 tokens
+    - Format: [control/rest prefix..., alternating score/control...]
     - Augmentation (perturbation + masking) applied during training, not tokenization
     """
     def __init__(self, file_path, onset_jitter_std=0.0, dur_jitter_range=0.0,
@@ -69,7 +73,6 @@ class TokenizedDataset(Dataset):
         self.tempo_scale_range = tempo_scale_range if is_training else 0.0
         self.is_training = is_training
         
-        from anticipation.vocab import ANTICIPATE, VOCAB_SIZE
 
         # Lazy loading: store byte offsets only — sequences are read on demand in __getitem__.
         # This keeps startup fast and RAM usage minimal regardless of file size.
@@ -92,11 +95,15 @@ class TokenizedDataset(Dataset):
         if self.offsets:
             tokens = self._read_tokens(0)
             self.sequence_length = len(tokens)
-            first_tok = tokens[0]
-            if first_tok == ANTICIPATE:
-                print(f"Tokenization format validated (starts with ANTICIPATE token)")
+            if self.sequence_length != PACKED_SEQUENCE_LENGTH:
+                print(
+                    f"Warning: Sequence length is {self.sequence_length}, "
+                    f"expected {PACKED_SEQUENCE_LENGTH}"
+                )
+            elif self.sequence_length % 3 != 0:
+                print(f"Warning: Sequence length {self.sequence_length} is not triplet-aligned")
             else:
-                print(f"Warning: First token is {first_tok}, expected ANTICIPATE ({ANTICIPATE})")
+                print("Tokenization format validated (triplet-aligned, no header tokens)")
             print(f"Sequence length: {self.sequence_length}")
 
         if self.is_training:
@@ -143,7 +150,7 @@ class TokenizedDataset(Dataset):
             augmented_tokens: Tensor of augmented token ids
             mask_indices: List of positions to exclude from attention and loss
         """
-        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST, VOCAB_SIZE,
+        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST, VOCAB_SIZE,
                                         ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
                                         TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
         from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
@@ -207,7 +214,7 @@ class TokenizedDataset(Dataset):
         # so control triplets are deferred to a second pass.
         ctrl_positions = []  # list of (seq_pos, tok0, tok1, tok2)
         
-        i = 1
+        i = 0
         while i < len(augmented) - 2:
             tok0 = augmented[i].item()
             tok1 = augmented[i + 1].item()
@@ -219,8 +226,7 @@ class TokenizedDataset(Dataset):
             is_control_triplet = (tok0 >= CONTROL_OFFSET and
                                   tok1 >= CONTROL_OFFSET and
                                   tok2 >= CONTROL_OFFSET and
-                                  tok0 != SEPARATOR and
-                                  tok0 != ANTICIPATE)
+                                  tok0 != SEPARATOR)
             
             if is_event_triplet:
                 # Apply global augmentations and write back immediately
@@ -425,8 +431,8 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 seq_labels = labels[b]
                 seq_logits = logits[b]
                 
-                # Skip first token (mode token), iterate in steps of 3 to maintain triplet alignment
-                i = 1
+                # Sequence is triplet-aligned from token 0
+                i = 0
                 while i < len(seq_input) - 2:
                     # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET, but not REST)
                     if (seq_input[i] < CONTROL_OFFSET and 
@@ -454,7 +460,7 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
     
     # Autoregressive evaluation: use performance (control) to generate score
-    # Format: ANTICIPATE + SEP SEP SEP + control+rest pairs + alternating score/control
+    # Format: control+rest pairs + alternating score/control
     # Goal: Given the performance context, autoregressively generate score triplets
     autoregressive_correct = 0
     autoregressive_total = 0
@@ -474,15 +480,15 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
         
         # Run autoregressive generation on each sequence
         for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
-            # Sequence format: [ANTICIPATE, SEP, SEP, SEP, control+rest pairs (positions 4-201), alternating score/control (202+)]
+            # Sequence format: [control+rest pairs (positions 0-197), alternating score/control (198+)]
             # We want to use the control tokens as context and generate the score tokens
             
-            # Find where alternating section starts (position 202)
-            alternating_start = 202
+            # Find where alternating section starts (position 198)
+            alternating_start = ALTERNATING_START
             if len(seq) <= alternating_start:
                 continue
             
-            # Start context with: ANTICIPATE + SEP SEP SEP + all control+rest pairs (positions 0-201)
+            # Start context with all control+rest pairs
             # This gives the model all the performance information
             context = seq[:alternating_start].tolist()
             
