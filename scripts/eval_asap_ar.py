@@ -1,25 +1,80 @@
 import argparse
 import json
+import os
 from multiprocessing import Pool
 from pathlib import Path
+import random
 import sys
 
-import torch
+import pandas as pd
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from anticipation.vocab import CONTROL_OFFSET, REST
-from evaluate_muster_asap import (
-    ALTERNATING_START,
-    _build_sequences,
-    load_asap_metadata,
-    load_asap_test_perfs,
-    tokenize_asap_piece,
+from alignment import align_tokens2, load_annotation_file
+from anticipation import ops
+from anticipation.config import CONTEXT_SIZE, EVENT_SIZE, MAX_TIME, TIME_RESOLUTION
+from anticipation.vocab import (
+    ADUR_OFFSET,
+    ANOTE_OFFSET,
+    ATIME_OFFSET,
+    CONTROL_OFFSET,
+    DUR_OFFSET,
+    NOTE_OFFSET,
+    REST,
+    TIME_OFFSET,
 )
+
+
+ASAP_PATH = "asap-dataset-master"
+ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
+TARGET_BEAT_INTERVAL = 0.5
+PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+ALTERNATING_START = 33 * 2 * EVENT_SIZE
+DEFAULT_WINDOWS_WORKERS = 8 if os.name == "nt" else 32
+
+
+def load_asap_metadata():
+    if not os.path.exists(ASAP_META_CSV):
+        raise FileNotFoundError(f"ASAP metadata not found: {ASAP_META_CSV}")
+
+    df = pd.read_csv(ASAP_META_CSV)
+    pieces = []
+    for _, row in df.iterrows():
+        perf_midi = os.path.join(ASAP_PATH, row["midi_performance"])
+        score_midi = os.path.join(ASAP_PATH, row["midi_score"])
+        perf_beats = os.path.join(ASAP_PATH, row["performance_annotations"])
+        score_beats = os.path.join(ASAP_PATH, row["midi_score_annotations"])
+        if all(os.path.exists(f) for f in [perf_midi, score_midi, perf_beats, score_beats]):
+            pieces.append(
+                {
+                    "filegroup": ("asap", perf_midi, score_midi, perf_beats, score_beats),
+                    "perf_path": row["midi_performance"],
+                }
+            )
+    return pieces
+
+
+def load_asap_test_perfs(split_file):
+    if not os.path.exists(split_file):
+        return None
+
+    test_perfs = set()
+    in_test = False
+    with open(split_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if "=== TEST PIECES ===" in line:
+                in_test = True
+                continue
+            if line.startswith("==="):
+                in_test = False
+                continue
+            if in_test and line and not line.startswith("#"):
+                test_perfs.add(line.lstrip("./"))
+    return test_perfs or None
 
 
 def select_asap_test_pieces(split_file, num_pieces, selection, seed):
@@ -32,14 +87,126 @@ def select_asap_test_pieces(split_file, num_pieces, selection, seed):
     test_pieces = sorted(test_pieces, key=lambda x: x["perf_path"])
 
     if selection == "random":
-        g = torch.Generator().manual_seed(seed)
-        perm = torch.randperm(len(test_pieces), generator=g).tolist()
-        test_pieces = [test_pieces[i] for i in perm]
+        rng = random.Random(seed)
+        rng.shuffle(test_pieces)
 
     return test_pieces[:num_pieces]
 
 
-NUM_WORKERS = 32
+def build_packed_sequences(normalized_matched_tuples, prefix_controls=33):
+    sequences = []
+    k = min(prefix_controls, len(normalized_matched_tuples))
+
+    for start_idx in range(len(normalized_matched_tuples)):
+        subset = normalized_matched_tuples[start_idx:]
+        if len(subset) < k:
+            break
+
+        perf_triplets = [
+            [m[0][0] - ATIME_OFFSET, m[0][1] - ADUR_OFFSET, m[0][2] - ANOTE_OFFSET]
+            for m in subset
+        ]
+        if perf_triplets:
+            perf_min = min(t[0] for t in perf_triplets)
+            perf_triplets = [[t[0] - perf_min, t[1], t[2]] for t in perf_triplets]
+
+        score_triplets = [m[2] for m in subset]
+        score_times = [t[0] - TIME_OFFSET for t in score_triplets if t[0] is not None]
+        score_min = min(score_times) if score_times else 0
+        score_triplets = [
+            [t[0] - score_min, t[1], t[2]] if t[0] is not None else t
+            for t in score_triplets
+        ]
+
+        interleaved_tokens = []
+
+        for i in range(k):
+            pt = perf_triplets[i]
+            interleaved_tokens.extend(
+                [pt[0] + ATIME_OFFSET, pt[1] + ADUR_OFFSET, pt[2] + ANOTE_OFFSET]
+            )
+            cc_time = max(0, pt[0])
+            interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+
+        for i in range(len(subset)):
+            st = score_triplets[i]
+            if st[0] is not None:
+                interleaved_tokens.extend(st)
+            ii = i + k
+            if ii < len(subset):
+                pt = perf_triplets[ii]
+                interleaved_tokens.extend(
+                    [pt[0] + ATIME_OFFSET, pt[1] + ADUR_OFFSET, pt[2] + ANOTE_OFFSET]
+                )
+
+        if len(interleaved_tokens) < PACKED_SEQUENCE_LENGTH:
+            break
+        interleaved_tokens = interleaved_tokens[:PACKED_SEQUENCE_LENGTH]
+
+        if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
+            continue
+
+        sequences.append(interleaved_tokens)
+
+    return sequences
+
+
+def tokenize_asap_piece(filegroup):
+    _, perf_midi, score_midi, perf_beats, score_beats = filegroup
+    try:
+        matched_tuples = align_tokens2(perf_midi, score_midi, perf_beats, score_beats, skip_Nones=True)
+        if len(matched_tuples) < 20:
+            return []
+
+        score_annotations = load_annotation_file(score_beats)
+        score_beat_times = [a[0] for a in score_annotations]
+
+        normalized = []
+        for match in matched_tuples:
+            perf_triplet = match[0]
+            score_triplet = match[2]
+
+            if score_triplet[0] is not None:
+                orig_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                orig_dur_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+                pitch = score_triplet[2]
+
+                norm_time_sec = 0.0
+                time_scale = 1.0
+
+                if score_beat_times and len(score_beat_times) >= 2:
+                    if orig_time_sec < score_beat_times[0]:
+                        beat_dur = score_beat_times[1] - score_beat_times[0]
+                        progress = ((orig_time_sec - score_beat_times[0]) / beat_dur) if beat_dur > 0 else 0
+                        time_scale = TARGET_BEAT_INTERVAL / beat_dur if beat_dur > 0 else 1.0
+                        norm_time_sec = progress * TARGET_BEAT_INTERVAL
+                    else:
+                        found = False
+                        for i in range(len(score_beat_times) - 1):
+                            if score_beat_times[i] <= orig_time_sec <= score_beat_times[i + 1]:
+                                beat_dur = score_beat_times[i + 1] - score_beat_times[i]
+                                progress = ((orig_time_sec - score_beat_times[i]) / beat_dur) if beat_dur > 0 else 0
+                                time_scale = TARGET_BEAT_INTERVAL / beat_dur if beat_dur > 0 else 1.0
+                                norm_time_sec = i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                                found = True
+                                break
+                        if not found:
+                            last_dur = (score_beat_times[-1] - score_beat_times[-2]) if len(score_beat_times) >= 2 else 1.0
+                            progress = ((orig_time_sec - score_beat_times[-1]) / last_dur) if last_dur > 0 else 0
+                            time_scale = TARGET_BEAT_INTERVAL / last_dur if last_dur > 0 else 1.0
+                            norm_time_sec = (len(score_beat_times) - 1) * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+
+                norm_time_units = max(0, round(norm_time_sec * TIME_RESOLUTION))
+                norm_dur_units = max(0, round(orig_dur_sec * time_scale * TIME_RESOLUTION))
+                normalized_score = [norm_time_units + TIME_OFFSET, norm_dur_units + DUR_OFFSET, pitch]
+            else:
+                normalized_score = score_triplet
+
+            normalized.append([perf_triplet, match[1], normalized_score, match[3]])
+
+        return normalized
+    except Exception:
+        return []
 
 
 def _tokenize_piece_to_first_window(piece):
@@ -48,7 +215,7 @@ def _tokenize_piece_to_first_window(piece):
     if not normalized:
         return {"perf_path": perf_path, "reason": "no_normalized_tuples"}
 
-    sequences = _build_sequences(normalized, prefix_controls=33)
+    sequences = build_packed_sequences(normalized, prefix_controls=33)
     if not sequences:
         return {"perf_path": perf_path, "reason": "no_packed_windows"}
 
@@ -59,12 +226,21 @@ def _tokenize_piece_to_first_window(piece):
     return {"perf_path": perf_path, "tokens": seq}
 
 
-def tokenize_first_window(piece_infos, num_workers=NUM_WORKERS):
+def tokenize_first_window(piece_infos, num_workers):
     windows = []
     failures = []
 
+    if num_workers <= 1:
+        iterator = map(_tokenize_piece_to_first_window, piece_infos)
+        for result in tqdm(iterator, total=len(piece_infos), desc="Tokenizing pieces", unit="piece"):
+            if "tokens" in result:
+                windows.append(result)
+            else:
+                failures.append(result)
+        return windows, failures
+
     with Pool(processes=num_workers) as pool:
-        iterator = pool.imap(_tokenize_piece_to_first_window, piece_infos)
+        iterator = pool.imap_unordered(_tokenize_piece_to_first_window, piece_infos, chunksize=1)
         for result in tqdm(iterator, total=len(piece_infos), desc="Tokenizing pieces", unit="piece"):
             if "tokens" in result:
                 windows.append(result)
@@ -92,6 +268,8 @@ def count_score_triplets(tokens):
 
 
 def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""):
+    import torch
+
     context = list(tokens[:ALTERNATING_START])
     pos = ALTERNATING_START
     correct = 0
@@ -157,6 +335,7 @@ def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""
             if pred_pitch == true_pitch:
                 correct += 1
             total += 1
+
             if triplet_bar is not None:
                 triplet_bar.update(1)
                 triplet_bar.set_postfix_str(f"{correct}/{total} ({100 * correct / total:.1f}%)")
@@ -182,25 +361,23 @@ def main():
     parser.add_argument("--checkpoint", default="final", help="Checkpoint directory")
     parser.add_argument("--split-file", default="data/combined_split.txt", help="Path to combined split file")
     parser.add_argument("--num-pieces", type=int, default=20, help="Number of ASAP test pieces to evaluate")
-    parser.add_argument(
-        "--selection",
-        choices=["first", "random"],
-        default="first",
-        help="How to choose ASAP test pieces from the split",
-    )
+    parser.add_argument("--selection", choices=["first", "random"], default="first")
     parser.add_argument("--seed", type=int, default=42, help="Seed for random piece selection")
-    parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Tokenization worker processes")
     parser.add_argument(
-        "--show-triplets",
-        action="store_true",
-        help="Show a nested tqdm for score-triplet generation within each piece",
+        "--workers",
+        type=int,
+        default=DEFAULT_WINDOWS_WORKERS,
+        help="Tokenization worker processes; on Windows the safe default is 8",
     )
-    parser.add_argument(
-        "--output-json",
-        default="test_outputs/asap_ar_pitch_eval.json",
-        help="Where to write a JSON summary",
-    )
+    parser.add_argument("--show-triplets", action="store_true")
+    parser.add_argument("--output-json", default="test_outputs/asap_ar_pitch_eval.json")
     args = parser.parse_args()
+
+    if os.name == "nt" and args.workers > 8:
+        print(
+            f"Warning: --workers {args.workers} may exhaust Windows virtual memory. "
+            "If you see page table/pagefile errors, retry with --workers 8 or lower."
+        )
 
     selected_pieces = select_asap_test_pieces(
         args.split_file, args.num_pieces, args.selection, args.seed
@@ -211,6 +388,9 @@ def main():
     print(f"Usable packed windows: {len(windows)}")
     if failures:
         print(f"Skipped during tokenization: {len(failures)}")
+
+    import torch
+    from transformers import AutoModelForCausalLM
 
     print(f"Loading model from {args.checkpoint}...")
     model = AutoModelForCausalLM.from_pretrained(args.checkpoint)
@@ -253,6 +433,7 @@ def main():
         "selection": args.selection,
         "seed": args.seed,
         "windowing": "first packed training-style window per piece",
+        "workers": args.workers,
         "used_windows": len(windows),
         "overall_correct": overall_correct,
         "overall_total": overall_total,
