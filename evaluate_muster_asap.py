@@ -288,6 +288,45 @@ def _shift_score_triplet(score_triplet, score_origin):
     ]
 
 
+def _masked_score_logits(logits, slot_idx, min_time_tok=None, force_pitch=None):
+    """
+    Restrict logits to valid score-token bands for a given slot.
+    """
+    logits = logits.clone()
+    logits[CONTROL_OFFSET:SPECIAL_OFFSET] = -float('inf')
+    logits[SPECIAL_OFFSET:] = -float('inf')
+
+    if slot_idx == 0:
+        logits[DUR_OFFSET:DUR_OFFSET + MAX_DUR] = -float('inf')
+        logits[NOTE_OFFSET:NOTE_OFFSET + MAX_NOTE] = -float('inf')
+        if min_time_tok is not None and min_time_tok > TIME_OFFSET:
+            upper = min(min_time_tok, TIME_OFFSET + MAX_TIME)
+            logits[TIME_OFFSET:upper] = -float('inf')
+    elif slot_idx == 1:
+        logits[TIME_OFFSET:TIME_OFFSET + MAX_TIME] = -float('inf')
+        logits[NOTE_OFFSET:NOTE_OFFSET + MAX_NOTE] = -float('inf')
+    else:
+        logits[TIME_OFFSET:TIME_OFFSET + MAX_TIME] = -float('inf')
+        logits[DUR_OFFSET:DUR_OFFSET + MAX_DUR] = -float('inf')
+        if force_pitch is not None:
+            forced = torch.full_like(logits, -float('inf'))
+            if 0 <= int(force_pitch) < forced.shape[0]:
+                forced[int(force_pitch)] = logits[int(force_pitch)]
+            logits = forced
+
+    return logits
+
+
+def _sanitize_score_triplet(score_triplet):
+    """
+    Clamp a score triplet into the valid event token ranges for export.
+    """
+    time_tok = min(max(int(score_triplet[0]), TIME_OFFSET), TIME_OFFSET + MAX_TIME - 1)
+    dur_tok = min(max(int(score_triplet[1]), DUR_OFFSET), DUR_OFFSET + MAX_DUR - 1)
+    note_tok = min(max(int(score_triplet[2]), NOTE_OFFSET), NOTE_OFFSET + MAX_NOTE - 1)
+    return [time_tok, dur_tok, note_tok]
+
+
 def _build_interleaved_context(perf_triplets, score_triplets, generated_score_triplets,
                                window_start, step_idx, prefix_controls=DEFAULT_PREFIX_CONTROLS):
     """
@@ -400,10 +439,17 @@ def autoregressive_generate_interleaved_raw(
         next_logits = out.logits[0, -1, :]
 
     def _greedy_next():
+        raise RuntimeError("_greedy_next should not be called directly")
+
+    def _decode_next(slot_idx, min_time_tok=None, force_pitch=None, sample=False):
         _ensure_primed()
-        logits = next_logits
+        logits = _masked_score_logits(
+            next_logits, slot_idx, min_time_tok=min_time_tok, force_pitch=force_pitch
+        )
         if temperature > 0:
             logits = logits / temperature
+            tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+        elif sample:
             tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
         else:
             tok = logits.argmax().item()
@@ -412,24 +458,30 @@ def autoregressive_generate_interleaved_raw(
         return tok
 
     def _sample_next():
-        _ensure_primed()
-        logits = next_logits
-        if temperature > 0:
-            logits = logits / temperature
-        tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
-        context.append(tok)
-        _feed([tok])
-        return tok
+        raise RuntimeError("_sample_next should not be called directly")
 
     num_steps = len(perf_triplets)
     for step_idx in range(num_steps):
         if beam_size > 1:
             beams = [(list(context), 0.0)]
+            beam_min_time_tok = TIME_OFFSET
+            if pred_score_triplets and window_start < len(pred_score_triplets):
+                beam_min_time_tok = max(
+                    TIME_OFFSET,
+                    TIME_OFFSET + (
+                        pred_score_triplets[-1][0] - TIME_OFFSET - score_origin
+                    ),
+                )
             for _slot in range(3):
                 candidates = []
                 for ctx_b, lp in beams:
                     with torch.no_grad():
                         logits_b = model(torch.tensor([_clamp(ctx_b)], device=device)).logits[0, -1, :]
+                        logits_b = _masked_score_logits(
+                            logits_b,
+                            _slot,
+                            min_time_tok=beam_min_time_tok if _slot == 0 else None,
+                        )
                         if temperature > 0:
                             logits_b = logits_b / temperature
                         log_probs = torch.log_softmax(logits_b, dim=-1)
@@ -453,13 +505,25 @@ def autoregressive_generate_interleaved_raw(
                 if step_idx < len(normalized_score_triplets)
                 else None
             )
+            min_time_tok = TIME_OFFSET
+            if pred_score_triplets:
+                min_time_tok = max(
+                    TIME_OFFSET,
+                    TIME_OFFSET + (
+                        pred_score_triplets[-1][0] - TIME_OFFSET - score_origin
+                    ),
+                )
             for _attempt in range(forced_max_attempts):
                 stats['total_triplet_attempts'] += 1
                 ctx_before = list(context)
                 past_before = past
                 logits_before = next_logits
 
-                rel_triplet = [_sample_next(), _sample_next(), _sample_next()]
+                rel_triplet = [
+                    _decode_next(0, min_time_tok=min_time_tok, sample=True),
+                    _decode_next(1, sample=True),
+                    _decode_next(2, force_pitch=gt_pitch if gt_pitch is not None else None, sample=True),
+                ]
                 if gt_pitch is None or rel_triplet[2] == gt_pitch:
                     matched = True
                     break
@@ -482,7 +546,19 @@ def autoregressive_generate_interleaved_raw(
                     stats['positions_forced'] += 1
 
         else:
-            rel_triplet = [_greedy_next(), _greedy_next(), _greedy_next()]
+            min_time_tok = TIME_OFFSET
+            if pred_score_triplets:
+                min_time_tok = max(
+                    TIME_OFFSET,
+                    TIME_OFFSET + (
+                        pred_score_triplets[-1][0] - TIME_OFFSET - score_origin
+                    ),
+                )
+            rel_triplet = [
+                _decode_next(0, min_time_tok=min_time_tok),
+                _decode_next(1),
+                _decode_next(2),
+            ]
 
         pred_score_triplets.append([
             TIME_OFFSET + max(0, score_origin + (rel_triplet[0] - TIME_OFFSET)),
@@ -627,7 +703,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
         inverse_extrapolated_count = 0
         for triplet in pred_score_norm:
             raw_triplet, inv_meta = _invert_normalized_triplet(triplet, score_beat_times)
-            pred_score.append(raw_triplet)
+            pred_score.append(_sanitize_score_triplet(raw_triplet))
             inverse_fallback_count += int(inv_meta.get('fallback_used', False))
             inverse_extrapolated_count += int(inv_meta.get('extrapolated', False))
 
@@ -635,7 +711,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
         seq_dir = Path(output_dir) / safe_name
         os.makedirs(seq_dir, exist_ok=True)
 
-        gt_norm = normalize_triplet_times(raw_gt_score)
+        gt_norm = normalize_triplet_times([_sanitize_score_triplet(t) for t in raw_gt_score])
         pred_norm = normalize_triplet_times(pred_score)
 
         if gen_stats.get('num_slides', 0):
