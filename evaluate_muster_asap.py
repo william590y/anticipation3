@@ -32,6 +32,7 @@ warnings.filterwarnings('ignore', category=UserWarning)
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.convert import midi_to_events
+from alignment import load_annotation_file
 
 from evaluate_muster import (
     load_model,
@@ -53,11 +54,12 @@ ASAP_PATH              = 'asap-dataset-master'
 ASAP_META_CSV          = os.path.join(ASAP_PATH, 'metadata.csv')
 SPLIT_FILE             = 'data/combined_split.txt'
 DEFAULT_CHECKPOINT     = 'checkpoint-1750'
-DEFAULT_NUM_PIECES     = 30
+DEFAULT_NUM_PIECES     = 50
 RANDOM_SEED            = 42
-NUM_WORKERS            = 32
+NUM_WORKERS            = os.cpu_count()
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 DEFAULT_PREFIX_CONTROLS = 33
+TARGET_BEAT_INTERVAL   = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,148 @@ def _score_events_to_controls(score_triplets):
     return controls
 
 
+def _normalize_single_score_triplet(score_triplet, score_beat_times):
+    """
+    Match the ASAP beat-normalization logic used in tokenize-combined.py.
+
+    Returns:
+        normalized_triplet,
+        metadata dict with local scale / segment info for debugging
+    """
+    original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+    original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+    pitch = score_triplet[2]
+
+    normalized_time_sec = 0.0
+    time_scale_factor = 1.0
+    segment = 'identity'
+
+    if score_beat_times and len(score_beat_times) >= 2:
+        if original_time_sec < score_beat_times[0]:
+            beat_duration = score_beat_times[1] - score_beat_times[0]
+            if beat_duration > 0:
+                progress = (original_time_sec - score_beat_times[0]) / beat_duration
+                time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+            else:
+                progress = 0.0
+                time_scale_factor = 1.0
+            normalized_time_sec = progress * TARGET_BEAT_INTERVAL
+            segment = 'before_first'
+        else:
+            found = False
+            for i in range(len(score_beat_times) - 1):
+                if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                    beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                    if beat_duration > 0:
+                        progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                        time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                    else:
+                        progress = 0.0
+                        time_scale_factor = 1.0
+                    normalized_time_sec = (
+                        i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                    )
+                    segment = f'beat_{i}'
+                    found = True
+                    break
+
+            if not found:
+                last_beat_idx = len(score_beat_times) - 1
+                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                if last_beat_duration > 0:
+                    progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                    time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
+                else:
+                    progress = 0.0
+                    time_scale_factor = 1.0
+                normalized_time_sec = (
+                    last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                )
+                segment = 'after_last'
+    else:
+        normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
+
+    normalized_duration_sec = original_duration_sec * time_scale_factor
+    normalized_time_units = max(0, round(normalized_time_sec * TIME_RESOLUTION))
+    normalized_duration_units = max(0, round(normalized_duration_sec * TIME_RESOLUTION))
+    normalized_score = [
+        normalized_time_units + TIME_OFFSET,
+        normalized_duration_units + DUR_OFFSET,
+        pitch,
+    ]
+    return normalized_score, {
+        'scale': time_scale_factor,
+        'segment': segment,
+    }
+
+
+def _invert_normalized_time_to_raw(normalized_time_units, score_beat_times):
+    """
+    Invert the ASAP beat-normalization map back to raw score time in bins.
+
+    Returns:
+        raw_time_units, metadata dict
+    """
+    normalized_time_sec = normalized_time_units / TIME_RESOLUTION
+    meta = {'fallback_used': False, 'extrapolated': False, 'segment': 'identity'}
+
+    if score_beat_times and len(score_beat_times) >= 2:
+        if normalized_time_sec < 0:
+            beat_duration = score_beat_times[1] - score_beat_times[0]
+            progress = normalized_time_sec / TARGET_BEAT_INTERVAL
+            raw_time_sec = score_beat_times[0] + progress * beat_duration
+            meta['segment'] = 'before_first'
+            meta['extrapolated'] = True
+        else:
+            beat_idx = int(normalized_time_sec // TARGET_BEAT_INTERVAL)
+            progress = (
+                normalized_time_sec - beat_idx * TARGET_BEAT_INTERVAL
+            ) / TARGET_BEAT_INTERVAL if TARGET_BEAT_INTERVAL > 0 else 0.0
+
+            if beat_idx < len(score_beat_times) - 1:
+                start = score_beat_times[beat_idx]
+                end = score_beat_times[beat_idx + 1]
+                raw_time_sec = start + progress * (end - start)
+                meta['segment'] = f'beat_{beat_idx}'
+            else:
+                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                raw_time_sec = score_beat_times[-1] + (normalized_time_sec / TARGET_BEAT_INTERVAL - (len(score_beat_times) - 1)) * last_beat_duration
+                meta['segment'] = 'after_last'
+                meta['extrapolated'] = True
+    else:
+        raw_time_sec = normalized_time_sec
+        meta['fallback_used'] = True
+
+    return round(raw_time_sec * TIME_RESOLUTION), meta
+
+
+def _invert_normalized_triplet(score_triplet, score_beat_times):
+    """
+    Convert one normalized score triplet back to raw score timing.
+    """
+    norm_time_units = score_triplet[0] - TIME_OFFSET
+    norm_dur_units = score_triplet[1] - DUR_OFFSET
+    raw_time_units, meta = _invert_normalized_time_to_raw(norm_time_units, score_beat_times)
+
+    if score_beat_times and len(score_beat_times) >= 2:
+        beat_idx = int(max(0.0, norm_time_units / TIME_RESOLUTION) // TARGET_BEAT_INTERVAL)
+        if beat_idx < len(score_beat_times) - 1:
+            beat_duration = score_beat_times[beat_idx + 1] - score_beat_times[beat_idx]
+        else:
+            beat_duration = score_beat_times[-1] - score_beat_times[-2]
+        inv_scale = beat_duration / TARGET_BEAT_INTERVAL if TARGET_BEAT_INTERVAL > 0 else 1.0
+    else:
+        inv_scale = 1.0
+        meta['fallback_used'] = True
+
+    raw_dur_units = max(0, round(norm_dur_units * inv_scale))
+    return [
+        TIME_OFFSET + raw_time_units,
+        DUR_OFFSET + raw_dur_units,
+        score_triplet[2],
+    ], meta
+
+
 def load_asap_piece(filegroup):
     """
     Worker: load one ASAP piece as raw performance and score note streams.
@@ -96,20 +240,29 @@ def load_asap_piece(filegroup):
     filegroup = ('asap', perf_midi, score_midi, perf_beats, score_beats)
     Returns a piece dict, or None on failure.
     """
-    _, perf_midi, score_midi, _perf_beats, _score_beats = filegroup
+    _, perf_midi, score_midi, _perf_beats, score_beats = filegroup
 
     try:
         perf_triplets = _events_to_triplets(midi_to_events(perf_midi, quantize=False))
         score_triplets = _events_to_triplets(midi_to_events(score_midi, quantize=False))
+        score_annotations = load_annotation_file(score_beats)
+        score_beat_times = [anno[0] for anno in score_annotations]
     except Exception:
         return None
 
     if len(perf_triplets) < DEFAULT_PREFIX_CONTROLS or len(score_triplets) < 5:
         return None
 
+    normalized_score_triplets = [
+        _normalize_single_score_triplet(score_triplet, score_beat_times)[0]
+        for score_triplet in score_triplets
+    ]
+
     return {
         'perf_triplets': _score_events_to_controls(perf_triplets),
-        'score_triplets': score_triplets,
+        'raw_score_triplets': score_triplets,
+        'normalized_score_triplets': normalized_score_triplets,
+        'score_beat_times': score_beat_times,
     }
 
 
@@ -184,14 +337,14 @@ def _build_interleaved_context(perf_triplets, score_triplets, generated_score_tr
 
 
 def autoregressive_generate_interleaved_raw(
-    model, perf_triplets, score_triplets, device, prefix_controls=DEFAULT_PREFIX_CONTROLS,
-    forced=False, forced_max_attempts=1000, beam_size=1, temperature=0.0
+    model, perf_triplets, normalized_score_triplets, device,
+    prefix_controls=DEFAULT_PREFIX_CONTROLS, forced=False,
+    forced_max_attempts=1000, beam_size=1, temperature=0.0
 ):
     """
     Generate raw-timeline score triplets using the fixed interleaving format.
 
-    The number of generation steps is set by the raw score note stream so the
-    ground-truth target used by MUSTER is never note-pruned during preprocessing.
+    Decode in normalized model space, with one emitted score note per control.
     """
     vocab_size = model.config.vocab_size
     pred_score_triplets = []
@@ -201,14 +354,14 @@ def autoregressive_generate_interleaved_raw(
         'positions_forced': 0,
         'beam_log_prob': 0.0,
         'num_controls': len(perf_triplets),
-        'num_gt_notes': len(score_triplets),
+        'num_gt_notes': len(normalized_score_triplets),
     }
 
     past = None
     next_logits = None
     window_start = 0
     context, score_origin, k = _build_interleaved_context(
-        perf_triplets, score_triplets, pred_score_triplets, window_start, 0,
+        perf_triplets, normalized_score_triplets, pred_score_triplets, window_start, 0,
         prefix_controls=prefix_controls,
     )
 
@@ -268,7 +421,7 @@ def autoregressive_generate_interleaved_raw(
         _feed([tok])
         return tok
 
-    num_steps = len(score_triplets)
+    num_steps = len(perf_triplets)
     for step_idx in range(num_steps):
         if beam_size > 1:
             beams = [(list(context), 0.0)]
@@ -295,7 +448,11 @@ def autoregressive_generate_interleaved_raw(
 
         elif forced:
             matched = False
-            gt_pitch = score_triplets[step_idx][2]
+            gt_pitch = (
+                normalized_score_triplets[step_idx][2]
+                if step_idx < len(normalized_score_triplets)
+                else None
+            )
             for _attempt in range(forced_max_attempts):
                 stats['total_triplet_attempts'] += 1
                 ctx_before = list(context)
@@ -303,7 +460,7 @@ def autoregressive_generate_interleaved_raw(
                 logits_before = next_logits
 
                 rel_triplet = [_sample_next(), _sample_next(), _sample_next()]
-                if rel_triplet[2] == gt_pitch:
+                if gt_pitch is None or rel_triplet[2] == gt_pitch:
                     matched = True
                     break
 
@@ -312,22 +469,23 @@ def autoregressive_generate_interleaved_raw(
                 next_logits = logits_before
 
             if not matched:
-                if len(context) >= 3:
+                if gt_pitch is not None and len(context) >= 3:
                     context[-1] = gt_pitch
                     rel_triplet = context[-3:]
                 else:
-                    rel_triplet = [TIME_OFFSET, DUR_OFFSET, gt_pitch]
+                    fallback_pitch = rel_triplet[2] if gt_pitch is None else gt_pitch
+                    rel_triplet = [TIME_OFFSET, DUR_OFFSET, fallback_pitch]
                     context.extend(rel_triplet)
-                past = None
-                next_logits = None
-                stats['positions_forced'] += 1
+                if gt_pitch is not None:
+                    past = None
+                    next_logits = None
+                    stats['positions_forced'] += 1
 
         else:
             rel_triplet = [_greedy_next(), _greedy_next(), _greedy_next()]
 
-        raw_time = max(0, rel_triplet[0] - TIME_OFFSET)
         pred_score_triplets.append([
-            TIME_OFFSET + score_origin + raw_time,
+            TIME_OFFSET + max(0, score_origin + (rel_triplet[0] - TIME_OFFSET)),
             rel_triplet[1],
             rel_triplet[2],
         ])
@@ -349,7 +507,7 @@ def autoregressive_generate_interleaved_raw(
 
             window_start += max(1, generated_in_window // 2)
             context, score_origin, k = _build_interleaved_context(
-                perf_triplets, score_triplets, pred_score_triplets, window_start, step_idx + 1,
+                perf_triplets, normalized_score_triplets, pred_score_triplets, window_start, step_idx + 1,
                 prefix_controls=prefix_controls,
             )
             past = None
@@ -414,7 +572,7 @@ def load_asap_test_perfs(split_file):
 def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
                          forced=False, forced_max_attempts=1000,
                          beam_size=1, temperature=0.0):
-    """Run model + MUSTER on raw ASAP pieces with rebuilt sliding interleaving."""
+    """Run model + MUSTER with normalized decode space and raw-space export."""
     model, device = load_model(checkpoint_path)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -427,6 +585,9 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
         'mean_error_rate': [],
         'voice_error_rate': [],
         'mean_error_rate_with_voice': [],
+        'inverse_timing_fallback_count': [],
+        'inverse_timing_extrapolated_count': [],
+        'num_slides': [],
     }
     per_sequence_metrics = []
     num_successful = 0
@@ -434,16 +595,18 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
     for piece_info in tqdm(piece_infos, desc='Evaluating'):
         perf_triplets = piece_info['perf_triplets']
-        gt_score = piece_info['score_triplets']
+        raw_gt_score = piece_info['raw_score_triplets']
+        normalized_score = piece_info['normalized_score_triplets']
+        score_beat_times = piece_info['score_beat_times']
         piece_name = piece_info['perf_path']
 
-        if not perf_triplets or not gt_score:
+        if not perf_triplets or not raw_gt_score or not normalized_score:
             num_failed += 1
             continue
 
         try:
-            pred_score, gen_stats = autoregressive_generate_interleaved_raw(
-                model, perf_triplets, gt_score, device,
+            pred_score_norm, gen_stats = autoregressive_generate_interleaved_raw(
+                model, perf_triplets, normalized_score, device,
                 prefix_controls=DEFAULT_PREFIX_CONTROLS,
                 forced=forced,
                 forced_max_attempts=forced_max_attempts,
@@ -455,15 +618,24 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
             num_failed += 1
             continue
 
-        if len(pred_score) < 3:
+        if len(pred_score_norm) < 3:
             num_failed += 1
             continue
+
+        pred_score = []
+        inverse_fallback_count = 0
+        inverse_extrapolated_count = 0
+        for triplet in pred_score_norm:
+            raw_triplet, inv_meta = _invert_normalized_triplet(triplet, score_beat_times)
+            pred_score.append(raw_triplet)
+            inverse_fallback_count += int(inv_meta.get('fallback_used', False))
+            inverse_extrapolated_count += int(inv_meta.get('extrapolated', False))
 
         safe_name = piece_name.replace('/', '_').replace('\\', '_')
         seq_dir = Path(output_dir) / safe_name
         os.makedirs(seq_dir, exist_ok=True)
 
-        gt_norm = normalize_triplet_times(gt_score)
+        gt_norm = normalize_triplet_times(raw_gt_score)
         pred_norm = normalize_triplet_times(pred_score)
 
         if gen_stats.get('num_slides', 0):
@@ -491,10 +663,12 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
         if metrics:
             metrics['piece'] = piece_name
-            metrics['num_gt_notes'] = len(gt_score)
+            metrics['num_gt_notes'] = len(raw_gt_score)
             metrics['num_pred_notes'] = len(pred_score)
             metrics['num_controls'] = len(perf_triplets)
             metrics['num_slides'] = gen_stats.get('num_slides', 0)
+            metrics['inverse_timing_fallback_count'] = inverse_fallback_count
+            metrics['inverse_timing_extrapolated_count'] = inverse_extrapolated_count
             if forced:
                 metrics['forced_total_triplet_attempts'] = gen_stats['total_triplet_attempts']
                 metrics['forced_positions_forced'] = gen_stats['positions_forced']
