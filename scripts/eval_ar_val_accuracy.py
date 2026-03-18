@@ -57,7 +57,7 @@ class TokenizedDataset:
         return torch.tensor(self._read_tokens(idx), dtype=torch.long)
 
 
-def evaluate_sequence(model, device, seq):
+def evaluate_sequence(model, device, seq, forced=False):
     context = seq[:ALTERNATING_START].tolist()
     pos = ALTERNATING_START
     correct = 0
@@ -70,23 +70,29 @@ def evaluate_sequence(model, device, seq):
             and seq[pos + 2] < CONTROL_OFFSET
             and seq[pos + 2] != REST
         ):
-            input_tensor = torch.tensor([context], device=device)
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                pred_time = outputs.logits[0, -1, :].argmax().item()
-            context.append(pred_time)
+            if forced:
+                pred_time = seq[pos].item()
+                pred_dur = seq[pos + 1].item()
+                pred_pitch = seq[pos + 2].item()
+                context.extend([pred_time, pred_dur, pred_pitch])
+            else:
+                input_tensor = torch.tensor([context], device=device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    pred_time = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_time)
 
-            input_tensor = torch.tensor([context], device=device)
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                pred_dur = outputs.logits[0, -1, :].argmax().item()
-            context.append(pred_dur)
+                input_tensor = torch.tensor([context], device=device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    pred_dur = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_dur)
 
-            input_tensor = torch.tensor([context], device=device)
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                pred_pitch = outputs.logits[0, -1, :].argmax().item()
-            context.append(pred_pitch)
+                input_tensor = torch.tensor([context], device=device)
+                with torch.no_grad():
+                    outputs = model(input_tensor)
+                    pred_pitch = outputs.logits[0, -1, :].argmax().item()
+                context.append(pred_pitch)
 
             if pred_pitch == seq[pos + 2].item():
                 correct += 1
@@ -116,6 +122,11 @@ def main():
         help="Number of validation sequences to sample; use 0 or a negative value for all",
     )
     parser.add_argument("--seed", type=int, default=0, help="Sampling seed")
+    parser.add_argument(
+        "--forced",
+        action="store_true",
+        help="Force score triplets to ground truth as a sanity check; should yield 100%% pitch accuracy",
+    )
     parser.add_argument("--output-json", default="", help="Optional path to save JSON summary")
     args = parser.parse_args()
 
@@ -145,7 +156,7 @@ def main():
 
     for seq_idx in tqdm(indices, desc="Autoregressive eval", unit="seq"):
         seq = dataset[seq_idx]
-        correct, total = evaluate_sequence(model, device, seq)
+        correct, total = evaluate_sequence(model, device, seq, forced=args.forced)
         overall_correct += correct
         overall_total += total
         per_sequence.append(
@@ -163,6 +174,7 @@ def main():
         "dataset_size": dataset_size,
         "num_samples": len(indices),
         "seed": args.seed,
+        "forced": args.forced,
         "overall_correct": overall_correct,
         "overall_total": overall_total,
         "overall_accuracy": (overall_correct / overall_total) if overall_total else 0.0,
