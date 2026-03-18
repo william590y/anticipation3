@@ -2,11 +2,13 @@
 Evaluate MUSTER metrics on ASAP pieces using the model's fixed interleaving format.
 
 This evaluation path is designed for fairer comparison against chunked PM2S systems:
-1. Performance and score note streams are loaded raw from MIDI with no beat
-   normalization and no note-pair filtering.
-2. The model still sees the interleaving pattern it was trained on:
+1. Performance note streams are loaded raw from MIDI with no note-pair filtering.
+2. Ground-truth score notes keep the full true score note set, normalized to a
+   fixed 60 BPM score timeline.
+3. No inverse timing map back to the original ASAP score tempo is applied.
+4. The model still sees the interleaving pattern it was trained on:
    prefix controls + rests, then alternating generated score / future control.
-3. When the window fills, we rebuild the interleaving from the kept half and
+5. When the window fills, we rebuild the interleaving from the kept half and
    re-prime the KV cache from scratch so positional state is not reused across
    shifts.
 
@@ -53,13 +55,14 @@ from evaluate_muster import (
 ASAP_PATH              = 'asap-dataset-master'
 ASAP_META_CSV          = os.path.join(ASAP_PATH, 'metadata.csv')
 SPLIT_FILE             = 'data/combined_split.txt'
+PIECE_CACHE_FILE       = 'data/test_asap_muster_cache.jsonl'
 DEFAULT_CHECKPOINT     = 'checkpoint-1750'
 DEFAULT_NUM_PIECES     = 50
 RANDOM_SEED            = 42
 NUM_WORKERS            = os.cpu_count()
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 DEFAULT_PREFIX_CONTROLS = 33
-TARGET_BEAT_INTERVAL   = 0.5
+TARGET_BEAT_INTERVAL   = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -166,73 +169,6 @@ def _normalize_single_score_triplet(score_triplet, score_beat_times):
     }
 
 
-def _invert_normalized_time_to_raw(normalized_time_units, score_beat_times):
-    """
-    Invert the ASAP beat-normalization map back to raw score time in bins.
-
-    Returns:
-        raw_time_units, metadata dict
-    """
-    normalized_time_sec = normalized_time_units / TIME_RESOLUTION
-    meta = {'fallback_used': False, 'extrapolated': False, 'segment': 'identity'}
-
-    if score_beat_times and len(score_beat_times) >= 2:
-        if normalized_time_sec < 0:
-            beat_duration = score_beat_times[1] - score_beat_times[0]
-            progress = normalized_time_sec / TARGET_BEAT_INTERVAL
-            raw_time_sec = score_beat_times[0] + progress * beat_duration
-            meta['segment'] = 'before_first'
-            meta['extrapolated'] = True
-        else:
-            beat_idx = int(normalized_time_sec // TARGET_BEAT_INTERVAL)
-            progress = (
-                normalized_time_sec - beat_idx * TARGET_BEAT_INTERVAL
-            ) / TARGET_BEAT_INTERVAL if TARGET_BEAT_INTERVAL > 0 else 0.0
-
-            if beat_idx < len(score_beat_times) - 1:
-                start = score_beat_times[beat_idx]
-                end = score_beat_times[beat_idx + 1]
-                raw_time_sec = start + progress * (end - start)
-                meta['segment'] = f'beat_{beat_idx}'
-            else:
-                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
-                raw_time_sec = score_beat_times[-1] + (normalized_time_sec / TARGET_BEAT_INTERVAL - (len(score_beat_times) - 1)) * last_beat_duration
-                meta['segment'] = 'after_last'
-                meta['extrapolated'] = True
-    else:
-        raw_time_sec = normalized_time_sec
-        meta['fallback_used'] = True
-
-    return round(raw_time_sec * TIME_RESOLUTION), meta
-
-
-def _invert_normalized_triplet(score_triplet, score_beat_times):
-    """
-    Convert one normalized score triplet back to raw score timing.
-    """
-    norm_time_units = score_triplet[0] - TIME_OFFSET
-    norm_dur_units = score_triplet[1] - DUR_OFFSET
-    raw_time_units, meta = _invert_normalized_time_to_raw(norm_time_units, score_beat_times)
-
-    if score_beat_times and len(score_beat_times) >= 2:
-        beat_idx = int(max(0.0, norm_time_units / TIME_RESOLUTION) // TARGET_BEAT_INTERVAL)
-        if beat_idx < len(score_beat_times) - 1:
-            beat_duration = score_beat_times[beat_idx + 1] - score_beat_times[beat_idx]
-        else:
-            beat_duration = score_beat_times[-1] - score_beat_times[-2]
-        inv_scale = beat_duration / TARGET_BEAT_INTERVAL if TARGET_BEAT_INTERVAL > 0 else 1.0
-    else:
-        inv_scale = 1.0
-        meta['fallback_used'] = True
-
-    raw_dur_units = max(0, round(norm_dur_units * inv_scale))
-    return [
-        TIME_OFFSET + raw_time_units,
-        DUR_OFFSET + raw_dur_units,
-        score_triplet[2],
-    ], meta
-
-
 def load_asap_piece(filegroup):
     """
     Worker: load one ASAP piece as raw performance and score note streams.
@@ -335,9 +271,23 @@ def _sanitize_score_triplet(score_triplet):
     Clamp a score triplet into the valid event token ranges for export.
     """
     time_tok = min(max(int(score_triplet[0]), TIME_OFFSET), TIME_OFFSET + MAX_TIME - 1)
-    dur_tok = min(max(int(score_triplet[1]), DUR_OFFSET), DUR_OFFSET + MAX_DUR - 1)
-    note_tok = min(max(int(score_triplet[2]), NOTE_OFFSET), NOTE_OFFSET + MAX_NOTE - 1)
+    dur_units = min(max(int(score_triplet[1]) - DUR_OFFSET, 0), MAX_DUR - 1)
+    dur_tok = DUR_OFFSET + dur_units
+    note_tok = int(score_triplet[2])
+    if note_tok == REST:
+        return [time_tok, dur_tok, REST]
+    note_tok = min(max(note_tok, NOTE_OFFSET), NOTE_OFFSET + MAX_NOTE - 1)
     return [time_tok, dur_tok, note_tok]
+
+
+def _prepare_export_triplets(score_triplets):
+    prepared = []
+    for triplet in score_triplets:
+        clean_triplet = _sanitize_score_triplet(triplet)
+        if clean_triplet[2] == REST:
+            continue
+        prepared.append(clean_triplet)
+    return prepared
 
 
 def _build_interleaved_context(perf_triplets, score_triplets, generated_score_triplets,
@@ -665,6 +615,34 @@ def load_asap_test_perfs(split_file):
     return test_perfs or None
 
 
+def load_cached_asap_pieces(cache_file):
+    if not os.path.exists(cache_file):
+        return None
+
+    pieces = []
+    try:
+        with open(cache_file, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                required = {
+                    'perf_path',
+                    'perf_triplets',
+                    'raw_score_triplets',
+                    'normalized_score_triplets',
+                    'score_beat_times',
+                }
+                if not required.issubset(record):
+                    return None
+                pieces.append(record)
+    except Exception:
+        return None
+
+    return pieces or None
+
+
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
@@ -672,7 +650,7 @@ def load_asap_test_perfs(split_file):
 def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
                          forced=False, forced_max_attempts=1000,
                          beam_size=1, temperature=0.0):
-    """Run model + MUSTER with normalized decode space and raw-space export."""
+    """Run model + MUSTER with normalized 60 BPM decode and export space."""
     model, device = load_model(checkpoint_path)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -685,8 +663,6 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
         'mean_error_rate': [],
         'voice_error_rate': [],
         'mean_error_rate_with_voice': [],
-        'inverse_timing_fallback_count': [],
-        'inverse_timing_extrapolated_count': [],
         'num_slides': [],
     }
     per_sequence_metrics = []
@@ -695,12 +671,10 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
     for piece_info in tqdm(piece_infos, desc='Evaluating'):
         perf_triplets = piece_info['perf_triplets']
-        raw_gt_score = piece_info['raw_score_triplets']
         normalized_score = piece_info['normalized_score_triplets']
-        score_beat_times = piece_info['score_beat_times']
         piece_name = piece_info['perf_path']
 
-        if not perf_triplets or not raw_gt_score or not normalized_score:
+        if not perf_triplets or not normalized_score:
             num_failed += 1
             continue
 
@@ -722,21 +696,21 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
             num_failed += 1
             continue
 
-        pred_score = []
-        inverse_fallback_count = 0
-        inverse_extrapolated_count = 0
-        for triplet in pred_score_norm:
-            raw_triplet, inv_meta = _invert_normalized_triplet(triplet, score_beat_times)
-            pred_score.append(_sanitize_score_triplet(raw_triplet))
-            inverse_fallback_count += int(inv_meta.get('fallback_used', False))
-            inverse_extrapolated_count += int(inv_meta.get('extrapolated', False))
+        pred_score = [_sanitize_score_triplet(triplet) for triplet in pred_score_norm]
 
         safe_name = piece_name.replace('/', '_').replace('\\', '_')
         seq_dir = Path(output_dir) / safe_name
         os.makedirs(seq_dir, exist_ok=True)
 
-        gt_norm = normalize_triplet_times([_sanitize_score_triplet(t) for t in raw_gt_score])
-        pred_norm = normalize_triplet_times(pred_score)
+        gt_export = _prepare_export_triplets(normalized_score)
+        pred_export = _prepare_export_triplets(pred_score)
+
+        if not gt_export or not pred_export:
+            num_failed += 1
+            continue
+
+        gt_norm = normalize_triplet_times(gt_export)
+        pred_norm = normalize_triplet_times(pred_export)
 
         if gen_stats.get('num_slides', 0):
             print(
@@ -763,12 +737,10 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
         if metrics:
             metrics['piece'] = piece_name
-            metrics['num_gt_notes'] = len(raw_gt_score)
-            metrics['num_pred_notes'] = len(pred_score)
+            metrics['num_gt_notes'] = len(gt_export)
+            metrics['num_pred_notes'] = len(pred_export)
             metrics['num_controls'] = len(perf_triplets)
             metrics['num_slides'] = gen_stats.get('num_slides', 0)
-            metrics['inverse_timing_fallback_count'] = inverse_fallback_count
-            metrics['inverse_timing_extrapolated_count'] = inverse_extrapolated_count
             if forced:
                 metrics['forced_total_triplet_attempts'] = gen_stats['total_triplet_attempts']
                 metrics['forced_positions_forced'] = gen_stats['positions_forced']
@@ -811,13 +783,15 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Evaluate MUSTER on raw ASAP pieces using fixed interleaving'
+        description='Evaluate MUSTER on ASAP pieces in normalized 60 BPM score space'
     )
     parser.add_argument('--checkpoint', default=DEFAULT_CHECKPOINT)
     parser.add_argument('--num-pieces', type=int, default=DEFAULT_NUM_PIECES,
                         help='Number of ASAP pieces to sample (default: 30)')
     parser.add_argument('--split-file', default=SPLIT_FILE,
                         help='Path to combined_split.txt for test-split filtering')
+    parser.add_argument('--piece-cache', default=PIECE_CACHE_FILE,
+                        help='Precomputed JSONL cache for ASAP test pieces')
     parser.add_argument('--all-pieces', action='store_true',
                         help='Use all ASAP pieces (train+test), not just test split')
     parser.add_argument('--seed', type=int, default=RANDOM_SEED,
@@ -839,50 +813,64 @@ def main():
         sys.exit(1)
 
     check_muster_installation()
-
-    print(f"Loading ASAP metadata from {ASAP_META_CSV}...")
-    all_pieces = load_asap_metadata()
-    print(f"  {len(all_pieces)} valid ASAP pieces found")
+    piece_infos = None
 
     if not args.all_pieces:
-        test_perfs = load_asap_test_perfs(args.split_file)
-        if test_perfs:
-            filtered = [p for p in all_pieces if p['perf_path'] in test_perfs]
-            print(f"  {len(filtered)} in TEST split of {args.split_file}")
-            all_pieces = filtered if filtered else all_pieces
-        else:
-            print("  Warning: split file not found or unreadable; using all ASAP pieces")
+        cached_pieces = load_cached_asap_pieces(args.piece_cache)
+        if cached_pieces is not None:
+            piece_infos = sorted(cached_pieces, key=lambda p: p['perf_path'])
+            print(f"Loaded {len(piece_infos)} cached ASAP test pieces from {args.piece_cache}")
 
-    # Canonicalize order before sampling so the same seed gives the same sample
-    # regardless of metadata/DataFrame ordering.
-    all_pieces = sorted(all_pieces, key=lambda p: p['perf_path'])
-    rng = random.Random(args.seed)
-    sampled = (
-        rng.sample(all_pieces, args.num_pieces)
-        if args.num_pieces < len(all_pieces) else rng.sample(all_pieces, len(all_pieces))
-    )
-    print(f"  Sampled {len(sampled)} pieces\n")
+    if piece_infos is None:
+        print(f"Loading ASAP metadata from {ASAP_META_CSV}...")
+        all_pieces = load_asap_metadata()
+        print(f"  {len(all_pieces)} valid ASAP pieces found")
 
-    print(f"Loading raw ASAP note streams with {args.workers} workers...")
-    filegroups = [p['filegroup'] for p in sampled]
-    with Pool(processes=args.workers) as pool:
-        results = list(tqdm(
-            pool.imap(load_asap_piece, filegroups),
-            total=len(filegroups),
-            desc='Loading',
-        ))
+        if not args.all_pieces:
+            test_perfs = load_asap_test_perfs(args.split_file)
+            if test_perfs:
+                filtered = [p for p in all_pieces if p['perf_path'] in test_perfs]
+                print(f"  {len(filtered)} in TEST split of {args.split_file}")
+                all_pieces = filtered if filtered else all_pieces
+            else:
+                print("  Warning: split file not found or unreadable; using all ASAP pieces")
 
-    piece_infos = []
-    n_ok = 0
-    n_fail = 0
-    for meta, piece in zip(sampled, results):
-        if piece:
-            piece_infos.append({**meta, **piece})
-            n_ok += 1
-        else:
-            n_fail += 1
+        all_pieces = sorted(all_pieces, key=lambda p: p['perf_path'])
+        rng = random.Random(args.seed)
+        sampled = (
+            rng.sample(all_pieces, args.num_pieces)
+            if args.num_pieces < len(all_pieces) else rng.sample(all_pieces, len(all_pieces))
+        )
+        print(f"  Sampled {len(sampled)} pieces\n")
 
-    print(f"  Loaded: {n_ok} ok, {n_fail} failed\n")
+        print(f"Loading raw ASAP note streams with {args.workers} workers...")
+        filegroups = [p['filegroup'] for p in sampled]
+        with Pool(processes=args.workers) as pool:
+            results = list(tqdm(
+                pool.imap(load_asap_piece, filegroups),
+                total=len(filegroups),
+                desc='Loading',
+            ))
+
+        piece_infos = []
+        n_ok = 0
+        n_fail = 0
+        for meta, piece in zip(sampled, results):
+            if piece:
+                piece_infos.append({**meta, **piece})
+                n_ok += 1
+            else:
+                n_fail += 1
+
+        print(f"  Loaded: {n_ok} ok, {n_fail} failed\n")
+    else:
+        rng = random.Random(args.seed)
+        sampled = (
+            rng.sample(piece_infos, args.num_pieces)
+            if args.num_pieces < len(piece_infos) else rng.sample(piece_infos, len(piece_infos))
+        )
+        piece_infos = sampled
+        print(f"  Sampled {len(piece_infos)} cached pieces\n")
 
     if not piece_infos:
         print("ERROR: no pieces could be loaded. Check ASAP dataset paths.")

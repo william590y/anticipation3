@@ -57,6 +57,32 @@ def power_set(lst, min_length=2, max_length=6):
     return result
 
 
+def _project_time_between_annotation_grids(time_point, src_grid, dst_grid):
+    if len(src_grid) == 0 or len(dst_grid) == 0:
+        return None
+
+    if len(src_grid) == 1 or len(dst_grid) == 1:
+        return float(dst_grid[0])
+
+    if time_point <= src_grid[0]:
+        src_span = src_grid[1] - src_grid[0]
+        dst_span = dst_grid[1] - dst_grid[0]
+        progress = (time_point - src_grid[0]) / src_span if src_span != 0 else 0.0
+        return float(dst_grid[0] + progress * dst_span)
+
+    for i in range(len(src_grid) - 1):
+        if src_grid[i] <= time_point <= src_grid[i + 1]:
+            src_span = src_grid[i + 1] - src_grid[i]
+            dst_span = dst_grid[i + 1] - dst_grid[i]
+            progress = (time_point - src_grid[i]) / src_span if src_span != 0 else 0.0
+            return float(dst_grid[i] + progress * dst_span)
+
+    src_span = src_grid[-1] - src_grid[-2]
+    dst_span = dst_grid[-1] - dst_grid[-2]
+    progress = (time_point - src_grid[-1]) / src_span if src_span != 0 else 0.0
+    return float(dst_grid[-1] + progress * dst_span)
+
+
 def align_tokens(file1, file2, file3, file4, skip_Nones=True):
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
     perf = midi_to_events(file1, quantize=False)
@@ -170,7 +196,8 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
     return matched_tuples
 
 
-def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
+def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1,
+                  preserve_unmatched_perf=False):
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
     perf = midi_to_events(file1, quantize=False)
     score = midi_to_events(file2, quantize=False)
@@ -220,6 +247,14 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
             matched_tuples.append([p_tuple, i, best_match, best_index])
             s_tuples_copy.remove(best_match)
         elif not skip_Nones:
+            if preserve_unmatched_perf:
+                projected_score_time = _project_time_between_annotation_grids(
+                    p_time,
+                    p_beats,
+                    s_beats,
+                )
+                if projected_score_time is not None:
+                    best_match = [projected_score_time, 0, REST - NOTE_OFFSET]
             matched_tuples.append([p_tuple, i, best_match, best_index])
 
     # revert back to token format
@@ -229,7 +264,11 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
         l[0] = [CONTROL_OFFSET + t for t in l[0]]
 
         if l[2][0] is not None:
-            l[2] = [round(l[2][0] * TIME_RESOLUTION), l[2][1] + DUR_OFFSET, l[2][2] + NOTE_OFFSET]
+            l[2] = [
+                max(0, round(l[2][0] * TIME_RESOLUTION)),
+                l[2][1] + DUR_OFFSET,
+                l[2][2] + NOTE_OFFSET,
+            ]
 
         matched_tuples[i] = l
 

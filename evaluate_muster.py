@@ -585,6 +585,8 @@ def triplets_to_events(triplets):
     """Convert list of [time, dur, pitch] triplets to flat event list."""
     events = []
     for t in triplets:
+        if t[2] == REST:
+            continue
         events.extend(t)
     return events
 
@@ -606,8 +608,8 @@ def triplets_to_musicxml(triplets, xml_path):
     crashes) and guarantees a single part/voice for MUSTER's HMM converter.
     
     Time resolution: 10ms bins (TIME_RESOLUTION=100 bins/sec).
-    We use 120 BPM so 1 quarter = 0.5s = 50 bins.  divisions=50 means each
-    MusicXML <duration> unit is 1 bin = 10ms.
+    Normalized score space is 60 BPM, so 1 quarter = 1.0s = 100 bins.
+    divisions=100 means each MusicXML <duration> unit is 1 bin = 10ms.
     
     Args:
         triplets: list of [time_token, dur_token, pitch_token] (with vocab offsets)
@@ -620,14 +622,16 @@ def triplets_to_musicxml(triplets, xml_path):
         from xml.etree.ElementTree import Element, SubElement, ElementTree, indent
         
         BINS_PER_SECOND  = TIME_RESOLUTION   # 100
-        BPM              = 120
-        BINS_PER_QUARTER = BINS_PER_SECOND * 60 // BPM  # 50
-        DIVISIONS        = BINS_PER_QUARTER              # 50 units per quarter note
-        BINS_PER_MEASURE = BINS_PER_QUARTER * 4          # 200 bins per 4/4 bar
+        BPM              = 60
+        BINS_PER_QUARTER = BINS_PER_SECOND * 60 // BPM  # 100
+        DIVISIONS        = BINS_PER_QUARTER              # 100 units per quarter note
+        BINS_PER_MEASURE = BINS_PER_QUARTER * 4          # 400 bins per 4/4 bar
         
         # Decode tokens
         notes = []
         for t in triplets:
+            if t[2] == REST:
+                continue
             onset = t[0] - TIME_OFFSET
             dur   = t[1] - DUR_OFFSET
             pitch = t[2] - NOTE_OFFSET

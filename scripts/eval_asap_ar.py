@@ -30,7 +30,7 @@ from anticipation.vocab import (
 
 ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
-TARGET_BEAT_INTERVAL = 0.5
+TARGET_BEAT_INTERVAL = 1.0
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 ALTERNATING_START = 33 * 2 * EVENT_SIZE
 DEFAULT_WINDOWS_WORKERS = 8 if os.name == "nt" else 32
@@ -154,7 +154,14 @@ def build_packed_sequences(normalized_matched_tuples, prefix_controls=33):
 def tokenize_asap_piece(filegroup):
     _, perf_midi, score_midi, perf_beats, score_beats = filegroup
     try:
-        matched_tuples = align_tokens2(perf_midi, score_midi, perf_beats, score_beats, skip_Nones=True)
+        matched_tuples = align_tokens2(
+            perf_midi,
+            score_midi,
+            perf_beats,
+            score_beats,
+            skip_Nones=False,
+            preserve_unmatched_perf=True,
+        )
         if len(matched_tuples) < 20:
             return []
 

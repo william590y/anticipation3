@@ -608,7 +608,15 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
 
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
-def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
+def plot_losses(
+    train_losses,
+    val_losses,
+    val_accuracies,
+    val_autoregressive_accuracies,
+    validation_steps,
+    output_dir,
+    val_asap_autoregressive_accuracies=None,
+):
     """
     Plot training/validation losses and validation pitch accuracy, save figures
     
@@ -619,6 +627,8 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
         val_autoregressive_accuracies (list): Validation autoregressive pitch accuracy history
         validation_steps (list): Steps at which validation was performed
         output_dir (Path): Directory to save the plots
+        val_asap_autoregressive_accuracies (list | None): ASAP-only validation
+            autoregressive pitch accuracy history
     """
     steps = list(range(1, len(train_losses) + 1))
     
@@ -656,6 +666,14 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
     
     # Plot 4: Validation autoregressive pitch accuracy
     ax4.plot(validation_steps, val_autoregressive_accuracies, label='Autoregressive Pitch Accuracy', color='purple', marker='s')
+    if val_asap_autoregressive_accuracies:
+        ax4.plot(
+            validation_steps,
+            val_asap_autoregressive_accuracies,
+            label='ASAP-Only AR Pitch Accuracy',
+            color='orange',
+            marker='^',
+        )
     ax4.set_xlabel('Step')
     ax4.set_ylabel('Pitch Accuracy (%)')
     ax4.set_title('Validation Autoregressive Pitch Accuracy')
@@ -674,6 +692,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
+    parser.add_argument('--val_asap_file', type=Path, default=Path('./data/test_asap.txt'))
     parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap.txt'),
                         help='ASAP-only training sequences (high quality, used at end of curriculum)')
     parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp.txt'),
@@ -803,6 +822,24 @@ def main():
             pin_memory=torch.cuda.is_available() and not args.force_cpu,
             num_workers=args.num_workers,
         )
+
+        val_asap_dataloader = None
+        if args.val_asap_file.exists():
+            print(f"Loading ASAP-only validation dataset from {args.val_asap_file}...")
+            val_asap_dataset = TokenizedDataset(
+                args.val_asap_file,
+                is_training=False
+            )
+            val_asap_dataloader = DataLoader(
+                val_asap_dataset,
+                batch_size=args.val_batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                pin_memory=torch.cuda.is_available() and not args.force_cpu,
+                num_workers=args.num_workers,
+            )
+        else:
+            print(f"ASAP-only validation file not found, skipping: {args.val_asap_file}")
         
         # Load model with memory optimizations
         print(f"Loading model {args.model_name}...")
@@ -863,6 +900,8 @@ def main():
         # Prepare for training with accelerate - this handles device placement
         model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
         val_dataloader = accelerator.prepare_data_loader(val_dataloader)
+        if val_asap_dataloader is not None:
+            val_asap_dataloader = accelerator.prepare_data_loader(val_asap_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
         
         # Learning rate scheduler - cosine decay from 3e-5 to 3e-6 (no warmup)
@@ -909,7 +948,39 @@ def main():
         val_losses = []
         val_accuracies = []
         val_autoregressive_accuracies = []
+        val_asap_autoregressive_accuracies = []
         validation_steps = []
+
+        def run_validation(step_label):
+            if accelerator.is_main_process:
+                print(f"\nRunning validation at step {step_label}...")
+
+            val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
+            val_asap_auto_acc = None
+            if val_asap_dataloader is not None:
+                _, _, val_asap_auto_acc = evaluate_model(model, val_asap_dataloader, accelerator)
+
+            if accelerator.is_main_process:
+                validation_steps.append(step_label // 10)
+                val_losses.append(val_loss)
+                val_accuracies.append(val_acc * 100)
+                val_autoregressive_accuracies.append(val_auto_acc * 100)
+                if val_asap_auto_acc is not None:
+                    val_asap_autoregressive_accuracies.append(val_asap_auto_acc * 100)
+                    print(
+                        f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                        f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%, "
+                        f"ASAP-Only AR Accuracy: {val_asap_auto_acc*100:.2f}%"
+                    )
+                else:
+                    print(
+                        f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                        f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
+                    )
+
+            model.train()
+            accelerator.wait_for_everyone()
+            return val_loss, val_acc, val_auto_acc, val_asap_auto_acc
         
         # Use standard tqdm with disable=False to ensure it always displays
         progress_bar = tqdm(
@@ -984,19 +1055,7 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    if accelerator.is_main_process:
-                                        print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps)  # Store step number (divided by 10 for plotting)
-                                        val_losses.append(val_loss)
-                                        val_accuracies.append(val_acc * 100)  # Store as percentage
-                                        val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
-                                    
-                                    # Return to training mode
-                                    model.train()
-                                    accelerator.wait_for_everyone()
+                                    run_validation(completed_steps)
                                     
                                     # Free up memory after validation
                                     if torch.cuda.is_available():
@@ -1006,18 +1065,7 @@ def main():
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    if accelerator.is_main_process:
-                                        print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps // 10)
-                                        val_losses.append(val_loss)
-                                        val_accuracies.append(val_acc * 100)
-                                        val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
-                                    
-                                    # Return to training mode
-                                    model.train()
+                                    run_validation(completed_steps)
                                     
                                     checkpoint_dir = args.output_dir / f"checkpoint-{completed_steps}"
                                     if accelerator.is_main_process:
@@ -1043,11 +1091,20 @@ def main():
                                             val_losses=np.array(val_losses),
                                             val_accuracies=np.array(val_accuracies),
                                             val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                                            val_asap_autoregressive_accuracies=np.array(val_asap_autoregressive_accuracies),
                                             validation_steps=np.array(validation_steps)
                                         )
                                         
                                         # Create and save loss plot
-                                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
+                                        plot_losses(
+                                            train_losses,
+                                            val_losses,
+                                            val_accuracies,
+                                            val_autoregressive_accuracies,
+                                            validation_steps,
+                                            checkpoint_dir,
+                                            val_asap_autoregressive_accuracies=val_asap_autoregressive_accuracies,
+                                        )
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
@@ -1087,15 +1144,7 @@ def main():
             # Always try to save whatever we have and generate the final plot
             try:
                 # Final validation run
-                if accelerator.is_main_process:
-                    print("\nRunning final validation...")
-                final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                if accelerator.is_main_process:
-                    validation_steps.append(completed_steps // 10)
-                    val_losses.append(final_val_loss)
-                    val_accuracies.append(final_val_acc * 100)
-                    val_autoregressive_accuracies.append(final_auto_acc * 100)
-                    print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
+                final_val_loss, final_val_acc, final_auto_acc, final_asap_auto_acc = run_validation(completed_steps)
                 
                 # Final save
                 final_dir = args.output_dir / "final"
@@ -1120,11 +1169,20 @@ def main():
                         val_losses=np.array(val_losses),
                         val_accuracies=np.array(val_accuracies),
                         val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                        val_asap_autoregressive_accuracies=np.array(val_asap_autoregressive_accuracies),
                         validation_steps=np.array(validation_steps)
                     )
                     
                     # Create and save final loss plot
-                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
+                    plot_losses(
+                        train_losses,
+                        val_losses,
+                        val_accuracies,
+                        val_autoregressive_accuracies,
+                        validation_steps,
+                        final_dir,
+                        val_asap_autoregressive_accuracies=val_asap_autoregressive_accuracies,
+                    )
                 
             except Exception as save_error:
                 print(f"Error saving final model or generating plot: {save_error}")
