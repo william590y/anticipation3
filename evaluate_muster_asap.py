@@ -314,6 +314,7 @@ def _masked_score_logits(logits, slot_idx, min_time_tok=None):
 
 def _safe_sample_from_logits(logits):
     """Sample from logits, guarding against all-masked / NaN distributions."""
+    logits = logits.detach().float().cpu()
     finite_mask = torch.isfinite(logits)
     if not finite_mask.any():
         return None
