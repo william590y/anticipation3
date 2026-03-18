@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.8772,
+  "missing_note_rate": 15.8459,
+  "extra_note_rate": 12.0763,
+  "onset_time_error_rate": 61.8761,
+  "offset_time_error_rate": 45.2496,
+  "mean_error_rate": 29.385,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.4875,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.46544,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/21-1_no_repeat/Dulu01.mid",
+  "num_gt_notes": 6905,
+  "num_pred_notes": 6608,
+  "num_controls": 6608,
+  "num_slides": 95,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

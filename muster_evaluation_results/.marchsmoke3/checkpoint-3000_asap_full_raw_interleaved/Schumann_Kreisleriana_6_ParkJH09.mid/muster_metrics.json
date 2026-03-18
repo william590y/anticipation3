@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 20.1657,
+  "missing_note_rate": 18.6464,
+  "extra_note_rate": 17.2753,
+  "onset_time_error_rate": 72.4958,
+  "offset_time_error_rate": 50.4244,
+  "mean_error_rate": 35.8015,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 29.8346,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.63426,
+  "hand_error_rate": 0.0,
+  "piece": "Schumann/Kreisleriana/6/ParkJH09.mid",
+  "num_gt_notes": 733,
+  "num_pred_notes": 712,
+  "num_controls": 712,
+  "num_slides": 9,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 32
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 13.5969,
+  "missing_note_rate": 27.9688,
+  "extra_note_rate": 27.099,
+  "onset_time_error_rate": 71.0151,
+  "offset_time_error_rate": 32.9463,
+  "mean_error_rate": 34.5252,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 28.771,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.36564,
+  "hand_error_rate": 0.0,
+  "piece": "Liszt/Sonata/Dulu07M.mid",
+  "num_gt_notes": 16275,
+  "num_pred_notes": 16072,
+  "num_controls": 16072,
+  "num_slides": 235,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 427
+}

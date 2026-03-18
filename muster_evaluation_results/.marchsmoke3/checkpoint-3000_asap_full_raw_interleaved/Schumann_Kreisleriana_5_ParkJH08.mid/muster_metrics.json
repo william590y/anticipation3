@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 14.1617,
+  "missing_note_rate": 17.7428,
+  "extra_note_rate": 17.2489,
+  "onset_time_error_rate": 86.2797,
+  "offset_time_error_rate": 42.1504,
+  "mean_error_rate": 35.5167,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 29.5972,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.46047,
+  "hand_error_rate": 0.0,
+  "piece": "Schumann/Kreisleriana/5/ParkJH08.mid",
+  "num_gt_notes": 1847,
+  "num_pred_notes": 1832,
+  "num_controls": 1832,
+  "num_slides": 25,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

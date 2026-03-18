@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 18.3673,
+  "missing_note_rate": 11.6402,
+  "extra_note_rate": 13.0855,
+  "onset_time_error_rate": 33.8751,
+  "offset_time_error_rate": 18.3062,
+  "mean_error_rate": 19.0549,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 15.8791,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.17956,
+  "hand_error_rate": 0.0,
+  "piece": "Rachmaninoff/Preludes_op_23/4/MorozovS09.mid",
+  "num_gt_notes": 1339,
+  "num_pred_notes": 1345,
+  "num_controls": 1345,
+  "num_slides": 18,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 802
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 5.72738,
+  "missing_note_rate": 10.0802,
+  "extra_note_rate": 12.2905,
+  "onset_time_error_rate": 51.3376,
+  "offset_time_error_rate": 19.1083,
+  "mean_error_rate": 19.7088,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 16.424,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.16657,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_893/Wong01M.mid",
+  "num_gt_notes": 882,
+  "num_pred_notes": 895,
+  "num_controls": 895,
+  "num_slides": 11,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 482
+}

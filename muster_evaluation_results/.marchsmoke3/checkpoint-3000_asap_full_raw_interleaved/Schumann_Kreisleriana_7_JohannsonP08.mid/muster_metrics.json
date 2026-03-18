@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 15.0129,
+  "missing_note_rate": 21.1985,
+  "extra_note_rate": 20.1176,
+  "onset_time_error_rate": 62.3876,
+  "offset_time_error_rate": 35.8953,
+  "mean_error_rate": 30.9224,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 25.7686,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.38563,
+  "hand_error_rate": 0.0,
+  "piece": "Schumann/Kreisleriana/7/JohannsonP08.mid",
+  "num_gt_notes": 1557,
+  "num_pred_notes": 1531,
+  "num_controls": 1531,
+  "num_slides": 21,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 32
+}

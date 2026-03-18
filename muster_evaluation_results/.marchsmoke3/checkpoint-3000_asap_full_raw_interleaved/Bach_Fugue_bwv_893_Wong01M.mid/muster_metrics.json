@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 12.6214,
+  "missing_note_rate": 9.90291,
+  "extra_note_rate": 9.9903,
+  "onset_time_error_rate": 60.2371,
+  "offset_time_error_rate": 37.2845,
+  "mean_error_rate": 26.0072,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 21.6727,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.30484,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_893/Wong01M.mid",
+  "num_gt_notes": 1032,
+  "num_pred_notes": 1031,
+  "num_controls": 1031,
+  "num_slides": 13,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 1
+}

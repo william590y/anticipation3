@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 26.685,
+  "missing_note_rate": 15.6422,
+  "extra_note_rate": 15.678,
+  "onset_time_error_rate": 40.6533,
+  "offset_time_error_rate": 31.5327,
+  "mean_error_rate": 26.0382,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 21.6985,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.2729,
+  "hand_error_rate": 0.0,
+  "piece": "Prokofiev/Toccata/Fab13.mid",
+  "num_gt_notes": 4719,
+  "num_pred_notes": 4723,
+  "num_controls": 4723,
+  "num_slides": 68,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 796
+}

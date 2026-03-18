@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.8857,
+  "missing_note_rate": 19.4857,
+  "extra_note_rate": 16.6765,
+  "onset_time_error_rate": 70.7594,
+  "offset_time_error_rate": 26.6856,
+  "mean_error_rate": 29.0986,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.2488,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.28452,
+  "hand_error_rate": 0.0,
+  "piece": "Chopin/Berceuse_op_57/ZhangE09M.mid",
+  "num_gt_notes": 1759,
+  "num_pred_notes": 1691,
+  "num_controls": 1691,
+  "num_slides": 23,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 589
+}

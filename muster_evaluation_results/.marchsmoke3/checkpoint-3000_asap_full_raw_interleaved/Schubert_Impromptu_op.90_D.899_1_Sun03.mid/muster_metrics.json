@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 17.0683,
+  "missing_note_rate": 19.759,
+  "extra_note_rate": 19.549,
+  "onset_time_error_rate": 93.7938,
+  "offset_time_error_rate": 29.1542,
+  "mean_error_rate": 35.8649,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 29.8874,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.30495,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/1/Sun03.mid",
+  "num_gt_notes": 4984,
+  "num_pred_notes": 4967,
+  "num_controls": 4967,
+  "num_slides": 71,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 32
+}

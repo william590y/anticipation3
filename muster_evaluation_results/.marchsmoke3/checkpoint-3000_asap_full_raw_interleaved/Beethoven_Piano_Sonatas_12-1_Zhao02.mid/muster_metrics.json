@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 18.6616,
+  "missing_note_rate": 14.6521,
+  "extra_note_rate": 12.2727,
+  "onset_time_error_rate": 63.8687,
+  "offset_time_error_rate": 39.4473,
+  "mean_error_rate": 29.7805,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.8171,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.35577,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/12-1/Zhao02.mid",
+  "num_gt_notes": 3394,
+  "num_pred_notes": 3300,
+  "num_controls": 3300,
+  "num_slides": 47,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

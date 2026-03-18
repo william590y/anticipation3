@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 19.0476,
+  "missing_note_rate": 23.1884,
+  "extra_note_rate": 24.2857,
+  "onset_time_error_rate": 40.4313,
+  "offset_time_error_rate": 22.372,
+  "mean_error_rate": 25.865,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 21.5542,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.30258,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/21-2/KimSY03.mid",
+  "num_gt_notes": 495,
+  "num_pred_notes": 490,
+  "num_controls": 490,
+  "num_slides": 5,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 408
+}

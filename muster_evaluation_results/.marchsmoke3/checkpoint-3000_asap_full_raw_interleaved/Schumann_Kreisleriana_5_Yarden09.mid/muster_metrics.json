@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 14.9432,
+  "missing_note_rate": 16.5133,
+  "extra_note_rate": 12.3864,
+  "onset_time_error_rate": 87.4189,
+  "offset_time_error_rate": 41.9585,
+  "mean_error_rate": 34.644,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 28.87,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.44403,
+  "hand_error_rate": 0.0,
+  "piece": "Schumann/Kreisleriana/5/Yarden09.mid",
+  "num_gt_notes": 1847,
+  "num_pred_notes": 1760,
+  "num_controls": 1760,
+  "num_slides": 24,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

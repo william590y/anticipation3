@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.6226,
+  "missing_note_rate": 21.8067,
+  "extra_note_rate": 21.2174,
+  "onset_time_error_rate": 73.142,
+  "offset_time_error_rate": 30.9051,
+  "mean_error_rate": 31.7387,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 26.449,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.33289,
+  "hand_error_rate": 0.0,
+  "piece": "Chopin/Berceuse_op_57/Tario07M.mid",
+  "num_gt_notes": 1759,
+  "num_pred_notes": 1728,
+  "num_controls": 1728,
+  "num_slides": 24,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 817
+}

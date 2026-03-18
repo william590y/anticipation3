@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 24.7191,
+  "missing_note_rate": 19.2283,
+  "extra_note_rate": 16.6302,
+  "onset_time_error_rate": 44.042,
+  "offset_time_error_rate": 35.1181,
+  "mean_error_rate": 27.9475,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 23.2896,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.3199,
+  "hand_error_rate": 0.0,
+  "piece": "Prokofiev/Toccata/Colafelice11.mid",
+  "num_gt_notes": 4719,
+  "num_pred_notes": 4570,
+  "num_controls": 4570,
+  "num_slides": 65,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 1709
+}

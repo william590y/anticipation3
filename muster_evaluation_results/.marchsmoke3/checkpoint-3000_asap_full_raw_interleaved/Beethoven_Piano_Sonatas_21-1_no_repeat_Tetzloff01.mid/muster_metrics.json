@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 10.8229,
+  "missing_note_rate": 16.2996,
+  "extra_note_rate": 12.1502,
+  "onset_time_error_rate": 60.412,
+  "offset_time_error_rate": 42.9808,
+  "mean_error_rate": 28.5331,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 23.7776,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.41649,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/21-1_no_repeat/Tetzloff01.mid",
+  "num_gt_notes": 6905,
+  "num_pred_notes": 6576,
+  "num_controls": 6576,
+  "num_slides": 95,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

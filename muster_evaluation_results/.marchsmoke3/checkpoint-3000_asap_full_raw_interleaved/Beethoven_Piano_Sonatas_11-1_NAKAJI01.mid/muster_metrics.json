@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.3825,
+  "missing_note_rate": 14.3971,
+  "extra_note_rate": 13.9723,
+  "onset_time_error_rate": 52.3072,
+  "offset_time_error_rate": 30.6011,
+  "mean_error_rate": 24.5321,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 20.4434,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.27812,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/11-1/NAKAJI01.mid",
+  "num_gt_notes": 3848,
+  "num_pred_notes": 3829,
+  "num_controls": 3829,
+  "num_slides": 55,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

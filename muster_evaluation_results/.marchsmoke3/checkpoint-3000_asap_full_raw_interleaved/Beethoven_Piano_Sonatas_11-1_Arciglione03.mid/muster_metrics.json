@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 13.0785,
+  "missing_note_rate": 14.0926,
+  "extra_note_rate": 14.5149,
+  "onset_time_error_rate": 56.5375,
+  "offset_time_error_rate": 36.6223,
+  "mean_error_rate": 26.9692,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 22.4743,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.32687,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/11-1/Arciglione03.mid",
+  "num_gt_notes": 3848,
+  "num_pred_notes": 3865,
+  "num_controls": 3865,
+  "num_slides": 55,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

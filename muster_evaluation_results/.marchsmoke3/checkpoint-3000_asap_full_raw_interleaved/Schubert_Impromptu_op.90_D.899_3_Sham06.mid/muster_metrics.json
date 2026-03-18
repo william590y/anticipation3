@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 6.09258,
+  "missing_note_rate": 28.4207,
+  "extra_note_rate": 17.7552,
+  "onset_time_error_rate": 89.4437,
+  "offset_time_error_rate": 25.2496,
+  "mean_error_rate": 33.3924,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 27.827,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.39807,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/3/Sham06.mid",
+  "num_gt_notes": 2942,
+  "num_pred_notes": 2557,
+  "num_controls": 2557,
+  "num_slides": 36,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 1330
+}
