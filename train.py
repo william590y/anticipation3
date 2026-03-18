@@ -111,7 +111,7 @@ class TokenizedDataset(Dataset):
         if self.is_training:
             print(f"  Training mode: onset_jitter_std={self.onset_jitter_std} (N(1,std²) IOI scaling), "
                   f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
-                  f"mask_prob={self.mask_prob} (score-history token dropout), "
+                  f"mask_prob={self.mask_prob} (score-history triplet dropout), "
                   f"transpose_range={self.transpose_range_semitones} semitones, "
                   f"tempo_scale_range=U(1±{self.tempo_scale_range})")
         else:
@@ -147,14 +147,15 @@ class TokenizedDataset(Dataset):
             Requires a two-pass approach: collect all onsets first, then reconstruct.
           - Duration jitter: each note duration scaled by U(1-range, 1+range).
         Local augmentation on score/output tokens:
-          - Score-history dropout: replace prior score tokens with a special
-            concealment token while preserving their labels.
+          - Score-history dropout: replace prior score triplets with dedicated
+            slot-specific mask tokens while preserving their labels.
         
         Returns:
             augmented_tokens: Tensor of augmented token ids
             concealed_indices: List of score-token positions replaced for history dropout
         """
-        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST, ANTICIPATE,
+        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST,
+                                        TIME_MASK, DUR_MASK, NOTE_MASK,
                                         ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
                                         TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
         from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
@@ -304,13 +305,12 @@ class TokenizedDataset(Dataset):
                 )
 
                 if is_score_triplet:
-                    for pos in (i, i + 1, i + 2):
-                        if torch.rand(1).item() < self.mask_prob:
-                            augmented[pos] = ANTICIPATE
-                            concealed_indices.append(pos)
-                    i += 3
-                else:
-                    i += 1
+                    if torch.rand(1).item() < self.mask_prob:
+                        augmented[i] = TIME_MASK
+                        augmented[i + 1] = DUR_MASK
+                        augmented[i + 2] = NOTE_MASK
+                        concealed_indices.extend((i, i + 1, i + 2))
+                i += 3
 
         return augmented, concealed_indices
     
@@ -715,7 +715,7 @@ def main():
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
     parser.add_argument('--dur_jitter_range', type=float, default=0.1,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
-    parser.add_argument('--mask_prob', type=float, default=.75, help='Probability of concealing prior score/output tokens during training (0.0 to 1.0)')
+    parser.add_argument('--mask_prob', type=float, default=.75, help='Probability of concealing prior score/output triplets during training (0.0 to 1.0)')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
@@ -870,7 +870,7 @@ def main():
                 use_cache=False
             )
         
-        # Resize model embeddings to match our vocabulary (VOCAB_SIZE=55028)
+        # Resize model embeddings to match our current vocabulary size.
         from anticipation.vocab import VOCAB_SIZE
         current_vocab_size = model.config.vocab_size
         if current_vocab_size != VOCAB_SIZE:

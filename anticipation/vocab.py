@@ -24,7 +24,10 @@ SPECIAL_OFFSET = ANOTE_OFFSET + MAX_NOTE
 SEPARATOR = SPECIAL_OFFSET
 AUTOREGRESS = SPECIAL_OFFSET + 1
 ANTICIPATE = SPECIAL_OFFSET + 2
-VOCAB_SIZE = ANTICIPATE + 1
+TIME_MASK = SPECIAL_OFFSET + 3
+DUR_MASK = SPECIAL_OFFSET + 4
+NOTE_MASK = SPECIAL_OFFSET + 5
+VOCAB_SIZE = NOTE_MASK + 1
 
 # interarrival-time (MIDI-like) vocab
 MIDI_TIME_OFFSET = 0
@@ -48,6 +51,9 @@ if __name__ == '__main__':
     print('  -> separator token: ', SEPARATOR)
     print('  -> autoregression flag: ', AUTOREGRESS)
     print('  -> anticipation flag: ', ANTICIPATE)
+    print('  -> time mask token: ', TIME_MASK)
+    print('  -> duration mask token: ', DUR_MASK)
+    print('  -> note mask token: ', NOTE_MASK)
     print('Arrival Encoding Vocabulary Size: ', VOCAB_SIZE)
     print('')
     print('Interarrival-Time Training Sequence Format:')
