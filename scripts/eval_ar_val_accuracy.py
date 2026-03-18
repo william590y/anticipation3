@@ -57,11 +57,28 @@ class TokenizedDataset:
         return torch.tensor(self._read_tokens(idx), dtype=torch.long)
 
 
-def evaluate_sequence(model, device, seq, forced=False):
+def evaluate_sequence(model, device, seq, forced=False, forced_max_attempts=1000):
     context = seq[:ALTERNATING_START].tolist()
     pos = ALTERNATING_START
     correct = 0
     total = 0
+    total_triplet_attempts = 0
+    positions_forced = 0
+
+    def decode_triplet(ctx, sample=False):
+        local_ctx = list(ctx)
+        triplet = []
+        for _ in range(3):
+            input_tensor = torch.tensor([local_ctx], device=device)
+            with torch.no_grad():
+                logits = model(input_tensor).logits[0, -1, :]
+            if sample:
+                tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+            else:
+                tok = logits.argmax().item()
+            local_ctx.append(tok)
+            triplet.append(tok)
+        return triplet
 
     while pos + 5 < len(seq):
         if (
@@ -71,28 +88,25 @@ def evaluate_sequence(model, device, seq, forced=False):
             and seq[pos + 2] != REST
         ):
             if forced:
-                pred_time = seq[pos].item()
-                pred_dur = seq[pos + 1].item()
-                pred_pitch = seq[pos + 2].item()
-                context.extend([pred_time, pred_dur, pred_pitch])
+                true_pitch = seq[pos + 2].item()
+                matched = False
+                last_triplet = None
+                for _ in range(forced_max_attempts):
+                    total_triplet_attempts += 1
+                    last_triplet = decode_triplet(context, sample=True)
+                    if last_triplet[2] == true_pitch:
+                        matched = True
+                        break
+                if last_triplet is None:
+                    last_triplet = decode_triplet(context, sample=False)
+                if not matched:
+                    last_triplet[2] = true_pitch
+                    positions_forced += 1
+                pred_time, pred_dur, pred_pitch = last_triplet
+                context.extend(last_triplet)
             else:
-                input_tensor = torch.tensor([context], device=device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    pred_time = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_time)
-
-                input_tensor = torch.tensor([context], device=device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    pred_dur = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_dur)
-
-                input_tensor = torch.tensor([context], device=device)
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    pred_pitch = outputs.logits[0, -1, :].argmax().item()
-                context.append(pred_pitch)
+                pred_time, pred_dur, pred_pitch = decode_triplet(context, sample=False)
+                context.extend([pred_time, pred_dur, pred_pitch])
 
             if pred_pitch == seq[pos + 2].item():
                 correct += 1
@@ -106,7 +120,7 @@ def evaluate_sequence(model, device, seq, forced=False):
             context.append(seq[pos].item())
             pos += 1
 
-    return correct, total
+    return correct, total, total_triplet_attempts, positions_forced
 
 
 def main():
@@ -125,7 +139,13 @@ def main():
     parser.add_argument(
         "--forced",
         action="store_true",
-        help="Force score triplets to ground truth as a sanity check; should yield 100%% pitch accuracy",
+        help="Keep regenerating a score triplet until its pitch matches ground truth",
+    )
+    parser.add_argument(
+        "--forced-max-attempts",
+        type=int,
+        default=1000,
+        help="Maximum rejection-sampling attempts per score triplet in forced mode",
     )
     parser.add_argument("--output-json", default="", help="Optional path to save JSON summary")
     args = parser.parse_args()
@@ -152,19 +172,31 @@ def main():
 
     overall_correct = 0
     overall_total = 0
+    forced_total_triplet_attempts = 0
+    forced_positions_forced = 0
     per_sequence = []
 
     for seq_idx in tqdm(indices, desc="Autoregressive eval", unit="seq"):
         seq = dataset[seq_idx]
-        correct, total = evaluate_sequence(model, device, seq, forced=args.forced)
+        correct, total, triplet_attempts, positions_forced = evaluate_sequence(
+            model,
+            device,
+            seq,
+            forced=args.forced,
+            forced_max_attempts=args.forced_max_attempts,
+        )
         overall_correct += correct
         overall_total += total
+        forced_total_triplet_attempts += triplet_attempts
+        forced_positions_forced += positions_forced
         per_sequence.append(
             {
                 "dataset_index": seq_idx,
                 "correct": correct,
                 "total": total,
                 "accuracy": (correct / total) if total else 0.0,
+                "forced_triplet_attempts": triplet_attempts,
+                "forced_positions_forced": positions_forced,
             }
         )
 
@@ -175,6 +207,9 @@ def main():
         "num_samples": len(indices),
         "seed": args.seed,
         "forced": args.forced,
+        "forced_max_attempts": args.forced_max_attempts,
+        "forced_total_triplet_attempts": forced_total_triplet_attempts,
+        "forced_positions_forced": forced_positions_forced,
         "overall_correct": overall_correct,
         "overall_total": overall_total,
         "overall_accuracy": (overall_correct / overall_total) if overall_total else 0.0,

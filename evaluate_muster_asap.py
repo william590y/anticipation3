@@ -288,7 +288,7 @@ def _shift_score_triplet(score_triplet, score_origin):
     ]
 
 
-def _masked_score_logits(logits, slot_idx, min_time_tok=None, force_pitch=None):
+def _masked_score_logits(logits, slot_idx, min_time_tok=None):
     """
     Restrict logits to valid score-token bands for a given slot.
     """
@@ -308,11 +308,6 @@ def _masked_score_logits(logits, slot_idx, min_time_tok=None, force_pitch=None):
     else:
         logits[TIME_OFFSET:TIME_OFFSET + MAX_TIME] = -float('inf')
         logits[DUR_OFFSET:DUR_OFFSET + MAX_DUR] = -float('inf')
-        if force_pitch is not None:
-            forced = torch.full_like(logits, -float('inf'))
-            if 0 <= int(force_pitch) < forced.shape[0]:
-                forced[int(force_pitch)] = logits[int(force_pitch)]
-            logits = forced
 
     return logits
 
@@ -441,10 +436,10 @@ def autoregressive_generate_interleaved_raw(
     def _greedy_next():
         raise RuntimeError("_greedy_next should not be called directly")
 
-    def _decode_next(slot_idx, min_time_tok=None, force_pitch=None, sample=False):
+    def _decode_next(slot_idx, min_time_tok=None, sample=False):
         _ensure_primed()
         logits = _masked_score_logits(
-            next_logits, slot_idx, min_time_tok=min_time_tok, force_pitch=force_pitch
+            next_logits, slot_idx, min_time_tok=min_time_tok
         )
         if temperature > 0:
             logits = logits / temperature
@@ -522,7 +517,7 @@ def autoregressive_generate_interleaved_raw(
                 rel_triplet = [
                     _decode_next(0, min_time_tok=min_time_tok, sample=True),
                     _decode_next(1, sample=True),
-                    _decode_next(2, force_pitch=gt_pitch if gt_pitch is not None else None, sample=True),
+                    _decode_next(2, sample=True),
                 ]
                 if gt_pitch is None or rel_triplet[2] == gt_pitch:
                     matched = True
@@ -800,7 +795,11 @@ def main():
                         help=f'Random seed for piece sampling/shuffling (default: {RANDOM_SEED})')
     parser.add_argument('--workers', type=int, default=NUM_WORKERS,
                         help=f'Loader worker count (default: {NUM_WORKERS})')
-    parser.add_argument('--forced', action='store_true')
+    parser.add_argument(
+        '--forced',
+        action='store_true',
+        help='Keep regenerating each score triplet until its pitch matches ground truth',
+    )
     parser.add_argument('--forced-max-attempts', type=int, default=1000)
     parser.add_argument('--beam', type=int, default=1, metavar='BEAM_SIZE')
     parser.add_argument('--temperature', type=float, default=0.0)

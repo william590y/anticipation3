@@ -267,7 +267,15 @@ def count_score_triplets(tokens):
     return total
 
 
-def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""):
+def evaluate_sequence(
+    model,
+    device,
+    tokens,
+    show_triplets=False,
+    piece_label="",
+    forced=False,
+    forced_max_attempts=1000,
+):
     import torch
 
     context = list(tokens[:ALTERNATING_START])
@@ -275,6 +283,8 @@ def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""
     correct = 0
     total = 0
     state = {"past": None, "next_logits": None}
+    total_triplet_attempts = 0
+    positions_forced = 0
 
     triplet_total = count_score_triplets(tokens)
     triplet_bar = None
@@ -307,6 +317,21 @@ def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""
         state["next_logits"] = out.logits[0, -1, :]
         return tok
 
+    def sample_append():
+        if state["past"] is None:
+            prime()
+        tok = torch.multinomial(torch.softmax(state["next_logits"], dim=-1), 1).item()
+        context.append(tok)
+        with torch.no_grad():
+            out = model(
+                torch.tensor([[tok]], device=device),
+                past_key_values=state["past"],
+                use_cache=True,
+            )
+        state["past"] = out.past_key_values
+        state["next_logits"] = out.logits[0, -1, :]
+        return tok
+
     def feed_gt(tokens_to_feed):
         if state["past"] is None:
             prime()
@@ -327,9 +352,38 @@ def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""
             and tokens[pos + 2] < CONTROL_OFFSET
             and tokens[pos + 2] != REST
         ):
-            greedy_append()
-            greedy_append()
-            pred_pitch = greedy_append()
+            if forced:
+                true_pitch = tokens[pos + 2]
+                matched = False
+                last_triplet = None
+                for _ in range(forced_max_attempts):
+                    total_triplet_attempts += 1
+                    context_before = list(context)
+                    past_before = state["past"]
+                    logits_before = state["next_logits"]
+
+                    last_triplet = [sample_append(), sample_append(), sample_append()]
+                    if last_triplet[2] == true_pitch:
+                        matched = True
+                        break
+
+                    context[:] = context_before
+                    state["past"] = past_before
+                    state["next_logits"] = logits_before
+
+                if last_triplet is None:
+                    last_triplet = [greedy_append(), greedy_append(), greedy_append()]
+                if not matched:
+                    context[-1] = true_pitch
+                    state["past"] = None
+                    state["next_logits"] = None
+                    last_triplet[2] = true_pitch
+                    positions_forced += 1
+                pred_pitch = last_triplet[2]
+            else:
+                greedy_append()
+                greedy_append()
+                pred_pitch = greedy_append()
             true_pitch = tokens[pos + 2]
 
             if pred_pitch == true_pitch:
@@ -351,7 +405,7 @@ def evaluate_sequence(model, device, tokens, show_triplets=False, piece_label=""
     if triplet_bar is not None:
         triplet_bar.close()
 
-    return correct, total
+    return correct, total, total_triplet_attempts, positions_forced
 
 
 def main():
@@ -368,6 +422,17 @@ def main():
         type=int,
         default=DEFAULT_WINDOWS_WORKERS,
         help="Tokenization worker processes; on Windows the safe default is 8",
+    )
+    parser.add_argument(
+        "--forced",
+        action="store_true",
+        help="Keep regenerating a score triplet until its pitch matches ground truth",
+    )
+    parser.add_argument(
+        "--forced-max-attempts",
+        type=int,
+        default=1000,
+        help="Maximum rejection-sampling attempts per score triplet in forced mode",
     )
     parser.add_argument("--show-triplets", action="store_true")
     parser.add_argument("--output-json", default="test_outputs/asap_ar_pitch_eval.json")
@@ -401,19 +466,25 @@ def main():
 
     overall_correct = 0
     overall_total = 0
+    forced_total_triplet_attempts = 0
+    forced_positions_forced = 0
     per_piece = []
 
     piece_bar = tqdm(windows, desc="Evaluating windows", unit="piece")
     for item in piece_bar:
-        correct, total = evaluate_sequence(
+        correct, total, triplet_attempts, positions_forced = evaluate_sequence(
             model,
             device,
             item["tokens"],
             show_triplets=args.show_triplets,
             piece_label=item["perf_path"],
+            forced=args.forced,
+            forced_max_attempts=args.forced_max_attempts,
         )
         overall_correct += correct
         overall_total += total
+        forced_total_triplet_attempts += triplet_attempts
+        forced_positions_forced += positions_forced
         acc = correct / total if total else 0.0
         per_piece.append(
             {
@@ -421,6 +492,8 @@ def main():
                 "correct": correct,
                 "total": total,
                 "accuracy": acc,
+                "forced_triplet_attempts": triplet_attempts,
+                "forced_positions_forced": positions_forced,
             }
         )
         overall_acc = overall_correct / overall_total if overall_total else 0.0
@@ -434,6 +507,10 @@ def main():
         "seed": args.seed,
         "windowing": "first packed training-style window per piece",
         "workers": args.workers,
+        "forced": args.forced,
+        "forced_max_attempts": args.forced_max_attempts,
+        "forced_total_triplet_attempts": forced_total_triplet_attempts,
+        "forced_positions_forced": forced_positions_forced,
         "used_windows": len(windows),
         "overall_correct": overall_correct,
         "overall_total": overall_total,
