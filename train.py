@@ -466,20 +466,32 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     autoregressive_total = 0
     
     if autoregressive_samples > 0:
-        # Collect a few sequences for autoregressive evaluation
+        # Sample validation sequences across the whole dataset instead of taking the
+        # file head, which can be biased by tokenization/write order.
         all_sequences = []
-        with torch.no_grad():
-            for batch in dataloader:
-                input_ids = batch["input_ids"]
-                for seq in input_ids:
-                    all_sequences.append(seq)
+        dataset = getattr(dataloader, "dataset", None)
+        if dataset is not None and hasattr(dataset, "__len__") and hasattr(dataset, "__getitem__"):
+            seq_count = len(dataset)
+            if seq_count > 0:
+                sample_count = min(autoregressive_samples, seq_count)
+                rng = random.Random(0)
+                sampled_indices = rng.sample(range(seq_count), sample_count)
+                for idx in sampled_indices:
+                    all_sequences.append(dataset[idx]["input_ids"])
+        else:
+            # Fallback for unusual dataloaders without a readable dataset.
+            with torch.no_grad():
+                for batch in dataloader:
+                    input_ids = batch["input_ids"]
+                    for seq in input_ids:
+                        all_sequences.append(seq)
+                        if len(all_sequences) >= autoregressive_samples:
+                            break
                     if len(all_sequences) >= autoregressive_samples:
                         break
-                if len(all_sequences) >= autoregressive_samples:
-                    break
         
-        # Run autoregressive generation on each sequence
-        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
+        # Run autoregressive generation on each sampled sequence
+        for seq in tqdm(all_sequences, desc="Autoregressive eval", leave=False):
             # Sequence format: [control+rest pairs (positions 0-197), alternating score/control (198+)]
             # We want to use the control tokens as context and generate the score tokens
             
