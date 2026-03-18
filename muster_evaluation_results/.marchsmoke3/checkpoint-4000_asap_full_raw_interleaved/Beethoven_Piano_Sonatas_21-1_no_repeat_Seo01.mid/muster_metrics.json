@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 12.1396,
+  "missing_note_rate": 15.2108,
+  "extra_note_rate": 12.1039,
+  "onset_time_error_rate": 60.6185,
+  "offset_time_error_rate": 41.073,
+  "mean_error_rate": 28.2292,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 23.5243,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.40228,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/21-1_no_repeat/Seo01.mid",
+  "num_gt_notes": 6905,
+  "num_pred_notes": 6659,
+  "num_controls": 6659,
+  "num_slides": 96,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 6.92395,
+  "missing_note_rate": 7.60499,
+  "extra_note_rate": 8.0226,
+  "onset_time_error_rate": 55.4054,
+  "offset_time_error_rate": 18.6732,
+  "mean_error_rate": 19.326,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 16.105,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.1447,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_893/Levitsky04M.mid",
+  "num_gt_notes": 882,
+  "num_pred_notes": 885,
+  "num_controls": 885,
+  "num_slides": 11,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 32
+}
