@@ -1,11 +1,13 @@
 import numpy as np
 import scipy.interpolate
+from functools import lru_cache
 from anticipation.convert import midi_to_events
 from anticipation.config import *
 from anticipation.vocab import *
 from itertools import combinations
 
 
+@lru_cache(maxsize=512)
 def load_annotation_file(file_path):
     annotations = []
 
@@ -197,10 +199,9 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
 
 
 def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1,
-                  preserve_unmatched_perf=False):
+                  preserve_unmatched_perf=False, score_tuples=None):
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
     perf = midi_to_events(file1, quantize=False)
-    score = midi_to_events(file2, quantize=False)
 
     p_beats, s_beats = compare_annotations(file3, file4, interpolate=False)
     s_beats = np.array(s_beats)
@@ -210,8 +211,12 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1,
     # create tuples, scaling arrival time back to seconds, which is the unit the annotation mapping uses
     p_tuples = [[perf[3 * i] / TIME_RESOLUTION, perf[3 * i + 1] - DUR_OFFSET, perf[3 * i + 2] - NOTE_OFFSET]
                 for i in range(int(len(perf) / 3))]
-    s_tuples = [[score[3 * i] / TIME_RESOLUTION, score[3 * i + 1] - DUR_OFFSET, score[3 * i + 2] - NOTE_OFFSET]
-                for i in range(int(len(score) / 3))]
+    if score_tuples is None:
+        score = midi_to_events(file2, quantize=False)
+        s_tuples = [[score[3 * i] / TIME_RESOLUTION, score[3 * i + 1] - DUR_OFFSET, score[3 * i + 2] - NOTE_OFFSET]
+                    for i in range(int(len(score) / 3))]
+    else:
+        s_tuples = [list(tup) for tup in score_tuples]
 
     matched_tuples = []
 

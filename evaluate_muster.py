@@ -665,7 +665,7 @@ def triplets_to_musicxml(triplets, xml_path):
                 SubElement(pitch_el, 'alter').text = '1'
             SubElement(pitch_el, 'octave').text  = str(octave)
         
-        # Duration-to-type mapping (in bins at DIVISIONS=50 per quarter)
+        # Duration-to-type mapping (in bins at DIVISIONS=100 per quarter)
         def dur_to_type(dur_bins):
             """Return closest MusicXML note type (no dots)."""
             quarter = DIVISIONS
