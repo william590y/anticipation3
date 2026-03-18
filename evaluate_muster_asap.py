@@ -796,6 +796,8 @@ def main():
                         help='Path to combined_split.txt for test-split filtering')
     parser.add_argument('--all-pieces', action='store_true',
                         help='Use all ASAP pieces (train+test), not just test split')
+    parser.add_argument('--seed', type=int, default=RANDOM_SEED,
+                        help=f'Random seed for piece sampling/shuffling (default: {RANDOM_SEED})')
     parser.add_argument('--workers', type=int, default=NUM_WORKERS,
                         help=f'Loader worker count (default: {NUM_WORKERS})')
     parser.add_argument('--forced', action='store_true')
@@ -823,10 +825,13 @@ def main():
         else:
             print("  Warning: split file not found or unreadable; using all ASAP pieces")
 
-    random.seed(RANDOM_SEED)
+    # Canonicalize order before sampling so the same seed gives the same sample
+    # regardless of metadata/DataFrame ordering.
+    all_pieces = sorted(all_pieces, key=lambda p: p['perf_path'])
+    rng = random.Random(args.seed)
     sampled = (
-        random.sample(all_pieces, args.num_pieces)
-        if args.num_pieces < len(all_pieces) else all_pieces
+        rng.sample(all_pieces, args.num_pieces)
+        if args.num_pieces < len(all_pieces) else rng.sample(all_pieces, len(all_pieces))
     )
     print(f"  Sampled {len(sampled)} pieces\n")
 
