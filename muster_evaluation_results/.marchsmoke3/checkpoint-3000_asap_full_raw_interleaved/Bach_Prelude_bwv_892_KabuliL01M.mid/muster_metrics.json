@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 15.3702,
+  "missing_note_rate": 9.37207,
+  "extra_note_rate": 9.54163,
+  "onset_time_error_rate": 25.1293,
+  "offset_time_error_rate": 21.4064,
+  "mean_error_rate": 16.1639,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 13.4699,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.14976,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_892/KabuliL01M.mid",
+  "num_gt_notes": 1091,
+  "num_pred_notes": 1086,
+  "num_controls": 1086,
+  "num_slides": 14,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 140
+}

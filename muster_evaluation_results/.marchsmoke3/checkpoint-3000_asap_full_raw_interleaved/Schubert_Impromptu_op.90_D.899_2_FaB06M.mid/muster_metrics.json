@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 12.8518,
+  "missing_note_rate": 16.2289,
+  "extra_note_rate": 14.8172,
+  "onset_time_error_rate": 62.0754,
+  "offset_time_error_rate": 36.3942,
+  "mean_error_rate": 28.4735,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 23.7279,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.40383,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/2/FaB06M.mid",
+  "num_gt_notes": 3198,
+  "num_pred_notes": 3145,
+  "num_controls": 3145,
+  "num_slides": 44,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

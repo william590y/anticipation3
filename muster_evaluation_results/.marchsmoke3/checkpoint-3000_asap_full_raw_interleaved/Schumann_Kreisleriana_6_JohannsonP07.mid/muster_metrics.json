@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 9.95851,
+  "missing_note_rate": 22.545,
+  "extra_note_rate": 20.1141,
+  "onset_time_error_rate": 63.3929,
+  "offset_time_error_rate": 31.9643,
+  "mean_error_rate": 29.5949,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 24.6625,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.41534,
+  "hand_error_rate": 0.0,
+  "piece": "Schumann/Kreisleriana/6/JohannsonP07.mid",
+  "num_gt_notes": 733,
+  "num_pred_notes": 701,
+  "num_controls": 701,
+  "num_slides": 9,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 57
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 12.4189,
+  "missing_note_rate": 42.2018,
+  "extra_note_rate": 39.0658,
+  "onset_time_error_rate": 74.4096,
+  "offset_time_error_rate": 35.2304,
+  "mean_error_rate": 40.6653,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 33.8877,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.39103,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/4_no_repeat/Lin11M.mid",
+  "num_gt_notes": 4469,
+  "num_pred_notes": 4239,
+  "num_controls": 4239,
+  "num_slides": 61,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

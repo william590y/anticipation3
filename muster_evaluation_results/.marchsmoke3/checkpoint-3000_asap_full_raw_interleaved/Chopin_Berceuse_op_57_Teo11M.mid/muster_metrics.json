@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 12.0986,
+  "missing_note_rate": 17.3165,
+  "extra_note_rate": 15.9674,
+  "onset_time_error_rate": 62.6907,
+  "offset_time_error_rate": 23.0929,
+  "mean_error_rate": 26.2332,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 21.861,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.2185,
+  "hand_error_rate": 0.0,
+  "piece": "Chopin/Berceuse_op_57/Teo11M.mid",
+  "num_gt_notes": 1759,
+  "num_pred_notes": 1716,
+  "num_controls": 1716,
+  "num_slides": 23,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 791
+}

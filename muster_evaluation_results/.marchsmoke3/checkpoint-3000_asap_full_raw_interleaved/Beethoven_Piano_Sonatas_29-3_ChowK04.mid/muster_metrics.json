@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 24.3515,
+  "missing_note_rate": 22.2997,
+  "extra_note_rate": 22.0583,
+  "onset_time_error_rate": 44.1704,
+  "offset_time_error_rate": 22.297,
+  "mean_error_rate": 27.0354,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 22.5295,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.25747,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/29-3/ChowK04.mid",
+  "num_gt_notes": 5229,
+  "num_pred_notes": 5150,
+  "num_controls": 5150,
+  "num_slides": 74,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 2905
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 8.26743,
+  "missing_note_rate": 13.4436,
+  "extra_note_rate": 13.0686,
+  "onset_time_error_rate": 44.6844,
+  "offset_time_error_rate": 28.9867,
+  "mean_error_rate": 21.6901,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 18.0751,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.2501,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_873/Lisiecki02.mid",
+  "num_gt_notes": 1393,
+  "num_pred_notes": 1385,
+  "num_controls": 1385,
+  "num_slides": 19,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

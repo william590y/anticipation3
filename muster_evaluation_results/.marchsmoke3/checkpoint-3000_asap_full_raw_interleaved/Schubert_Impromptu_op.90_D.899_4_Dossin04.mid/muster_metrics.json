@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 14.5186,
+  "missing_note_rate": 38.0985,
+  "extra_note_rate": 33.6216,
+  "onset_time_error_rate": 79.2903,
+  "offset_time_error_rate": 35.4866,
+  "mean_error_rate": 40.2031,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 33.5026,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.39929,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/4/Dossin04.mid",
+  "num_gt_notes": 5829,
+  "num_pred_notes": 5434,
+  "num_controls": 5434,
+  "num_slides": 78,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 327
+}

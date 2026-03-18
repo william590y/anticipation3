@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 7.45405,
+  "missing_note_rate": 25.1191,
+  "extra_note_rate": 12.5944,
+  "onset_time_error_rate": 46.7727,
+  "offset_time_error_rate": 30.9545,
+  "mean_error_rate": 24.579,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 20.4825,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.45491,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/3/Mizumoto07M.mid",
+  "num_gt_notes": 2942,
+  "num_pred_notes": 2517,
+  "num_controls": 2517,
+  "num_slides": 35,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

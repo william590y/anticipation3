@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.405,
+  "missing_note_rate": 10.9091,
+  "extra_note_rate": 11.9281,
+  "onset_time_error_rate": 35.9926,
+  "offset_time_error_rate": 20.9647,
+  "mean_error_rate": 18.2399,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 15.1999,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.188,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_865/Rizikov01M.mid",
+  "num_gt_notes": 613,
+  "num_pred_notes": 612,
+  "num_controls": 612,
+  "num_slides": 7,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 205
+}

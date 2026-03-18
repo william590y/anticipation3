@@ -1,0 +1,615 @@
+{
+  "checkpoint": ".marchsmoke3/checkpoint-3000",
+  "split_file": "data/combined_split.txt",
+  "num_pieces_requested": 100,
+  "selection": "first",
+  "seed": 42,
+  "windowing": "first packed training-style window per piece",
+  "workers": 32,
+  "used_windows": 99,
+  "overall_correct": 11882,
+  "overall_total": 13563,
+  "overall_accuracy": 0.8760598687605987,
+  "skipped": [
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-2/YOO05M.mid",
+      "reason": "no_packed_windows"
+    }
+  ],
+  "per_piece": [
+    {
+      "perf_path": "Bach/Prelude/bwv_865/Rizikov01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_865/Teo01M.mid",
+      "correct": 94,
+      "total": 137,
+      "accuracy": 0.6861313868613139
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_865/ZhangE01M.mid",
+      "correct": 134,
+      "total": 137,
+      "accuracy": 0.9781021897810219
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_870/ChenW01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_870/LeeE01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_870/MaximovI01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_893/Kleisen04M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_893/Wong01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_893/Levitsky04M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_893/Levitsky04M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_893/Kleisen04M.mid",
+      "correct": 12,
+      "total": 137,
+      "accuracy": 0.08759124087591241
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_893/Wong01M.mid",
+      "correct": 49,
+      "total": 137,
+      "accuracy": 0.35766423357664234
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_870/LeeE01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_870/ChenW01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_892/KabuliL01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_892/Hou01M.mid",
+      "correct": 23,
+      "total": 137,
+      "accuracy": 0.1678832116788321
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_870/MaximovI01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_887/LiYZ01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_892/KabuliL01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_892/Hou01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_873/Lisiecki02.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_873/Lisiecki13M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_887/LiYZ01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_873/Lisiecki13M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Prelude/bwv_873/Lisiecki02.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-3/MaximovI05.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-2/MaximovI04.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_865/ZhangE01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_865/Rizikov01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Bach/Fugue/bwv_865/Teo01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/10-1/Hou02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/12-1/Kleisen05M.mid",
+      "correct": 108,
+      "total": 137,
+      "accuracy": 0.7883211678832117
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/12-1/Zhao02.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/12-1/Garritson01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/BuiJL02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/Shybayeva02.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/LeeSH02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/Khmara01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/Woo05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/Woo01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/Khmara05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-1/LuoJ03M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/DeTurck01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/LiYZ03M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/LiC03M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/NAKAJI01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/Arciglione03.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/MaximovI02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-2/KimSY03.mid",
+      "correct": 14,
+      "total": 137,
+      "accuracy": 0.10218978102189781
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-2/Sekino05.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/11-1/ZhaoK02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/29-2/ChowK03.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/16-2/LuoJ04M.mid",
+      "correct": 36,
+      "total": 137,
+      "accuracy": 0.26277372262773724
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/29-3/ChowK04.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/GonzalezJ06M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/KimSY02M.mid",
+      "correct": 86,
+      "total": 137,
+      "accuracy": 0.6277372262773723
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Dulu01.mid",
+      "correct": 31,
+      "total": 137,
+      "accuracy": 0.22627737226277372
+    },
+    {
+      "perf_path": "Chopin/Berceuse_op_57/LeungM07M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Lariviere01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Chopin/Berceuse_op_57/MiyashitaM06M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Chopin/Berceuse_op_57/Tario07M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/MorozovS01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/SEBAST01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Chopin/Berceuse_op_57/Teo11M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/LeeN02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Chopin/Berceuse_op_57/ZhangE09M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/RichardsonC02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Seo01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Shi02.mid",
+      "correct": 135,
+      "total": 137,
+      "accuracy": 0.9854014598540146
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Shychko02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Sychev01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/ToA02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Song03M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Tetzloff01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Sladek02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Tetzloff05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/SunY02M.mid",
+      "correct": 66,
+      "total": 137,
+      "accuracy": 0.48175182481751827
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/TongB03M.mid",
+      "correct": 82,
+      "total": 137,
+      "accuracy": 0.5985401459854015
+    },
+    {
+      "perf_path": "Mozart/Piano_Sonatas/11-3/Stahievitch02.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/WangA02M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/YeZ02M.mid",
+      "correct": 89,
+      "total": 137,
+      "accuracy": 0.6496350364963503
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/Zuber01.mid",
+      "correct": 67,
+      "total": 137,
+      "accuracy": 0.48905109489051096
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1_no_repeat/ZhangW01M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1/KaiRuiR02M.mid",
+      "correct": 87,
+      "total": 137,
+      "accuracy": 0.635036496350365
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-3/KimSY04M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-3/Sekino05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-3/YOO05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1/YOO05.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1/HAGINO02.mid",
+      "correct": 31,
+      "total": 137,
+      "accuracy": 0.22627737226277372
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/21-1/Sekino05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/29-4/ChowK05M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Beethoven/Piano_Sonatas/29-4/DANILO01.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Liszt/Sonata/Dulu07M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Liszt/Sonata/Huang01.mid",
+      "correct": 32,
+      "total": 137,
+      "accuracy": 0.23357664233576642
+    },
+    {
+      "perf_path": "Liszt/Sonata/Gasanov06M.mid",
+      "correct": 137,
+      "total": 137,
+      "accuracy": 1.0
+    },
+    {
+      "perf_path": "Liszt/Sonata/Dvorkine03.mid",
+      "correct": 11,
+      "total": 137,
+      "accuracy": 0.08029197080291971
+    },
+    {
+      "perf_path": "Liszt/Sonata/GiacomelliN11M.mid",
+      "correct": 34,
+      "total": 137,
+      "accuracy": 0.24817518248175183
+    },
+    {
+      "perf_path": "Liszt/Sonata/Zuber07M.mid",
+      "correct": 97,
+      "total": 137,
+      "accuracy": 0.708029197080292
+    },
+    {
+      "perf_path": "Liszt/Sonata/Yeletskiy05M.mid",
+      "correct": 15,
+      "total": 137,
+      "accuracy": 0.10948905109489052
+    }
+  ]
+}

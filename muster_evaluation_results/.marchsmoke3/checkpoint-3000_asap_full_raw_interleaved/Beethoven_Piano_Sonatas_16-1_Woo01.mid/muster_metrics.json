@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 14.3276,
+  "missing_note_rate": 12.5696,
+  "extra_note_rate": 11.6637,
+  "onset_time_error_rate": 60.7909,
+  "offset_time_error_rate": 41.555,
+  "mean_error_rate": 28.1813,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 23.4845,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.37915,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/16-1/Woo01.mid",
+  "num_gt_notes": 3418,
+  "num_pred_notes": 3378,
+  "num_controls": 3378,
+  "num_slides": 48,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

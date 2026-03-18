@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 11.6848,
+  "missing_note_rate": 36.7283,
+  "extra_note_rate": 20.3802,
+  "onset_time_error_rate": 68.8885,
+  "offset_time_error_rate": 35.0799,
+  "mean_error_rate": 34.5523,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 28.7936,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.42332,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/21-3/YOO05M.mid",
+  "num_gt_notes": 9213,
+  "num_pred_notes": 7311,
+  "num_controls": 7311,
+  "num_slides": 106,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 714
+}

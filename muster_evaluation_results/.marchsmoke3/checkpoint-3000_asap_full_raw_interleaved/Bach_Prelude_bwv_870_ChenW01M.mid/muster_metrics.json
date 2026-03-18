@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 6.46707,
+  "missing_note_rate": 12.3353,
+  "extra_note_rate": 12.2302,
+  "onset_time_error_rate": 40.7104,
+  "offset_time_error_rate": 25.8197,
+  "mean_error_rate": 19.5125,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 16.2604,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.29062,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Prelude/bwv_870/ChenW01M.mid",
+  "num_gt_notes": 835,
+  "num_pred_notes": 834,
+  "num_controls": 834,
+  "num_slides": 11,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 73
+}

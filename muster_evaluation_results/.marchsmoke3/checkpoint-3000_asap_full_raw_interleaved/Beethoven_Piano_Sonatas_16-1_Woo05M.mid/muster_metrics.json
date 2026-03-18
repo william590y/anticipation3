@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 13.0907,
+  "missing_note_rate": 17.1999,
+  "extra_note_rate": 14.6703,
+  "onset_time_error_rate": 63.559,
+  "offset_time_error_rate": 43.0344,
+  "mean_error_rate": 30.3109,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 25.259,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.40584,
+  "hand_error_rate": 0.0,
+  "piece": "Beethoven/Piano_Sonatas/16-1/Woo05M.mid",
+  "num_gt_notes": 3418,
+  "num_pred_notes": 3306,
+  "num_controls": 3306,
+  "num_slides": 47,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 0
+}

@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 16.7656,
+  "missing_note_rate": 35.4599,
+  "extra_note_rate": 34.2404,
+  "onset_time_error_rate": 57.8161,
+  "offset_time_error_rate": 38.1609,
+  "mean_error_rate": 36.4886,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 30.4071,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.50552,
+  "hand_error_rate": 0.0,
+  "piece": "Scriabin/Etudes_op_8/11/Shi08M.mid",
+  "num_gt_notes": 1425,
+  "num_pred_notes": 1324,
+  "num_controls": 1324,
+  "num_slides": 18,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 431
+}

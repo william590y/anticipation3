@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 8.58421,
+  "missing_note_rate": 18.5517,
+  "extra_note_rate": 18.4853,
+  "onset_time_error_rate": 55.1449,
+  "offset_time_error_rate": 33.0669,
+  "mean_error_rate": 26.7666,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 22.3055,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.3297,
+  "hand_error_rate": 0.0,
+  "piece": "Bach/Fugue/bwv_865/Teo01M.mid",
+  "num_gt_notes": 2463,
+  "num_pred_notes": 2456,
+  "num_controls": 2456,
+  "num_slides": 34,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 859
+}

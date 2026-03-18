@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 25.7852,
+  "missing_note_rate": 14.7284,
+  "extra_note_rate": 20.1193,
+  "onset_time_error_rate": 42.9567,
+  "offset_time_error_rate": 33.6486,
+  "mean_error_rate": 27.4476,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 22.873,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.29919,
+  "hand_error_rate": 0.0,
+  "piece": "Prokofiev/Toccata/Guo04.mid",
+  "num_gt_notes": 4719,
+  "num_pred_notes": 5030,
+  "num_controls": 5030,
+  "num_slides": 72,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 727
+}

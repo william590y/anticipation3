@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 3.91689,
+  "missing_note_rate": 25.1362,
+  "extra_note_rate": 14.4747,
+  "onset_time_error_rate": 89.8544,
+  "offset_time_error_rate": 26.6606,
+  "mean_error_rate": 32.0086,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 26.6738,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.39392,
+  "hand_error_rate": 0.0,
+  "piece": "Schubert/Impromptu_op.90_D.899/3/JeonH06M.mid",
+  "num_gt_notes": 2942,
+  "num_pred_notes": 2570,
+  "num_controls": 2570,
+  "num_slides": 36,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 1345
+}

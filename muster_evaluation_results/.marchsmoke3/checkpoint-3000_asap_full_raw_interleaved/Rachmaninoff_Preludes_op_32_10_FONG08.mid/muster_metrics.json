@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 23.2967,
+  "missing_note_rate": 35.989,
+  "extra_note_rate": 50.341,
+  "onset_time_error_rate": 43.3476,
+  "offset_time_error_rate": 34.6781,
+  "mean_error_rate": 37.5305,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 31.2754,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.5205,
+  "hand_error_rate": 0.0,
+  "piece": "Rachmaninoff/Preludes_op_32/10/FONG08.mid",
+  "num_gt_notes": 2737,
+  "num_pred_notes": 2346,
+  "num_controls": 2346,
+  "num_slides": 33,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 557
+}

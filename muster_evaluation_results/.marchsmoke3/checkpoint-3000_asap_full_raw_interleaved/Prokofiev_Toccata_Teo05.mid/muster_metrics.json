@@ -1,0 +1,22 @@
+{
+  "pitch_error_rate": 23.971,
+  "missing_note_rate": 19.4071,
+  "extra_note_rate": 15.0977,
+  "onset_time_error_rate": 42.8949,
+  "offset_time_error_rate": 34.7446,
+  "mean_error_rate": 27.2231,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 22.6859,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.31146,
+  "hand_error_rate": 0.0,
+  "piece": "Prokofiev/Toccata/Teo05.mid",
+  "num_gt_notes": 4719,
+  "num_pred_notes": 4453,
+  "num_controls": 4453,
+  "num_slides": 64,
+  "inverse_timing_fallback_count": 0,
+  "inverse_timing_extrapolated_count": 981
+}
