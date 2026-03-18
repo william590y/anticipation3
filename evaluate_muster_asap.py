@@ -312,6 +312,23 @@ def _masked_score_logits(logits, slot_idx, min_time_tok=None):
     return logits
 
 
+def _safe_sample_from_logits(logits):
+    """Sample from logits, guarding against all-masked / NaN distributions."""
+    finite_mask = torch.isfinite(logits)
+    if not finite_mask.any():
+        return None
+
+    probs = torch.softmax(logits, dim=-1)
+    if not torch.isfinite(probs).all():
+        return None
+
+    prob_sum = probs.sum()
+    if not torch.isfinite(prob_sum) or prob_sum.item() <= 0:
+        return None
+
+    return torch.multinomial(probs, 1).item()
+
+
 def _sanitize_score_triplet(score_triplet):
     """
     Clamp a score triplet into the valid event token ranges for export.
@@ -443,10 +460,21 @@ def autoregressive_generate_interleaved_raw(
         )
         if temperature > 0:
             logits = logits / temperature
-            tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
         elif sample:
-            tok = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+            pass
         else:
+            tok = logits.argmax().item()
+            context.append(tok)
+            _feed([tok])
+            return tok
+
+        tok = _safe_sample_from_logits(logits)
+        if tok is None and slot_idx == 0 and min_time_tok is not None:
+            relaxed_logits = _masked_score_logits(next_logits, slot_idx, min_time_tok=None)
+            if temperature > 0:
+                relaxed_logits = relaxed_logits / temperature
+            tok = _safe_sample_from_logits(relaxed_logits)
+        if tok is None:
             tok = logits.argmax().item()
         context.append(tok)
         _feed([tok])
