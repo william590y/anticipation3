@@ -54,8 +54,8 @@ from evaluate_muster import (
 # ---------------------------------------------------------------------------
 ASAP_PATH              = 'asap-dataset-master'
 ASAP_META_CSV          = os.path.join(ASAP_PATH, 'metadata.csv')
-SPLIT_FILE             = 'data/combined_split.txt'
-PIECE_CACHE_FILE       = 'data/test_asap_muster_cache.jsonl'
+SPLIT_FILE             = 'data/combined_split2.txt'
+PIECE_CACHE_FILE       = 'data/test_asap_muster_cache2.jsonl'
 DEFAULT_CHECKPOINT     = 'checkpoint-1750'
 DEFAULT_NUM_PIECES     = 50
 RANDOM_SEED            = 42

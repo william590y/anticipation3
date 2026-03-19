@@ -420,7 +420,7 @@ def main():
         description="Evaluate ASAP autoregressive pitch accuracy on freshly tokenized windows."
     )
     parser.add_argument("--checkpoint", default="final", help="Checkpoint directory")
-    parser.add_argument("--split-file", default="data/combined_split.txt", help="Path to combined split file")
+    parser.add_argument("--split-file", default="data/combined_split2.txt", help="Path to combined split file")
     parser.add_argument("--num-pieces", type=int, default=20, help="Number of ASAP test pieces to evaluate")
     parser.add_argument("--selection", choices=["first", "random"], default="first")
     parser.add_argument("--seed", type=int, default=42, help="Seed for random piece selection")

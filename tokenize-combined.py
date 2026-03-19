@@ -536,7 +536,7 @@ if len(all_datafiles) == 0:
 rng = np.random.default_rng(42)
 unique_comp_keys = list(sorted(set(all_composition_keys)))
 rng.shuffle(unique_comp_keys)
-n_test = int(np.ceil(0.2 * len(unique_comp_keys)))
+n_test = int(np.ceil(0.1 * len(unique_comp_keys)))
 test_comp_keys = set(unique_comp_keys[:n_test])
 
 train_pairs = []
