@@ -733,6 +733,12 @@ def main():
     parser.add_argument('--max_steps', type=int, default=4000)
     parser.add_argument('--save_steps', type=int, default=250)
     parser.add_argument('--eval_steps', type=int, default=100)
+    parser.add_argument(
+        '--log_every_steps',
+        type=int,
+        default=1,
+        help='Print training loss every N optimizer steps (default: 1)',
+    )
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
@@ -757,6 +763,11 @@ def main():
     
     print(f"Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"Final device confirmation: {device}")
+    print(
+        f"Training loss will be printed every {args.log_every_steps} optimizer step(s) "
+        f"({args.log_every_steps * args.gradient_accumulation_steps} micro-batch(es) "
+        f"with gradient accumulation)."
+    )
     
     try:
         # Initialize accelerator with memory optimization if requested
@@ -966,7 +977,7 @@ def main():
         model.train()
         optimizer.zero_grad(set_to_none=True)
         completed_steps = 0
-        step = 0
+        micro_batches_seen = 0
         
         # Lists to track losses and metrics
         train_losses = []
@@ -986,7 +997,7 @@ def main():
                 _, _, val_asap_auto_acc = evaluate_model(model, val_asap_dataloader, accelerator)
 
             if accelerator.is_main_process:
-                validation_steps.append(step_label // 10)
+                validation_steps.append(step_label)
                 val_losses.append(val_loss)
                 val_accuracies.append(val_acc * 100)
                 val_autoregressive_accuracies.append(val_auto_acc * 100)
@@ -1022,6 +1033,17 @@ def main():
                             # Forward pass with gradient scaling
                             outputs = model(**batch)
                             loss = outputs.loss
+                            micro_batches_seen += 1
+
+                            if accelerator.is_local_main_process:
+                                accumulation_step = (
+                                    (micro_batches_seen - 1) % args.gradient_accumulation_steps
+                                ) + 1
+                                progress_bar.set_postfix(
+                                    loss=f"{loss.item():.4f}",
+                                    accum=f"{accumulation_step}/{args.gradient_accumulation_steps}",
+                                    opt_step=completed_steps,
+                                )
                             
                             # Check for NaN loss
                             if torch.isnan(loss).any() or torch.isinf(loss).any():
@@ -1059,15 +1081,21 @@ def main():
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
                                 progress_bar.update(1)
+                                train_losses.append(loss.item())
                                 
                                 # Log progress
-                                if completed_steps % 10 == 0 and accelerator.is_main_process:
-                                    # Store the training loss every 10 steps
-                                    train_losses.append(loss.item())
-                                    
-                                    # Print more precise learning rate
-                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
-                                          f"LR: {scheduler.get_last_lr()[0]:.8e}")
+                                if (
+                                    accelerator.is_main_process
+                                    and (
+                                        completed_steps == 1
+                                        or completed_steps % args.log_every_steps == 0
+                                    )
+                                ):
+                                    tqdm.write(
+                                        f"Step: {completed_steps}/{args.max_steps}, "
+                                        f"Loss: {loss.item():.4f}, "
+                                        f"LR: {scheduler.get_last_lr()[0]:.8e}"
+                                    )
                                     
                                     # Check for NaN parameters periodically
                                     if check_model_for_nans(model):
