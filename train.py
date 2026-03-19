@@ -728,9 +728,9 @@ def main():
     parser.add_argument('--output_dir', type=Path, default=Path('./aug_labels_tok_fixed'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
-    parser.add_argument('--max_steps', type=int, default=40000)
+    parser.add_argument('--max_steps', type=int, default=4000)
     parser.add_argument('--save_steps', type=int, default=250)
     parser.add_argument('--eval_steps', type=int, default=100)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
