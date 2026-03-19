@@ -35,7 +35,6 @@ from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.convert import midi_to_events
 from alignment import load_annotation_file
-from asap_score_timing import load_asap_score_timing
 
 from evaluate_muster import (
     load_model,
@@ -63,6 +62,7 @@ RANDOM_SEED            = 42
 NUM_WORKERS            = os.cpu_count()
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 DEFAULT_PREFIX_CONTROLS = 33
+TARGET_BEAT_INTERVAL   = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +94,70 @@ def _score_events_to_controls(score_triplets):
     return controls
 
 
+def _normalize_single_score_triplet(score_triplet, score_beat_times):
+    original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+    original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+    pitch = score_triplet[2]
+
+    normalized_time_sec = 0.0
+    time_scale_factor = 1.0
+
+    if score_beat_times and len(score_beat_times) >= 2:
+        if original_time_sec < score_beat_times[0]:
+            beat_duration = score_beat_times[1] - score_beat_times[0]
+            if beat_duration > 0:
+                progress = (original_time_sec - score_beat_times[0]) / beat_duration
+                time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+            else:
+                progress = 0.0
+                time_scale_factor = 1.0
+            normalized_time_sec = progress * TARGET_BEAT_INTERVAL
+        else:
+            found = False
+            for i in range(len(score_beat_times) - 1):
+                if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                    beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                    if beat_duration > 0:
+                        progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                        time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                    else:
+                        progress = 0.0
+                        time_scale_factor = 1.0
+                    normalized_time_sec = (
+                        i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                    )
+                    found = True
+                    break
+
+            if not found:
+                last_beat_idx = len(score_beat_times) - 1
+                if len(score_beat_times) >= 2:
+                    last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                else:
+                    last_beat_duration = 1.0
+
+                if last_beat_duration > 0:
+                    progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                    time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
+                else:
+                    progress = 0.0
+                    time_scale_factor = 1.0
+                normalized_time_sec = (
+                    last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                )
+    else:
+        normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
+
+    normalized_duration_sec = original_duration_sec * time_scale_factor
+    normalized_time_units = max(0, round(normalized_time_sec * TIME_RESOLUTION))
+    normalized_duration_units = max(0, round(normalized_duration_sec * TIME_RESOLUTION))
+    return [
+        normalized_time_units + TIME_OFFSET,
+        normalized_duration_units + DUR_OFFSET,
+        pitch,
+    ]
+
+
 def load_asap_piece(filegroup):
     """
     Worker: load one ASAP piece as raw performance and score note streams.
@@ -105,19 +169,24 @@ def load_asap_piece(filegroup):
 
     try:
         perf_triplets = _events_to_triplets(midi_to_events(perf_midi, quantize=False))
-        score_timing = load_asap_score_timing(score_midi)
+        score_triplets = _events_to_triplets(midi_to_events(score_midi, quantize=False))
         score_annotations = load_annotation_file(score_beats)
         score_beat_times = [anno[0] for anno in score_annotations]
     except Exception:
         return None
 
-    if len(perf_triplets) < DEFAULT_PREFIX_CONTROLS or len(score_timing.raw_triplets) < 5:
+    if len(perf_triplets) < DEFAULT_PREFIX_CONTROLS or len(score_triplets) < 5:
         return None
+
+    normalized_score_triplets = [
+        _normalize_single_score_triplet(score_triplet, score_beat_times)
+        for score_triplet in score_triplets
+    ]
 
     return {
         'perf_triplets': _score_events_to_controls(perf_triplets),
-        'raw_score_triplets': score_timing.raw_triplets,
-        'normalized_score_triplets': score_timing.normalized_triplets,
+        'raw_score_triplets': score_triplets,
+        'normalized_score_triplets': normalized_score_triplets,
         'score_beat_times': score_beat_times,
     }
 

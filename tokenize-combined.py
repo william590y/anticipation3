@@ -6,7 +6,7 @@ This combines both datasets:
 - ASAP: Uses beat annotations for precise alignment
 - ATEPP: Uses direct note matching for alignment (for pieces with scores)
 
-Score normalization ENFORCES 1 quarter note = 1.0 second regardless of original tempo.
+Score normalization ENFORCES 1.0 second beat spacing regardless of original tempo.
 Performance/control times preserve original tempo but are shifted to start at 0.
 
 Uses parallel processing with the available CPU workers.
@@ -32,7 +32,6 @@ from anticipation.vocab import *
 from anticipation import ops
 from anticipation.convert import midi_to_events
 from alignment import align_tokens2, load_annotation_file
-from asap_score_timing import load_asap_score_timing
 
 # Suppress music21 warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -58,6 +57,7 @@ TEST_ASAP_OUTPUT = 'data/test_asap.txt'
 TEST_ASAP_MUSTER_CACHE = 'data/test_asap_muster_cache.jsonl'
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+TARGET_BEAT_INTERVAL = 1.0
 
 print(f"Combined ASAP + ATEPP Tokenization")
 print(f"=" * 60)
@@ -98,6 +98,75 @@ def _events_to_triplets(events):
     return triplets
 
 
+def _normalize_asap_score_time_and_duration(original_time_sec, original_duration_sec, score_beat_times):
+    normalized_time_sec = 0.0
+    time_scale_factor = 1.0
+
+    if score_beat_times and len(score_beat_times) >= 2:
+        if original_time_sec < score_beat_times[0]:
+            beat_duration = score_beat_times[1] - score_beat_times[0]
+            if beat_duration > 0:
+                progress = (original_time_sec - score_beat_times[0]) / beat_duration
+                time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+            else:
+                progress = 0.0
+                time_scale_factor = 1.0
+            normalized_time_sec = progress * TARGET_BEAT_INTERVAL
+        else:
+            found = False
+            for i in range(len(score_beat_times) - 1):
+                if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                    beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                    if beat_duration > 0:
+                        progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                        time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                    else:
+                        progress = 0.0
+                        time_scale_factor = 1.0
+                    normalized_time_sec = (
+                        i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                    )
+                    found = True
+                    break
+
+            if not found:
+                last_beat_idx = len(score_beat_times) - 1
+                if len(score_beat_times) >= 2:
+                    last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                else:
+                    last_beat_duration = 1.0
+
+                if last_beat_duration > 0:
+                    progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                    time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
+                else:
+                    progress = 0.0
+                    time_scale_factor = 1.0
+                normalized_time_sec = (
+                    last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                )
+    else:
+        normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
+
+    normalized_duration_sec = original_duration_sec * time_scale_factor
+    normalized_time_units = max(0, round(normalized_time_sec * TIME_RESOLUTION))
+    normalized_duration_units = max(0, round(normalized_duration_sec * TIME_RESOLUTION))
+    return normalized_time_units, normalized_duration_units
+
+
+def _normalize_asap_score_triplet(score_triplet, score_beat_times):
+    normalized_time_units, normalized_duration_units = _normalize_asap_score_time_and_duration(
+        (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION,
+        (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION,
+        score_beat_times,
+    )
+    return [
+        normalized_time_units + TIME_OFFSET,
+        normalized_duration_units + DUR_OFFSET,
+        score_triplet[2],
+    ]
+
+
 def _score_triplet_from_seconds(time_sec, duration_sec, note_token):
     time_units = max(0, round(time_sec * TIME_RESOLUTION))
     dur_units = min(max(0, round(duration_sec * TIME_RESOLUTION)), MAX_DUR - 1)
@@ -128,8 +197,7 @@ def build_asap_eval_cache_record(filegroup):
 
     try:
         perf_triplets = _events_to_triplets(midi_to_events(perf_midi, quantize=False))
-        score_timing = load_asap_score_timing(score_midi)
-        raw_score_triplets = score_timing.raw_triplets
+        raw_score_triplets = _events_to_triplets(midi_to_events(score_midi, quantize=False))
         score_annotations = load_annotation_file(score_beats)
         score_beat_times = [anno[0] for anno in score_annotations]
     except Exception:
@@ -138,7 +206,10 @@ def build_asap_eval_cache_record(filegroup):
     if len(perf_triplets) < 33 or len(raw_score_triplets) < 5:
         return None
 
-    normalized_score_triplets = score_timing.normalized_triplets
+    normalized_score_triplets = [
+        _normalize_asap_score_triplet(score_triplet, score_beat_times)
+        for score_triplet in raw_score_triplets
+    ]
     perf_controls = [
         [
             ATIME_OFFSET + (triplet[0] - TIME_OFFSET),
@@ -604,8 +675,6 @@ def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
     _, perf_midi, score_midi, perf_beats, score_beats = filegroup
     
     try:
-        score_timing = load_asap_score_timing(score_midi)
-
         # Align using beat annotations
         matched_tuples = align_tokens2(
             perf_midi,
@@ -614,7 +683,6 @@ def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
             score_beats,
             skip_Nones=False,
             preserve_unmatched_perf=True,
-            score_tuples=score_timing.alignment_tuples,
         )
         
         if len(matched_tuples) < 20:
@@ -627,7 +695,7 @@ def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
             score_triplet = match[2]
             
             if score_triplet[0] is not None:
-                normalized_score = score_timing.normalize_raw_triplet(score_triplet)
+                normalized_score = _normalize_asap_score_triplet(score_triplet, score_beat_times)
             else:
                 normalized_score = score_triplet
             

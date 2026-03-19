@@ -13,8 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from alignment import align_tokens2
-from asap_score_timing import load_asap_score_timing
+from alignment import align_tokens2, load_annotation_file
 from anticipation import ops
 from anticipation.config import CONTEXT_SIZE, EVENT_SIZE, MAX_TIME, TIME_RESOLUTION
 from anticipation.vocab import (
@@ -31,6 +30,7 @@ from anticipation.vocab import (
 
 ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
+TARGET_BEAT_INTERVAL = 1.0
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 ALTERNATING_START = 33 * 2 * EVENT_SIZE
 DEFAULT_WINDOWS_WORKERS = 8 if os.name == "nt" else 32
@@ -154,8 +154,6 @@ def build_packed_sequences(normalized_matched_tuples, prefix_controls=33):
 def tokenize_asap_piece(filegroup):
     _, perf_midi, score_midi, perf_beats, score_beats = filegroup
     try:
-        score_timing = load_asap_score_timing(score_midi)
-
         matched_tuples = align_tokens2(
             perf_midi,
             score_midi,
@@ -163,10 +161,12 @@ def tokenize_asap_piece(filegroup):
             score_beats,
             skip_Nones=False,
             preserve_unmatched_perf=True,
-            score_tuples=score_timing.alignment_tuples,
         )
         if len(matched_tuples) < 20:
             return []
+
+        score_annotations = load_annotation_file(score_beats)
+        score_beat_times = [a[0] for a in score_annotations]
 
         normalized = []
         for match in matched_tuples:
@@ -174,7 +174,38 @@ def tokenize_asap_piece(filegroup):
             score_triplet = match[2]
 
             if score_triplet[0] is not None:
-                normalized_score = score_timing.normalize_raw_triplet(score_triplet)
+                orig_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                orig_dur_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+                pitch = score_triplet[2]
+
+                norm_time_sec = 0.0
+                time_scale = 1.0
+
+                if score_beat_times and len(score_beat_times) >= 2:
+                    if orig_time_sec < score_beat_times[0]:
+                        beat_dur = score_beat_times[1] - score_beat_times[0]
+                        progress = ((orig_time_sec - score_beat_times[0]) / beat_dur) if beat_dur > 0 else 0
+                        time_scale = TARGET_BEAT_INTERVAL / beat_dur if beat_dur > 0 else 1.0
+                        norm_time_sec = progress * TARGET_BEAT_INTERVAL
+                    else:
+                        found = False
+                        for i in range(len(score_beat_times) - 1):
+                            if score_beat_times[i] <= orig_time_sec <= score_beat_times[i + 1]:
+                                beat_dur = score_beat_times[i + 1] - score_beat_times[i]
+                                progress = ((orig_time_sec - score_beat_times[i]) / beat_dur) if beat_dur > 0 else 0
+                                time_scale = TARGET_BEAT_INTERVAL / beat_dur if beat_dur > 0 else 1.0
+                                norm_time_sec = i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                                found = True
+                                break
+                        if not found:
+                            last_dur = (score_beat_times[-1] - score_beat_times[-2]) if len(score_beat_times) >= 2 else 1.0
+                            progress = ((orig_time_sec - score_beat_times[-1]) / last_dur) if last_dur > 0 else 0
+                            time_scale = TARGET_BEAT_INTERVAL / last_dur if last_dur > 0 else 1.0
+                            norm_time_sec = (len(score_beat_times) - 1) * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+
+                norm_time_units = max(0, round(norm_time_sec * TIME_RESOLUTION))
+                norm_dur_units = max(0, round(orig_dur_sec * time_scale * TIME_RESOLUTION))
+                normalized_score = [norm_time_units + TIME_OFFSET, norm_dur_units + DUR_OFFSET, pitch]
             else:
                 normalized_score = score_triplet
 

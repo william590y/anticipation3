@@ -6,6 +6,11 @@ from anticipation.config import *
 from anticipation.vocab import *
 from itertools import combinations
 
+try:
+    from alignment_cython import match_perf_to_score as _match_perf_to_score_fast
+except ImportError:
+    _match_perf_to_score_fast = None
+
 
 @lru_cache(maxsize=512)
 def load_annotation_file(file_path):
@@ -22,6 +27,7 @@ def load_annotation_file(file_path):
     return annotations
 
 
+@lru_cache(maxsize=512)
 def compare_annotations(file1_path, file2_path, interpolate=True):
     """
     Creates a mapping between downbeat and beat times in two annotation files.
@@ -49,6 +55,19 @@ def compare_annotations(file1_path, file2_path, interpolate=True):
         return map
 
     return x, y
+
+
+@lru_cache(maxsize=512)
+def _load_midi_note_tuples(file_path):
+    events = midi_to_events(file_path, quantize=False)
+    tuples = []
+    for i in range(int(len(events) / 3)):
+        tuples.append((
+            events[3 * i] / TIME_RESOLUTION,
+            events[3 * i + 1] - DUR_OFFSET,
+            events[3 * i + 2] - NOTE_OFFSET,
+        ))
+    return tuple(tuples)
 
 
 def power_set(lst, min_length=2, max_length=6):
@@ -83,6 +102,37 @@ def _project_time_between_annotation_grids(time_point, src_grid, dst_grid):
     dst_span = dst_grid[-1] - dst_grid[-2]
     progress = (time_point - src_grid[-1]) / src_span if src_span != 0 else 0.0
     return float(dst_grid[-1] + progress * dst_span)
+
+
+def _match_perf_to_score_python(p_tuples, s_tuples, p_min, p_max, mapped_times, thres):
+    matched_indices = [-1] * len(p_tuples)
+    available_score = [True] * len(s_tuples)
+    score_indices_by_pitch = {}
+    for idx, s_tuple in enumerate(s_tuples):
+        score_indices_by_pitch.setdefault(s_tuple[2], []).append(idx)
+
+    for i, p_tuple in enumerate(p_tuples):
+        p_time, p_note = p_tuple[0], p_tuple[2]
+        if not (p_min <= p_time <= p_max):
+            continue
+
+        mapped_time = mapped_times[i]
+        best_dist = np.inf
+        best_index = -1
+
+        for k in score_indices_by_pitch.get(p_note, ()):
+            if not available_score[k]:
+                continue
+            dist = np.abs(mapped_time - s_tuples[k][0])
+            if dist <= thres and dist <= best_dist:
+                best_dist = dist
+                best_index = k
+
+        if best_index >= 0:
+            matched_indices[i] = best_index
+            available_score[best_index] = False
+
+    return matched_indices
 
 
 def align_tokens(file1, file2, file3, file4, skip_Nones=True):
@@ -201,66 +251,44 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
 def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1,
                   preserve_unmatched_perf=False, score_tuples=None):
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
-    perf = midi_to_events(file1, quantize=False)
+    p_tuples = _load_midi_note_tuples(file1)
 
     p_beats, s_beats = compare_annotations(file3, file4, interpolate=False)
-    s_beats = np.array(s_beats)
-    p_beats = np.array(p_beats)
     map = compare_annotations(file3, file4)
 
-    # create tuples, scaling arrival time back to seconds, which is the unit the annotation mapping uses
-    p_tuples = [[perf[3 * i] / TIME_RESOLUTION, perf[3 * i + 1] - DUR_OFFSET, perf[3 * i + 2] - NOTE_OFFSET]
-                for i in range(int(len(perf) / 3))]
     if score_tuples is None:
-        score = midi_to_events(file2, quantize=False)
-        s_tuples = [[score[3 * i] / TIME_RESOLUTION, score[3 * i + 1] - DUR_OFFSET, score[3 * i + 2] - NOTE_OFFSET]
-                    for i in range(int(len(score) / 3))]
+        s_tuples = _load_midi_note_tuples(file2)
     else:
-        s_tuples = [list(tup) for tup in score_tuples]
-
-    matched_tuples = []
-
-    s_tuples_copy = s_tuples.copy()
+        s_tuples = tuple(tuple(tup) for tup in score_tuples)
 
     p_min = map.x.min()
     p_max = map.x.max()
+    mapped_times = [
+        float(map(p_tuple[0])) if p_min <= p_tuple[0] <= p_max else 0.0
+        for p_tuple in p_tuples
+    ]
+
+    match_impl = _match_perf_to_score_fast or _match_perf_to_score_python
+    matched_indices = match_impl(p_tuples, s_tuples, p_min, p_max, mapped_times, thres)
+    matched_tuples = []
 
     for i, p_tuple in enumerate(p_tuples):
-        best_dist = np.inf
         best_match = [None, None, None]
-        best_index = None
+        best_index = matched_indices[i]
 
-        p_time, p_note = p_tuple[0], p_tuple[2]
-
-        if p_min <= p_time <= p_max:
-            for j, s_tuple in enumerate(s_tuples_copy):
-                s_time, s_note = s_tuple[0], s_tuple[2]
-
-                k = s_tuples.index(s_tuple)
-
-                dist = np.abs(map(p_time) - s_time)
-
-                if p_note != s_note:
-                    continue
-
-                if dist <= thres and dist <= best_dist:
-                    best_dist = dist
-                    best_match = s_tuple
-                    best_index = k
-
-        if best_index is not None:
+        if best_index >= 0:
+            best_match = s_tuples[best_index]
             matched_tuples.append([p_tuple, i, best_match, best_index])
-            s_tuples_copy.remove(best_match)
         elif not skip_Nones:
             if preserve_unmatched_perf:
                 projected_score_time = _project_time_between_annotation_grids(
-                    p_time,
+                    p_tuple[0],
                     p_beats,
                     s_beats,
                 )
                 if projected_score_time is not None:
                     best_match = [projected_score_time, 0, REST - NOTE_OFFSET]
-            matched_tuples.append([p_tuple, i, best_match, best_index])
+            matched_tuples.append([p_tuple, i, best_match, None])
 
     # revert back to token format
     for i, l in enumerate(matched_tuples):
