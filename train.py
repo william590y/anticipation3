@@ -700,7 +700,7 @@ def main():
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./exposure_model'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./exposure_model_smoke'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -715,7 +715,7 @@ def main():
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
     parser.add_argument('--dur_jitter_range', type=float, default=0.05,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
-    parser.add_argument('--mask_prob', type=float, default=.3, help='Probability of concealing prior score/output triplets during training (0.0 to 1.0)')
+    parser.add_argument('--mask_prob', type=float, default=0, help='Probability of concealing prior score/output triplets during training (0.0 to 1.0)')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
