@@ -47,14 +47,14 @@ ATEPP_PATH = 'ATEPP'  # Base folder containing the dataset
 ATEPP_DATA_PATH = os.path.join(ATEPP_PATH, 'ATEPP-1.2')  # Subfolder with actual MIDI/score files
 ATEPP_META_CSV = os.path.join(ATEPP_PATH, 'ATEPP-metadata-1.2.csv')
 # Output paths
-TRAIN_OUTPUT = 'data/train_combined.txt'
-TEST_OUTPUT = 'data/test_combined.txt'
-SPLIT_FILE = 'data/combined_split.txt'
+TRAIN_OUTPUT = 'data/train_combined2.txt'
+TEST_OUTPUT = 'data/test_combined2.txt'
+SPLIT_FILE = 'data/combined_split2.txt'
 # Curriculum learning: separate files by source quality
-TRAIN_ASAP_OUTPUT = 'data/train_asap.txt'
-TRAIN_ATEPP_OUTPUT = 'data/train_atepp.txt'
-TEST_ASAP_OUTPUT = 'data/test_asap.txt'
-TEST_ASAP_MUSTER_CACHE = 'data/test_asap_muster_cache.jsonl'
+TRAIN_ASAP_OUTPUT = 'data/train_asap2.txt'
+TRAIN_ATEPP_OUTPUT = 'data/train_atepp2.txt'
+TEST_ASAP_OUTPUT = 'data/test_asap2.txt'
+TEST_ASAP_MUSTER_CACHE = 'data/test_asap_muster_cache2.jsonl'
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 TARGET_BEAT_INTERVAL = 1.0

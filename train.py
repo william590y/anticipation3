@@ -636,8 +636,9 @@ def plot_losses(
     """
     steps = list(range(1, len(train_losses) + 1))
     
-    # Create figure with 4 subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    # Create figure with 5 subplots
+    fig, axes = plt.subplots(3, 2, figsize=(15, 17))
+    ax1, ax2, ax3, ax4, ax5, ax6 = axes.flatten()
     
     # Plot 1: Linear loss plot
     ax1.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
@@ -670,20 +671,40 @@ def plot_losses(
     
     # Plot 4: Validation autoregressive pitch accuracy
     ax4.plot(validation_steps, val_autoregressive_accuracies, label='Autoregressive Pitch Accuracy', color='purple', marker='s')
-    if val_asap_autoregressive_accuracies:
-        ax4.plot(
-            validation_steps,
-            val_asap_autoregressive_accuracies,
-            label='ASAP-Only AR Pitch Accuracy',
-            color='orange',
-            marker='^',
-        )
     ax4.set_xlabel('Step')
     ax4.set_ylabel('Pitch Accuracy (%)')
     ax4.set_title('Validation Autoregressive Pitch Accuracy')
     ax4.set_ylim([0, 100])
     ax4.legend()
     ax4.grid(True, alpha=0.3)
+
+    # Plot 5: ASAP-only validation autoregressive pitch accuracy
+    if val_asap_autoregressive_accuracies:
+        ax5.plot(
+            validation_steps,
+            val_asap_autoregressive_accuracies,
+            label='ASAP-Only AR Pitch Accuracy',
+            color='orange',
+            marker='^',
+        )
+        ax5.legend()
+    else:
+        ax5.text(
+            0.5,
+            0.5,
+            'No ASAP-only validation data',
+            ha='center',
+            va='center',
+            transform=ax5.transAxes,
+        )
+    ax5.set_xlabel('Step')
+    ax5.set_ylabel('Pitch Accuracy (%)')
+    ax5.set_title('ASAP-Only AR Pitch Accuracy')
+    ax5.set_ylim([0, 100])
+    ax5.grid(True, alpha=0.3)
+
+    # Plot 6: unused placeholder in 3x2 layout
+    ax6.axis('off')
     
     plt.tight_layout()
     plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
@@ -694,12 +715,12 @@ def plot_losses(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
-    parser.add_argument('--val_asap_file', type=Path, default=Path('./data/test_asap.txt'))
-    parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap.txt'),
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined2.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined2.txt'))
+    parser.add_argument('--val_asap_file', type=Path, default=Path('./data/test_asap2.txt'))
+    parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap2.txt'),
                         help='ASAP-only training sequences (high quality, used at end of curriculum)')
-    parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp.txt'),
+    parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp2.txt'),
                         help='ATEPP-only training sequences (low quality, used at start of curriculum)')
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
