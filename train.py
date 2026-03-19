@@ -704,7 +704,7 @@ def main():
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./exposure_model_smoke'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./aug_labels'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -715,9 +715,9 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--onset_jitter_std', type=float, default=0.05,
+    parser.add_argument('--onset_jitter_std', type=float, default=0.1,
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
-    parser.add_argument('--dur_jitter_range', type=float, default=0.05,
+    parser.add_argument('--dur_jitter_range', type=float, default=0.1,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
     parser.add_argument('--mask_prob', type=float, default=0, help='Probability of concealing prior score/output triplets during training (0.0 to 1.0)')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
