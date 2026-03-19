@@ -151,7 +151,8 @@ class TokenizedDataset(Dataset):
             slot-specific mask tokens while preserving their labels.
         
         Returns:
-            augmented_tokens: Tensor of augmented token ids
+            augmented_inputs: Tensor of augmented token ids for model input
+            augmented_targets: Tensor of augmented token ids before history dropout
             concealed_indices: List of score-token positions replaced for history dropout
         """
         from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST,
@@ -168,7 +169,8 @@ class TokenizedDataset(Dataset):
             self.tempo_scale_range == 0.0
         )
         if not self.is_training or no_augmentation:
-            return tokens.clone(), []
+            cloned = tokens.clone()
+            return cloned, cloned.clone(), []
         
         augmented = tokens.clone()
         concealed_indices = []
@@ -290,6 +292,8 @@ class TokenizedDataset(Dataset):
             augmented[pos_i + 1] = tok1
             augmented[pos_i + 2] = tok2
 
+        augmented_targets = augmented.clone()
+
         if self.mask_prob > 0:
             i = ALTERNATING_START
             while i < len(augmented) - 2:
@@ -312,13 +316,13 @@ class TokenizedDataset(Dataset):
                         concealed_indices.extend((i, i + 1, i + 2))
                 i += 3
 
-        return augmented, concealed_indices
+        return augmented, augmented_targets, concealed_indices
     
     def __getitem__(self, idx):
         tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
         
         # Apply on-the-fly augmentation (time perturbation + score-history dropout)
-        augmented_tokens, _concealed_idxs = self._augment_sequence(tokens)
+        augmented_tokens, augmented_labels, _concealed_idxs = self._augment_sequence(tokens)
         
         # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
         from anticipation.vocab import VOCAB_SIZE
@@ -327,8 +331,8 @@ class TokenizedDataset(Dataset):
         # Keep all positions active; concealed history uses a placeholder token.
         attention_mask = torch.ones_like(augmented_tokens)
 
-        # Preserve original targets so concealed score history stays supervised.
-        labels = tokens.clone()
+        # Supervise the augmented sequence; only score-history dropout corrupts inputs.
+        labels = augmented_labels
         
         return {"input_ids": augmented_tokens, "attention_mask": attention_mask, "labels": labels}
 
