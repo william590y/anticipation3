@@ -13,6 +13,7 @@ Uses parallel processing with the available CPU workers.
 """
 
 import os
+import argparse
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
@@ -37,7 +38,8 @@ from alignment import align_tokens2, load_annotation_file
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Number of parallel workers
-NUM_WORKERS = os.cpu_count()
+DEFAULT_NUM_WORKERS = os.cpu_count()
+NUM_WORKERS = DEFAULT_NUM_WORKERS
 
 # Dataset paths
 ASAP_PATH = 'asap-dataset-master'
@@ -840,6 +842,17 @@ def process_single_piece(filegroup):
 # ============================================================================
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--num_workers',
+        type=int,
+        default=DEFAULT_NUM_WORKERS,
+        help='Worker processes for tokenization/cache building',
+    )
+    args = parser.parse_args()
+    worker_count = max(1, args.num_workers)
+
+    print(f"Using {worker_count} worker processes for tokenization")
     print("Processing training set...")
     os.makedirs('data', exist_ok=True)
 
@@ -856,10 +869,10 @@ if __name__ == '__main__':
     train_asap_success = 0
     train_atepp_success = 0
     
-    with open(train_output_tmp, 'w') as f_train, \
-         open(train_asap_tmp, 'w') as f_asap, \
-         open(train_atepp_tmp, 'w') as f_atepp:
-        with Pool(processes=NUM_WORKERS) as pool:
+    with Pool(processes=worker_count) as pool:
+        with open(train_output_tmp, 'w') as f_train, \
+             open(train_asap_tmp, 'w') as f_asap, \
+             open(train_atepp_tmp, 'w') as f_atepp:
             with tqdm(total=len(train_pairs), desc='Train', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, train_pairs):
                     if count > 0:
@@ -879,19 +892,18 @@ if __name__ == '__main__':
                         train_pieces_failed += 1
                     pbar.update(1)
 
-    print(f"Train: {train_sequences_total} sequences from {train_pieces_success} pieces ({train_asap_success} ASAP, {train_atepp_success} ATEPP), {train_pieces_failed} failed")
-    
-    # Process test set
-    print("\nProcessing test set...")
-    
-    test_sequences_total = 0
-    test_pieces_success = 0
-    test_pieces_failed = 0
-    test_asap_success = 0
-    test_atepp_success = 0
-    
-    with open(test_output_tmp, 'w') as f_test, open(test_asap_tmp, 'w') as f_test_asap:
-        with Pool(processes=NUM_WORKERS) as pool:
+        print(f"Train: {train_sequences_total} sequences from {train_pieces_success} pieces ({train_asap_success} ASAP, {train_atepp_success} ATEPP), {train_pieces_failed} failed")
+        
+        # Process test set
+        print("\nProcessing test set...")
+        
+        test_sequences_total = 0
+        test_pieces_success = 0
+        test_pieces_failed = 0
+        test_asap_success = 0
+        test_atepp_success = 0
+        
+        with open(test_output_tmp, 'w') as f_test, open(test_asap_tmp, 'w') as f_test_asap:
             with tqdm(total=len(test_pairs), desc='Test', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, test_pairs):
                     if count > 0:
@@ -909,14 +921,13 @@ if __name__ == '__main__':
                         test_pieces_failed += 1
                     pbar.update(1)
 
-    print("\nBuilding ASAP test MUSTER cache...")
-    test_asap_filegroups = sorted(
-        [pair for pair in test_pairs if pair[0] == 'asap'],
-        key=lambda fg: os.path.relpath(fg[1], ASAP_PATH).replace('\\', '/'),
-    )
-    cache_records = []
-    if test_asap_filegroups:
-        with Pool(processes=NUM_WORKERS) as pool:
+        print("\nBuilding ASAP test MUSTER cache...")
+        test_asap_filegroups = sorted(
+            [pair for pair in test_pairs if pair[0] == 'asap'],
+            key=lambda fg: os.path.relpath(fg[1], ASAP_PATH).replace('\\', '/'),
+        )
+        cache_records = []
+        if test_asap_filegroups:
             with tqdm(total=len(test_asap_filegroups), desc='ASAP cache', unit='piece') as pbar:
                 for record in pool.imap(build_asap_eval_cache_record, test_asap_filegroups):
                     if record is not None:
