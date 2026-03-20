@@ -26,6 +26,11 @@ import unicodedata
 import warnings
 from pathlib import Path
 
+try:
+    import resource
+except ImportError:
+    resource = None
+
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation import ops
@@ -81,6 +86,68 @@ def _make_temp_path(final_path):
 
 def _replace_atomic(temp_path, final_path):
     os.replace(str(temp_path), str(final_path))
+
+
+def _count_open_file_descriptors():
+    """Best-effort count of open file descriptors on POSIX systems."""
+    proc_fd_dir = Path('/proc/self/fd')
+    if not proc_fd_dir.exists():
+        return None
+
+    try:
+        return len(list(proc_fd_dir.iterdir()))
+    except OSError:
+        return None
+
+
+def _ensure_pool_fd_budget(worker_count, *, per_worker_fds=16, extra_headroom=256):
+    """Raise the soft RLIMIT_NOFILE cap before starting multiprocessing pools.
+
+    Pool startup opens several pipes and sockets per worker. On systems where the
+    shell's soft limit is much lower than the hard limit, pool creation can fail
+    with ``OSError: [Errno 24] Too many open files`` even before any work starts.
+    """
+    if resource is None or not hasattr(resource, 'RLIMIT_NOFILE'):
+        return
+
+    try:
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):
+        return
+
+    open_fds = _count_open_file_descriptors() or 0
+    required_soft_limit = max(
+        soft_limit,
+        4096,
+        open_fds + extra_headroom + (worker_count * per_worker_fds),
+    )
+    target_soft_limit = required_soft_limit
+
+    if hard_limit != resource.RLIM_INFINITY:
+        target_soft_limit = min(target_soft_limit, hard_limit)
+
+    if hard_limit != resource.RLIM_INFINITY and hard_limit < required_soft_limit:
+        print(
+            "WARNING: RLIMIT_NOFILE hard limit may still be too low for "
+            f"{worker_count} workers (required about {required_soft_limit}, "
+            f"hard limit is {hard_limit})"
+        )
+
+    if target_soft_limit <= soft_limit:
+        return
+
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target_soft_limit, hard_limit))
+        hard_display = 'unlimited' if hard_limit == resource.RLIM_INFINITY else str(hard_limit)
+        print(
+            f"Raised RLIMIT_NOFILE soft limit from {soft_limit} to "
+            f"{target_soft_limit} (hard limit: {hard_display})"
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            "WARNING: unable to raise RLIMIT_NOFILE soft limit "
+            f"from {soft_limit} to {target_soft_limit}: {exc}"
+        )
 
 # ============================================================================
 # Composition Key Extraction
@@ -791,6 +858,7 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
     worker_count = max(1, args.num_workers)
+    _ensure_pool_fd_budget(worker_count)
 
     print(f"Using {worker_count} worker processes for tokenization")
     print("Processing training set...")
