@@ -398,12 +398,12 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
         tuple: (avg_loss, teacher_forced_pitch_accuracy, autoregressive_pitch_accuracy)
     """
     model.eval()
-    total_loss = 0
-    total_samples = 0
+    local_total_loss = 0.0
+    local_total_samples = 0
     
     # For teacher-forced pitch accuracy: track predictions on score note tokens
-    correct_pitches = 0
-    total_pitches = 0
+    local_correct_pitches = 0
+    local_total_pitches = 0
     
     from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET, REST
     import random
@@ -423,7 +423,14 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     
     batches_processed = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating", leave=False)):
+        for batch_idx, batch in enumerate(
+            tqdm(
+                dataloader,
+                desc="Evaluating",
+                leave=False,
+                disable=not accelerator.is_local_main_process,
+            )
+        ):
             # Only process selected batches
             if batch_idx not in selected_indices:
                 continue
@@ -442,8 +449,8 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             batch_size = input_ids.size(0)
             
             # Accumulate loss (weighted by batch size)
-            total_loss += loss.item() * batch_size
-            total_samples += batch_size
+            local_total_loss += loss.item() * batch_size
+            local_total_samples += batch_size
             
             # Calculate pitch accuracy on score note tokens (position 2 of score triplets)
             # Score triplets have all tokens < CONTROL_OFFSET
@@ -472,14 +479,37 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                             
                             # Check if prediction matches ground truth
                             if predicted_token == true_token:
-                                correct_pitches += 1
-                            total_pitches += 1
+                                local_correct_pitches += 1
+                            local_total_pitches += 1
                     
                     # Always move in steps of 3 to maintain triplet alignment
                     i += 3
     
-    avg_loss = total_loss / total_samples
-    teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
+    local_teacher_forced_metrics = torch.tensor(
+        [
+            local_total_loss,
+            float(local_total_samples),
+            float(local_correct_pitches),
+            float(local_total_pitches),
+        ],
+        dtype=torch.float64,
+        device=accelerator.device,
+    )
+    gathered_teacher_forced_metrics = accelerator.gather_for_metrics(local_teacher_forced_metrics)
+    if gathered_teacher_forced_metrics.ndim == 1:
+        global_teacher_forced_metrics = gathered_teacher_forced_metrics
+    else:
+        global_teacher_forced_metrics = gathered_teacher_forced_metrics.sum(dim=0)
+
+    global_total_loss = global_teacher_forced_metrics[0].item()
+    global_total_samples = int(global_teacher_forced_metrics[1].item())
+    global_correct_pitches = int(global_teacher_forced_metrics[2].item())
+    global_total_pitches = int(global_teacher_forced_metrics[3].item())
+
+    avg_loss = global_total_loss / global_total_samples if global_total_samples > 0 else 0.0
+    teacher_forced_accuracy = (
+        global_correct_pitches / global_total_pitches if global_total_pitches > 0 else 0.0
+    )
     
     # Autoregressive evaluation: use performance (control) to generate score
     # Format: control+rest pairs + alternating score/control
@@ -498,22 +528,34 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 sample_count = min(autoregressive_samples, seq_count)
                 rng = random.Random(0)
                 sampled_indices = rng.sample(range(seq_count), sample_count)
-                for idx in sampled_indices:
+                # Shard sampled indices across processes so autoregressive eval runs in parallel.
+                local_sampled_indices = sampled_indices[
+                    accelerator.process_index::accelerator.num_processes
+                ]
+                for idx in local_sampled_indices:
                     all_sequences.append(dataset[idx]["input_ids"])
         else:
             # Fallback for unusual dataloaders without a readable dataset.
+            seen_sequences = 0
             with torch.no_grad():
                 for batch in dataloader:
                     input_ids = batch["input_ids"]
                     for seq in input_ids:
-                        all_sequences.append(seq)
+                        if seen_sequences % accelerator.num_processes == accelerator.process_index:
+                            all_sequences.append(seq)
+                        seen_sequences += 1
                         if len(all_sequences) >= autoregressive_samples:
                             break
                     if len(all_sequences) >= autoregressive_samples:
                         break
         
         # Run autoregressive generation on each sampled sequence
-        for seq in tqdm(all_sequences, desc="Autoregressive eval", leave=False):
+        for seq in tqdm(
+            all_sequences,
+            desc="Autoregressive eval",
+            leave=False,
+            disable=not accelerator.is_local_main_process,
+        ):
             # Sequence format: [control+rest pairs (positions 0-197), alternating score/control (198+)]
             # We want to use the control tokens as context and generate the score tokens
             
@@ -579,15 +621,33 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     context.append(seq[pos].item())
                     pos += 1
     
-    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
+    local_autoregressive_metrics = torch.tensor(
+        [float(autoregressive_correct), float(autoregressive_total)],
+        dtype=torch.float64,
+        device=accelerator.device,
+    )
+    gathered_autoregressive_metrics = accelerator.gather_for_metrics(local_autoregressive_metrics)
+    if gathered_autoregressive_metrics.ndim == 1:
+        global_autoregressive_metrics = gathered_autoregressive_metrics
+    else:
+        global_autoregressive_metrics = gathered_autoregressive_metrics.sum(dim=0)
+
+    global_autoregressive_correct = int(global_autoregressive_metrics[0].item())
+    global_autoregressive_total = int(global_autoregressive_metrics[1].item())
+    autoregressive_accuracy = (
+        global_autoregressive_correct / global_autoregressive_total
+        if global_autoregressive_total > 0
+        else 0.0
+    )
 
     # #region agent log
-    _debug_log_path = os.path.join(os.path.dirname(__file__), "debug-e30de5.log")
-    try:
-        with open(_debug_log_path, "a", encoding="utf-8") as _f:
-            _f.write(json.dumps({"sessionId": "e30de5", "timestamp": time.time() * 1000, "location": "train.py:evaluate_model", "message": "train_ar_metrics", "data": {"protocol": "train_gt_control", "uses_gt_control": True, "autoregressive_correct": autoregressive_correct, "autoregressive_total": autoregressive_total, "autoregressive_acc_pct": round(autoregressive_accuracy * 100, 2)}, "hypothesisId": "A"}) + "\n")
-    except Exception:
-        pass
+    if accelerator.is_main_process:
+        _debug_log_path = os.path.join(os.path.dirname(__file__), "debug-e30de5.log")
+        try:
+            with open(_debug_log_path, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId": "e30de5", "timestamp": time.time() * 1000, "location": "train.py:evaluate_model", "message": "train_ar_metrics", "data": {"protocol": "train_gt_control", "uses_gt_control": True, "autoregressive_correct": global_autoregressive_correct, "autoregressive_total": global_autoregressive_total, "autoregressive_acc_pct": round(autoregressive_accuracy * 100, 2)}, "hypothesisId": "A"}) + "\n")
+        except Exception:
+            pass
     # #endregion
 
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
@@ -990,13 +1050,13 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    print(f"\nRunning validation at step {completed_steps}...")
+                                    accelerator.print(f"\nRunning validation at step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)  # Store as percentage
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    accelerator.print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -1009,13 +1069,13 @@ def main():
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    print(f"\nRunning validation at checkpoint step {completed_steps}...")
+                                    accelerator.print(f"\nRunning validation at checkpoint step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    accelerator.print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -1092,13 +1152,13 @@ def main():
             # Always try to save whatever we have and generate the final plot
             try:
                 # Final validation run
-                print("\nRunning final validation...")
+                accelerator.print("\nRunning final validation...")
                 final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                 validation_steps.append(completed_steps)
                 val_losses.append(final_val_loss)
                 val_accuracies.append(final_val_acc * 100)
                 val_autoregressive_accuracies.append(final_auto_acc * 100)
-                print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
+                accelerator.print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
                 
                 # Final save
                 final_dir = args.output_dir / "final"
