@@ -64,7 +64,7 @@ class TokenizedDataset(Dataset):
     - Augmentation (perturbation + masking) applied during training, not tokenization
     """
     def __init__(self, file_path, onset_jitter_std=0.0, dur_jitter_range=0.0,
-                 mask_prob=0.0, transpose_range_semitones=0, tempo_scale_range=0.0,
+                 mask_prob=0.75, transpose_range_semitones=0, tempo_scale_range=0.0,
                  is_training=True):
         self.onset_jitter_std = onset_jitter_std if is_training else 0.0
         self.dur_jitter_range = dur_jitter_range if is_training else 0.0
@@ -109,7 +109,7 @@ class TokenizedDataset(Dataset):
         if self.is_training:
             print(f"  Training mode: onset_jitter_std={self.onset_jitter_std} (N(1,std²) IOI scaling), "
                   f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
-                  f"mask_prob={self.mask_prob}, "
+                  f"score_mask_ratio={self.mask_prob}, "
                   f"transpose_range={self.transpose_range_semitones} semitones, "
                   f"tempo_scale_range=U(1±{self.tempo_scale_range})")
         else:
@@ -131,46 +131,8 @@ class TokenizedDataset(Dataset):
         # Clamp negatives that can arise from tokenization bugs
         return [max(0, t) for t in tokens]
     
-    def _augment_sequence(self, tokens):
-        """Apply on-the-fly augmentation to a single training sequence.
-        
-        Global augmentations (one value sampled per sequence):
-          - Transposition: uniform ±transpose_range semitones applied to all pitch tokens;
-            pitches outside MIDI [0,127] are folded inward by octave steps.
-          - Tempo scaling: λ ~ U(1-range, 1+range) scales all time/duration tokens.
-        
-        Local augmentations on control (performance) triplets:
-          - Onset jitter:  ô_{i+1} - ô_i = (o_{i+1} - o_i) · N(1, std²)
-            Each inter-onset interval is scaled by an independent Gaussian factor.
-            Requires a two-pass approach: collect all onsets first, then reconstruct.
-          - Duration jitter: each note duration scaled by U(1-range, 1+range).
-          - Masking: randomly suppress triplets from attention/loss.
-        
-        Returns:
-            augmented_tokens: Tensor of augmented token ids
-            mask_indices: List of positions to exclude from attention and loss
-        """
-        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST, VOCAB_SIZE,
-                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
-                                        TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
-        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
-        
-        no_augmentation = (
-            self.onset_jitter_std == 0 and
-            self.dur_jitter_range == 0 and
-            self.mask_prob == 0 and
-            self.transpose_range_semitones == 0 and
-            self.tempo_scale_range == 0.0
-        )
-        if not self.is_training or no_augmentation:
-            return tokens.clone(), []
-        
-        augmented = tokens.clone()
-        mask_indices = []
-        
-        # ── Global augmentation parameters (sampled once per sequence) ──────────
-        
-        # Transposition: uniform integer in [-range, +range] semitones
+    def _sample_augmentation_params(self):
+        """Sample per-sequence augmentation parameters once so inputs/labels stay aligned."""
         transpose_shift = 0
         if self.transpose_range_semitones > 0:
             transpose_shift = torch.randint(
@@ -178,11 +140,34 @@ class TokenizedDataset(Dataset):
                 self.transpose_range_semitones + 1,
                 (1,)
             ).item()
-        
-        # Tempo scaling: λ ~ U(1 - range, 1 + range)
+
         tempo_factor = 1.0
         if self.tempo_scale_range > 0.0:
             tempo_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.tempo_scale_range
+
+        return transpose_shift, tempo_factor
+
+    def _augment_sequence(self, tokens, transpose_shift=0, tempo_factor=1.0,
+                          apply_timing_augmentation=True):
+        """Apply sequence augmentation with shared per-sequence parameters.
+
+        Transposition is always applied when `transpose_shift != 0`. Timing
+        perturbations (tempo scaling, onset jitter, duration jitter) can be
+        toggled independently so inputs and labels can share pitch
+        transposition while only inputs receive timing noise.
+
+        Returns:
+            augmented_tokens: Tensor of augmented token ids
+        """
+        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST, VOCAB_SIZE,
+                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
+                                        TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
+        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
+        
+        if not self.is_training:
+            return tokens.clone()
+        
+        augmented = tokens.clone()
         
         MIDI_MIN, MIDI_MAX = 0, MAX_PITCH - 1  # 0..127
         
@@ -230,7 +215,7 @@ class TokenizedDataset(Dataset):
             
             if is_event_triplet:
                 # Apply global augmentations and write back immediately
-                if tempo_factor != 1.0:
+                if apply_timing_augmentation and tempo_factor != 1.0:
                     tok0 = _scale_time(tok0, TIME_OFFSET)
                     tok1 = _scale_dur(tok1, DUR_OFFSET)
                 if transpose_shift != 0 and tok2 != REST:
@@ -249,7 +234,7 @@ class TokenizedDataset(Dataset):
         # ── Pass 2: compute IOI-jittered onset times for control triplets ────────
         # ô_{i+1} - ô_i = (o_{i+1} - o_i) · N(1, std²)
         new_ctrl_times = None
-        if self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
+        if apply_timing_augmentation and self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
             raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
             new_t = float(raw_times[0])  # first onset unchanged
             jittered = [new_t]
@@ -267,51 +252,120 @@ class TokenizedDataset(Dataset):
                 tok0 = ATIME_OFFSET + new_ctrl_times[k]
             
             # Duration jitter: scale by U(1 - range, 1 + range) per note
-            if self.dur_jitter_range > 0:
+            if apply_timing_augmentation and self.dur_jitter_range > 0:
                 d_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
                 base_dur = tok1 - ADUR_OFFSET
                 tok1 = ADUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * d_factor))))
             
             # Global tempo scaling (applied after local jitter)
-            if tempo_factor != 1.0:
+            if apply_timing_augmentation and tempo_factor != 1.0:
                 tok0 = _scale_time(tok0, ATIME_OFFSET)
                 tok1 = _scale_dur(tok1, ADUR_OFFSET)
             
             # Global transposition
             if transpose_shift != 0:
                 tok2 = _transpose_note(tok2, ANOTE_OFFSET)
-            
-            # Masking
-            if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
-                mask_indices.extend([pos_i, pos_i + 1, pos_i + 2])
-            
+
             augmented[pos_i] = tok0
             augmented[pos_i + 1] = tok1
             augmented[pos_i + 2] = tok2
         
-        return augmented, mask_indices
+        return augmented
+
+    def _sample_score_mask(self, tokens):
+        """Mask score/event triplets in the context by zeroing their token embeddings."""
+        from anticipation.vocab import CONTROL_OFFSET, REST
+
+        score_mask = torch.zeros_like(tokens, dtype=torch.bool)
+        if not self.is_training or self.mask_prob <= 0:
+            return score_mask
+
+        score_triplet_starts = []
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_score_triplet = (
+                tok0 < CONTROL_OFFSET and
+                tok1 < CONTROL_OFFSET and
+                tok2 < CONTROL_OFFSET and
+                tok2 != REST
+            )
+
+            if is_score_triplet:
+                score_triplet_starts.append(i)
+                i += 3
+            else:
+                i += 1
+
+        if not score_triplet_starts:
+            return score_mask
+
+        num_to_mask = int(round(len(score_triplet_starts) * self.mask_prob))
+        num_to_mask = max(0, min(len(score_triplet_starts), num_to_mask))
+        if num_to_mask == 0:
+            return score_mask
+
+        selected = torch.randperm(len(score_triplet_starts))[:num_to_mask]
+        for idx in selected.tolist():
+            start = score_triplet_starts[idx]
+            score_mask[start:start + 3] = True
+
+        return score_mask
     
     def __getitem__(self, idx):
         tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
-        
-        # Apply on-the-fly augmentation (time perturbation + masking)
-        augmented_tokens, mask_idxs = self._augment_sequence(tokens)
+
+        no_augmentation = (
+            not self.is_training or (
+                self.onset_jitter_std == 0 and
+                self.dur_jitter_range == 0 and
+                self.mask_prob == 0 and
+                self.transpose_range_semitones == 0 and
+                self.tempo_scale_range == 0.0
+            )
+        )
+
+        if no_augmentation:
+            augmented_tokens = tokens.clone()
+            labels = tokens.clone()
+        else:
+            transpose_shift, tempo_factor = self._sample_augmentation_params()
+
+            # Inputs get timing perturbations.
+            augmented_tokens = self._augment_sequence(
+                tokens,
+                transpose_shift=transpose_shift,
+                tempo_factor=tempo_factor,
+                apply_timing_augmentation=True,
+            )
+
+            # Labels stay on the clean timing grid but share the same transposition.
+            labels = self._augment_sequence(
+                tokens,
+                transpose_shift=transpose_shift,
+                tempo_factor=tempo_factor,
+                apply_timing_augmentation=False,
+            )
+
+        score_mask = self._sample_score_mask(augmented_tokens)
         
         # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
         from anticipation.vocab import VOCAB_SIZE
         augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
+        labels = torch.clamp(labels, 0, VOCAB_SIZE - 1)
         
-        # Create attention mask (1 = attend, 0 = mask)
+        # Attention remains dense; score masking is applied by zeroing embeddings.
         attention_mask = torch.ones_like(augmented_tokens)
-        if mask_idxs:
-            attention_mask[mask_idxs] = 0
-        
-        # Create labels (exclude masked positions from loss)
-        labels = augmented_tokens.clone()
-        if mask_idxs:
-            labels[mask_idxs] = -100
-        
-        return {"input_ids": augmented_tokens, "attention_mask": attention_mask, "labels": labels}
+
+        return {
+            "input_ids": augmented_tokens,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "score_mask": score_mask,
+        }
 
 
 class CurriculumDataset(Dataset):
@@ -362,6 +416,30 @@ class CurriculumDataset(Dataset):
             return self.atepp[int(self._atepp_idx[idx])]
 
 
+def _get_input_embedding_layer(model):
+    """Access input embeddings on plain or wrapped models."""
+    if hasattr(model, "get_input_embeddings"):
+        return model.get_input_embeddings()
+    if hasattr(model, "module") and hasattr(model.module, "get_input_embeddings"):
+        return model.module.get_input_embeddings()
+    raise AttributeError("Model does not expose get_input_embeddings()")
+
+
+def forward_batch(model, batch):
+    """Run the model, zeroing masked score-token embeddings in the input context."""
+    input_ids = batch["input_ids"]
+    attention_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    score_mask = batch.get("score_mask")
+
+    if score_mask is None or not torch.any(score_mask).item():
+        return model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+
+    inputs_embeds = _get_input_embedding_layer(model)(input_ids)
+    inputs_embeds = inputs_embeds.masked_fill(score_mask.unsqueeze(-1), 0.0)
+    return model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+
+
 def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
     """Calculate validation loss and pitch accuracy on a dataset
     
@@ -409,7 +487,7 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             batches_processed += 1
             if batches_processed > len(selected_indices):
                 break
-            outputs = model(**batch)
+            outputs = forward_batch(model, batch)
             loss = outputs.loss
             logits = outputs.logits
             
@@ -646,7 +724,8 @@ def main():
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
     parser.add_argument('--dur_jitter_range', type=float, default=0.1,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0, help='Probability of masking control triplets (training only, 0.0 to 1.0)')
+    parser.add_argument('--mask_prob', type=float, default=0.75,
+                        help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only, 0.0 to 1.0)')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
@@ -686,7 +765,13 @@ def main():
             input_ids = torch.stack([item["input_ids"] for item in batch])
             attention_mask = torch.stack([item["attention_mask"] for item in batch])
             labels = torch.stack([item["labels"] for item in batch])
-            return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+            score_mask = torch.stack([item["score_mask"] for item in batch])
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
+                "score_mask": score_mask,
+            }
 
         dataset_kwargs = dict(
             onset_jitter_std=args.onset_jitter_std,
@@ -863,7 +948,7 @@ def main():
                     try:
                         with accelerator.accumulate(model):
                             # Forward pass with gradient scaling
-                            outputs = model(**batch)
+                            outputs = forward_batch(model, batch)
                             loss = outputs.loss
                             
                             # Check for NaN loss
@@ -879,7 +964,7 @@ def main():
                             # Only update optimizer and scheduler when gradients are synchronized
                             if accelerator.sync_gradients:
                                 # Gradient clipping - industry standard value
-                                accelerator.clip_grad_norm_(model.parameters(), max_norm=2.0)
+                                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
                                 
                                 # Check for NaN in gradients
                                 has_nan_grads = False
