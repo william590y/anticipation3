@@ -29,7 +29,7 @@ from alignment import align_tokens2, load_annotation_file
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Number of parallel workers
-NUM_WORKERS = 200
+NUM_WORKERS = os.cpu_count()
 
 # Dataset paths
 ASAP_PATH = 'asap-dataset-master'
