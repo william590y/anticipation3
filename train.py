@@ -961,6 +961,8 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         completed_steps = 0
         micro_batches_seen = 0
+        accumulation_loss_sum = 0.0
+        accumulation_loss_count = 0
         
         # Lists to track losses and metrics
         train_losses = []
@@ -987,22 +989,27 @@ def main():
                             loss = outputs.loss
                             micro_batches_seen += 1
                             
-                            if accelerator.is_local_main_process:
-                                accumulation_step = (
-                                    (micro_batches_seen - 1) % args.gradient_accumulation_steps
-                                ) + 1
-                                progress_bar.set_postfix(
-                                    loss=f"{loss.item():.4f}",
-                                    accum=f"{accumulation_step}/{args.gradient_accumulation_steps}",
-                                    opt_step=completed_steps,
-                                )
-                            
                             # Check for NaN loss
                             if torch.isnan(loss).any() or torch.isinf(loss).any():
                                 print(f"WARNING: NaN or Inf loss detected: {loss.item()}")
                                 # Skip this backward pass
                                 optimizer.zero_grad(set_to_none=True)
+                                accumulation_loss_sum = 0.0
+                                accumulation_loss_count = 0
                                 continue
+
+                            accumulation_loss_sum += loss.detach().item()
+                            accumulation_loss_count += 1
+
+                            if accelerator.is_local_main_process:
+                                accumulation_step = (
+                                    (micro_batches_seen - 1) % args.gradient_accumulation_steps
+                                ) + 1
+                                progress_bar.set_postfix(
+                                    loss=f"{(accumulation_loss_sum / accumulation_loss_count):.4f}",
+                                    accum=f"{accumulation_step}/{args.gradient_accumulation_steps}",
+                                    opt_step=completed_steps,
+                                )
                                 
                             # Backward pass
                             accelerator.backward(loss)
@@ -1023,16 +1030,32 @@ def main():
                                 if has_nan_grads:
                                     print("Skipping update due to NaN gradients")
                                     optimizer.zero_grad(set_to_none=True)
+                                    accumulation_loss_sum = 0.0
+                                    accumulation_loss_count = 0
                                     continue
                                 
                                 # Only update optimizer and scheduler here
                                 optimizer.step()
                                 scheduler.step()
                                 optimizer.zero_grad(set_to_none=True)
-                                reduced_loss = accelerator.reduce(
-                                    loss.detach(),
-                                    reduction="mean",
-                                ).item()
+                                accumulation_loss_metrics = torch.tensor(
+                                    [
+                                        accumulation_loss_sum,
+                                        float(accumulation_loss_count),
+                                    ],
+                                    dtype=torch.float64,
+                                    device=accelerator.device,
+                                )
+                                global_accumulation_loss_metrics = accelerator.reduce(
+                                    accumulation_loss_metrics,
+                                    reduction="sum",
+                                )
+                                reduced_loss = (
+                                    global_accumulation_loss_metrics[0].item()
+                                    / max(global_accumulation_loss_metrics[1].item(), 1.0)
+                                )
+                                accumulation_loss_sum = 0.0
+                                accumulation_loss_count = 0
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
@@ -1145,6 +1168,8 @@ def main():
                             print(f"NaN/Inf error: {str(e)}")
                             print("Trying to recover by skipping this batch...")
                             optimizer.zero_grad(set_to_none=True)
+                            accumulation_loss_sum = 0.0
+                            accumulation_loss_count = 0
                             continue
                         else:
                             print(f"Runtime error: {str(e)}")
