@@ -9,11 +9,10 @@ This combines both datasets:
 Score normalization ENFORCES 0.5 second beat spacing regardless of original tempo.
 Performance/control times preserve original tempo but are shifted to start at 0.
 
-Uses parallel processing with configurable worker count.
+Uses parallel processing with 128 workers for efficiency.
 """
 
 import os
-import argparse
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
@@ -24,12 +23,6 @@ import tempfile
 import re
 import unicodedata
 import warnings
-from pathlib import Path
-
-try:
-    import resource
-except ImportError:
-    resource = None
 
 from anticipation.config import *
 from anticipation.vocab import *
@@ -41,8 +34,7 @@ from alignment import align_tokens2, load_annotation_file
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Number of parallel workers
-DEFAULT_NUM_WORKERS = os.cpu_count() or 1
-NUM_WORKERS = DEFAULT_NUM_WORKERS
+NUM_WORKERS = 200
 
 # Dataset paths
 ASAP_PATH = 'asap-dataset-master'
@@ -52,12 +44,12 @@ ATEPP_PATH = 'ATEPP'  # Base folder containing the dataset
 ATEPP_DATA_PATH = os.path.join(ATEPP_PATH, 'ATEPP-1.2')  # Subfolder with actual MIDI/score files
 ATEPP_META_CSV = os.path.join(ATEPP_PATH, 'ATEPP-metadata-1.2.csv')
 # Output paths
-TRAIN_OUTPUT = 'data/train_combined_01b10e4_hybrid.txt'
-TEST_OUTPUT = 'data/test_combined_01b10e4_hybrid.txt'
-SPLIT_FILE = 'data/combined_split_01b10e4_hybrid.txt'
+TRAIN_OUTPUT = 'data/train_combined.txt'
+TEST_OUTPUT = 'data/test_combined.txt'
+SPLIT_FILE = 'data/combined_split.txt'
 # Curriculum learning: separate files by source quality
-TRAIN_ASAP_OUTPUT = 'data/train_asap_01b10e4_hybrid.txt'
-TRAIN_ATEPP_OUTPUT = 'data/train_atepp_01b10e4_hybrid.txt'
+TRAIN_ASAP_OUTPUT = 'data/train_asap.txt'
+TRAIN_ATEPP_OUTPUT = 'data/train_atepp.txt'
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 
@@ -70,84 +62,6 @@ print(f"  Serialized length: {PACKED_SEQUENCE_LENGTH}")
 print(f"  Prefix controls: 33 (fixed)")
 print(f"  Output format: space-separated tokens (one sequence per line)")
 print()
-
-
-def _make_temp_path(final_path):
-    final_path = Path(final_path)
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=final_path.parent,
-        prefix=f"{final_path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as tmp:
-        return Path(tmp.name)
-
-
-def _replace_atomic(temp_path, final_path):
-    os.replace(str(temp_path), str(final_path))
-
-
-def _count_open_file_descriptors():
-    """Best-effort count of open file descriptors on POSIX systems."""
-    proc_fd_dir = Path('/proc/self/fd')
-    if not proc_fd_dir.exists():
-        return None
-
-    try:
-        return len(list(proc_fd_dir.iterdir()))
-    except OSError:
-        return None
-
-
-def _ensure_pool_fd_budget(worker_count, *, per_worker_fds=16, extra_headroom=256):
-    """Raise the soft RLIMIT_NOFILE cap before starting multiprocessing pools.
-
-    Pool startup opens several pipes and sockets per worker. On systems where the
-    shell's soft limit is much lower than the hard limit, pool creation can fail
-    with ``OSError: [Errno 24] Too many open files`` even before any work starts.
-    """
-    if resource is None or not hasattr(resource, 'RLIMIT_NOFILE'):
-        return
-
-    try:
-        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
-    except (OSError, ValueError):
-        return
-
-    open_fds = _count_open_file_descriptors() or 0
-    required_soft_limit = max(
-        soft_limit,
-        4096,
-        open_fds + extra_headroom + (worker_count * per_worker_fds),
-    )
-    target_soft_limit = required_soft_limit
-
-    if hard_limit != resource.RLIM_INFINITY:
-        target_soft_limit = min(target_soft_limit, hard_limit)
-
-    if hard_limit != resource.RLIM_INFINITY and hard_limit < required_soft_limit:
-        print(
-            "WARNING: RLIMIT_NOFILE hard limit may still be too low for "
-            f"{worker_count} workers (required about {required_soft_limit}, "
-            f"hard limit is {hard_limit})"
-        )
-
-    if target_soft_limit <= soft_limit:
-        return
-
-    try:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (target_soft_limit, hard_limit))
-        hard_display = 'unlimited' if hard_limit == resource.RLIM_INFINITY else str(hard_limit)
-        print(
-            f"Raised RLIMIT_NOFILE soft limit from {soft_limit} to "
-            f"{target_soft_limit} (hard limit: {hard_display})"
-        )
-    except (OSError, ValueError) as exc:
-        print(
-            "WARNING: unable to raise RLIMIT_NOFILE soft limit "
-            f"from {soft_limit} to {target_soft_limit}: {exc}"
-        )
 
 # ============================================================================
 # Composition Key Extraction
@@ -480,8 +394,7 @@ print()
 
 # Write split information
 print(f"Writing split information to {SPLIT_FILE}...")
-split_tmp = _make_temp_path(SPLIT_FILE)
-with open(split_tmp, 'w') as f:
+with open(SPLIT_FILE, 'w') as f:
     f.write(f"# Total pieces: {len(all_datafiles)} (train: {len(train_pairs)}, test: {len(test_pairs)})\n")
     f.write(f"# ASAP pieces: {len(asap_datafiles)}\n")
     f.write(f"# ATEPP pieces: {len(atepp_datafiles)}\n\n")
@@ -494,7 +407,7 @@ with open(split_tmp, 'w') as f:
     for piece_name in sorted(test_piece_names):
         f.write(f"./{piece_name}\n")
 
-print(f"Split file staged at temporary path for {SPLIT_FILE}\n")
+print(f"Split file written: {SPLIT_FILE}\n")
 
 
 # ============================================================================
@@ -849,24 +762,8 @@ def process_single_piece(filegroup):
 # ============================================================================
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--num_workers',
-        type=int,
-        default=DEFAULT_NUM_WORKERS,
-        help='Worker processes for tokenization',
-    )
-    args = parser.parse_args()
-    worker_count = max(1, args.num_workers)
-    _ensure_pool_fd_budget(worker_count)
-
-    print(f"Using {worker_count} worker processes for tokenization")
     print("Processing training set...")
     os.makedirs('data', exist_ok=True)
-    train_output_tmp = _make_temp_path(TRAIN_OUTPUT)
-    train_asap_tmp = _make_temp_path(TRAIN_ASAP_OUTPUT)
-    train_atepp_tmp = _make_temp_path(TRAIN_ATEPP_OUTPUT)
-    test_output_tmp = _make_temp_path(TEST_OUTPUT)
     
     train_sequences_total = 0
     train_pieces_success = 0
@@ -874,10 +771,10 @@ if __name__ == '__main__':
     train_asap_success = 0
     train_atepp_success = 0
     
-    with open(train_output_tmp, 'w') as f_train, \
-         open(train_asap_tmp, 'w') as f_asap, \
-         open(train_atepp_tmp, 'w') as f_atepp:
-        with Pool(processes=worker_count) as pool:
+    with open(TRAIN_OUTPUT, 'w') as f_train, \
+         open(TRAIN_ASAP_OUTPUT, 'w') as f_asap, \
+         open(TRAIN_ATEPP_OUTPUT, 'w') as f_atepp:
+        with Pool(processes=NUM_WORKERS) as pool:
             with tqdm(total=len(train_pairs), desc='Train', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, train_pairs):
                     if count > 0:
@@ -908,8 +805,8 @@ if __name__ == '__main__':
     test_asap_success = 0
     test_atepp_success = 0
     
-    with open(test_output_tmp, 'w') as f_test:
-        with Pool(processes=worker_count) as pool:
+    with open(TEST_OUTPUT, 'w') as f_test:
+        with Pool(processes=NUM_WORKERS) as pool:
             with tqdm(total=len(test_pairs), desc='Test', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, test_pairs):
                     if count > 0:
@@ -924,12 +821,6 @@ if __name__ == '__main__':
                     else:
                         test_pieces_failed += 1
                     pbar.update(1)
-
-    _replace_atomic(split_tmp, SPLIT_FILE)
-    _replace_atomic(train_output_tmp, TRAIN_OUTPUT)
-    _replace_atomic(train_asap_tmp, TRAIN_ASAP_OUTPUT)
-    _replace_atomic(train_atepp_tmp, TRAIN_ATEPP_OUTPUT)
-    _replace_atomic(test_output_tmp, TEST_OUTPUT)
     
     print(f"Test: {test_sequences_total} sequences from {test_pieces_success} pieces ({test_asap_success} ASAP, {test_atepp_success} ATEPP), {test_pieces_failed} failed")
     

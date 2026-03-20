@@ -15,8 +15,6 @@ import traceback
 import matplotlib.pyplot as plt
 from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
 
-DEFAULT_NUM_WORKERS = 32
-
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
     if torch.cuda.is_available():
@@ -37,7 +35,7 @@ def check_model_for_nans(model):
 if torch.cuda.is_available():
     device = torch.device("cuda")
     device_count = torch.cuda.device_count()
-    print(f"CUDA is available with {device_count} device(s)")
+    print(f"✓ CUDA is available with {device_count} device(s)")
     for i in range(device_count):
         device_name = torch.cuda.get_device_name(i)
         print(f"  Device {i}: {device_name}")
@@ -46,7 +44,7 @@ if torch.cuda.is_available():
         print(f"    - CUDA capability: {props.major}.{props.minor}")
 else:
     device = torch.device("cpu")
-    print("CUDA is not available! Training will be much slower on CPU.")
+    print("✗ CUDA is not available! Training will be much slower on CPU.")
 
 # Explicitly print which device we're using
 print(f"Using device: {device}")
@@ -111,7 +109,7 @@ class TokenizedDataset(Dataset):
         if self.is_training:
             print(f"  Training mode: onset_jitter_std={self.onset_jitter_std} (N(1,std²) IOI scaling), "
                   f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
-                  f"mask_prob={self.mask_prob} (score-history triplet dropout), "
+                  f"mask_prob={self.mask_prob}, "
                   f"transpose_range={self.transpose_range_semitones} semitones, "
                   f"tempo_scale_range=U(1±{self.tempo_scale_range})")
         else:
@@ -146,17 +144,13 @@ class TokenizedDataset(Dataset):
             Each inter-onset interval is scaled by an independent Gaussian factor.
             Requires a two-pass approach: collect all onsets first, then reconstruct.
           - Duration jitter: each note duration scaled by U(1-range, 1+range).
-        Local augmentation on score/output tokens:
-          - Score-history dropout: replace prior score triplets with dedicated
-            slot-specific mask tokens while preserving their labels.
+          - Masking: randomly suppress triplets from attention/loss.
         
         Returns:
-            augmented_inputs: Tensor of augmented token ids for model input
-            augmented_targets: Tensor of augmented token ids before history dropout
-            concealed_indices: List of score-token positions replaced for history dropout
+            augmented_tokens: Tensor of augmented token ids
+            mask_indices: List of positions to exclude from attention and loss
         """
-        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST,
-                                        TIME_MASK, DUR_MASK, NOTE_MASK,
+        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, REST, VOCAB_SIZE,
                                         ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET,
                                         TIME_OFFSET, DUR_OFFSET, NOTE_OFFSET)
         from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR, MAX_PITCH
@@ -169,11 +163,10 @@ class TokenizedDataset(Dataset):
             self.tempo_scale_range == 0.0
         )
         if not self.is_training or no_augmentation:
-            cloned = tokens.clone()
-            return cloned, cloned.clone(), []
+            return tokens.clone(), []
         
         augmented = tokens.clone()
-        concealed_indices = []
+        mask_indices = []
         
         # ── Global augmentation parameters (sampled once per sequence) ──────────
         
@@ -288,50 +281,35 @@ class TokenizedDataset(Dataset):
             if transpose_shift != 0:
                 tok2 = _transpose_note(tok2, ANOTE_OFFSET)
             
+            # Masking
+            if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
+                mask_indices.extend([pos_i, pos_i + 1, pos_i + 2])
+            
             augmented[pos_i] = tok0
             augmented[pos_i + 1] = tok1
             augmented[pos_i + 2] = tok2
         
-        augmented_targets = augmented.clone()
-
-        if self.mask_prob > 0:
-            i = ALTERNATING_START
-            while i < len(augmented) - 2:
-                tok0 = augmented[i].item()
-                tok1 = augmented[i + 1].item()
-                tok2 = augmented[i + 2].item()
-
-                is_score_triplet = (
-                    tok0 < CONTROL_OFFSET and
-                    tok1 < CONTROL_OFFSET and
-                    tok2 < CONTROL_OFFSET and
-                    tok2 != REST
-                )
-
-                if is_score_triplet and torch.rand(1).item() < self.mask_prob:
-                    augmented[i] = TIME_MASK
-                    augmented[i + 1] = DUR_MASK
-                    augmented[i + 2] = NOTE_MASK
-                    concealed_indices.extend((i, i + 1, i + 2))
-                i += 3
-        
-        return augmented, augmented_targets, concealed_indices
+        return augmented, mask_indices
     
     def __getitem__(self, idx):
         tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
         
         # Apply on-the-fly augmentation (time perturbation + masking)
-        augmented_tokens, augmented_labels, _concealed_idxs = self._augment_sequence(tokens)
+        augmented_tokens, mask_idxs = self._augment_sequence(tokens)
         
         # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
         from anticipation.vocab import VOCAB_SIZE
         augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
         
-        # Keep all positions active; concealed history uses a placeholder token.
+        # Create attention mask (1 = attend, 0 = mask)
         attention_mask = torch.ones_like(augmented_tokens)
+        if mask_idxs:
+            attention_mask[mask_idxs] = 0
         
-        # Supervise the augmented sequence; only score-history dropout corrupts inputs.
-        labels = augmented_labels
+        # Create labels (exclude masked positions from loss)
+        labels = augmented_tokens.clone()
+        if mask_idxs:
+            labels[mask_idxs] = -100
         
         return {"input_ids": augmented_tokens, "attention_mask": attention_mask, "labels": labels}
 
@@ -398,12 +376,12 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
         tuple: (avg_loss, teacher_forced_pitch_accuracy, autoregressive_pitch_accuracy)
     """
     model.eval()
-    local_total_loss = 0.0
-    local_total_samples = 0
+    total_loss = 0
+    total_samples = 0
     
     # For teacher-forced pitch accuracy: track predictions on score note tokens
-    local_correct_pitches = 0
-    local_total_pitches = 0
+    correct_pitches = 0
+    total_pitches = 0
     
     from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET, REST
     import random
@@ -423,14 +401,7 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     
     batches_processed = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(
-            tqdm(
-                dataloader,
-                desc="Evaluating",
-                leave=False,
-                disable=not accelerator.is_local_main_process,
-            )
-        ):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating", leave=False)):
             # Only process selected batches
             if batch_idx not in selected_indices:
                 continue
@@ -449,8 +420,8 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             batch_size = input_ids.size(0)
             
             # Accumulate loss (weighted by batch size)
-            local_total_loss += loss.item() * batch_size
-            local_total_samples += batch_size
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
             
             # Calculate pitch accuracy on score note tokens (position 2 of score triplets)
             # Score triplets have all tokens < CONTROL_OFFSET
@@ -479,37 +450,14 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                             
                             # Check if prediction matches ground truth
                             if predicted_token == true_token:
-                                local_correct_pitches += 1
-                            local_total_pitches += 1
+                                correct_pitches += 1
+                            total_pitches += 1
                     
                     # Always move in steps of 3 to maintain triplet alignment
                     i += 3
     
-    local_teacher_forced_metrics = torch.tensor(
-        [
-            local_total_loss,
-            float(local_total_samples),
-            float(local_correct_pitches),
-            float(local_total_pitches),
-        ],
-        dtype=torch.float64,
-        device=accelerator.device,
-    )
-    gathered_teacher_forced_metrics = accelerator.gather_for_metrics(local_teacher_forced_metrics)
-    if gathered_teacher_forced_metrics.ndim == 1:
-        global_teacher_forced_metrics = gathered_teacher_forced_metrics
-    else:
-        global_teacher_forced_metrics = gathered_teacher_forced_metrics.sum(dim=0)
-
-    global_total_loss = global_teacher_forced_metrics[0].item()
-    global_total_samples = int(global_teacher_forced_metrics[1].item())
-    global_correct_pitches = int(global_teacher_forced_metrics[2].item())
-    global_total_pitches = int(global_teacher_forced_metrics[3].item())
-
-    avg_loss = global_total_loss / global_total_samples if global_total_samples > 0 else 0.0
-    teacher_forced_accuracy = (
-        global_correct_pitches / global_total_pitches if global_total_pitches > 0 else 0.0
-    )
+    avg_loss = total_loss / total_samples
+    teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
     
     # Autoregressive evaluation: use performance (control) to generate score
     # Format: control+rest pairs + alternating score/control
@@ -518,44 +466,20 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     autoregressive_total = 0
     
     if autoregressive_samples > 0:
-        # Sample validation sequences across the whole dataset instead of taking the
-        # file head, which can be biased by tokenization/write order.
+        # Collect a few sequences for autoregressive evaluation
         all_sequences = []
-        dataset = getattr(dataloader, "dataset", None)
-        if dataset is not None and hasattr(dataset, "__len__") and hasattr(dataset, "__getitem__"):
-            seq_count = len(dataset)
-            if seq_count > 0:
-                sample_count = min(autoregressive_samples, seq_count)
-                rng = random.Random(0)
-                sampled_indices = rng.sample(range(seq_count), sample_count)
-                # Shard sampled indices across processes so autoregressive eval runs in parallel.
-                local_sampled_indices = sampled_indices[
-                    accelerator.process_index::accelerator.num_processes
-                ]
-                for idx in local_sampled_indices:
-                    all_sequences.append(dataset[idx]["input_ids"])
-        else:
-            # Fallback for unusual dataloaders without a readable dataset.
-            seen_sequences = 0
-            with torch.no_grad():
-                for batch in dataloader:
-                    input_ids = batch["input_ids"]
-                    for seq in input_ids:
-                        if seen_sequences % accelerator.num_processes == accelerator.process_index:
-                            all_sequences.append(seq)
-                        seen_sequences += 1
-                        if len(all_sequences) >= autoregressive_samples:
-                            break
+        with torch.no_grad():
+            for batch in dataloader:
+                input_ids = batch["input_ids"]
+                for seq in input_ids:
+                    all_sequences.append(seq)
                     if len(all_sequences) >= autoregressive_samples:
                         break
+                if len(all_sequences) >= autoregressive_samples:
+                    break
         
-        # Run autoregressive generation on each sampled sequence
-        for seq in tqdm(
-            all_sequences,
-            desc="Autoregressive eval",
-            leave=False,
-            disable=not accelerator.is_local_main_process,
-        ):
+        # Run autoregressive generation on each sequence
+        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
             # Sequence format: [control+rest pairs (positions 0-197), alternating score/control (198+)]
             # We want to use the control tokens as context and generate the score tokens
             
@@ -621,33 +545,15 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     context.append(seq[pos].item())
                     pos += 1
     
-    local_autoregressive_metrics = torch.tensor(
-        [float(autoregressive_correct), float(autoregressive_total)],
-        dtype=torch.float64,
-        device=accelerator.device,
-    )
-    gathered_autoregressive_metrics = accelerator.gather_for_metrics(local_autoregressive_metrics)
-    if gathered_autoregressive_metrics.ndim == 1:
-        global_autoregressive_metrics = gathered_autoregressive_metrics
-    else:
-        global_autoregressive_metrics = gathered_autoregressive_metrics.sum(dim=0)
-
-    global_autoregressive_correct = int(global_autoregressive_metrics[0].item())
-    global_autoregressive_total = int(global_autoregressive_metrics[1].item())
-    autoregressive_accuracy = (
-        global_autoregressive_correct / global_autoregressive_total
-        if global_autoregressive_total > 0
-        else 0.0
-    )
+    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
 
     # #region agent log
-    if accelerator.is_main_process:
-        _debug_log_path = os.path.join(os.path.dirname(__file__), "debug-e30de5.log")
-        try:
-            with open(_debug_log_path, "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId": "e30de5", "timestamp": time.time() * 1000, "location": "train.py:evaluate_model", "message": "train_ar_metrics", "data": {"protocol": "train_gt_control", "uses_gt_control": True, "autoregressive_correct": global_autoregressive_correct, "autoregressive_total": global_autoregressive_total, "autoregressive_acc_pct": round(autoregressive_accuracy * 100, 2)}, "hypothesisId": "A"}) + "\n")
-        except Exception:
-            pass
+    _debug_log_path = os.path.join(os.path.dirname(__file__), "debug-e30de5.log")
+    try:
+        with open(_debug_log_path, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId": "e30de5", "timestamp": time.time() * 1000, "location": "train.py:evaluate_model", "message": "train_ar_metrics", "data": {"protocol": "train_gt_control", "uses_gt_control": True, "autoregressive_correct": autoregressive_correct, "autoregressive_total": autoregressive_total, "autoregressive_acc_pct": round(autoregressive_accuracy * 100, 2)}, "hypothesisId": "A"}) + "\n")
+    except Exception:
+        pass
     # #endregion
 
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
@@ -716,16 +622,16 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined_01b10e4_hybrid.txt'))
-    parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined_01b10e4_hybrid.txt'))
-    parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap_01b10e4_hybrid.txt'),
+    parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
+    parser.add_argument('--val_file', type=Path, default=Path('./data/test_combined.txt'))
+    parser.add_argument('--asap_file', type=Path, default=Path('./data/train_asap.txt'),
                         help='ASAP-only training sequences (high quality, used at end of curriculum)')
-    parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp_01b10e4_hybrid.txt'),
+    parser.add_argument('--atepp_file', type=Path, default=Path('./data/train_atepp.txt'),
                         help='ATEPP-only training sequences (low quality, used at start of curriculum)')
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./model_01b10e4_hybrid'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./cleaned_model_march'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -733,26 +639,18 @@ def main():
     parser.add_argument('--max_steps', type=int, default=4000)
     parser.add_argument('--save_steps', type=int, default=250)
     parser.add_argument('--eval_steps', type=int, default=100)
-    parser.add_argument(
-        '--log_every_steps',
-        type=int,
-        default=1,
-        help='Print training loss every N optimizer steps (default: 1)',
-    )
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--onset_jitter_std', type=float, default=0.1,
+    parser.add_argument('--onset_jitter_std', type=float, default=0.05,
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
-    parser.add_argument('--dur_jitter_range', type=float, default=0.1,
+    parser.add_argument('--dur_jitter_range', type=float, default=0.05,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0.0, help='Probability of concealing prior score/output triplets during training (0.0 to 1.0)')
+    parser.add_argument('--mask_prob', type=float, default=.3, help='Probability of masking control triplets (training only, 0.0 to 1.0)')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
                         help='Tempo scale half-range: lambda ~ U(1-range, 1+range), e.g. 0.2 gives U(0.8,1.2) (training only)')
-    parser.add_argument('--num_workers', type=int, default=DEFAULT_NUM_WORKERS,
-                        help='DataLoader worker processes')
     args = parser.parse_args()
     
     # Override device if requested
@@ -763,11 +661,6 @@ def main():
     
     print(f"Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"Final device confirmation: {device}")
-    print(
-        f"Training loss will be printed every {args.log_every_steps} optimizer step(s) "
-        f"({args.log_every_steps * args.gradient_accumulation_steps} micro-batch(es) "
-        f"with gradient accumulation)."
-    )
     
     try:
         # Initialize accelerator with memory optimization if requested
@@ -820,14 +713,8 @@ def main():
             asap_dataset = TokenizedDataset(args.asap_file, **dataset_kwargs)
             print(f"  Loading ATEPP dataset (low  quality) from {args.atepp_file}...")
             atepp_dataset = TokenizedDataset(args.atepp_file, **dataset_kwargs)
-            # Cover the full global training run so one logical pass spans all
-            # micro-batches across every distributed process.
-            total_samples = (
-                args.max_steps
-                * args.gradient_accumulation_steps
-                * args.batch_size
-                * accelerator.num_processes
-            )
+            # total_samples covers the full training run so one dataloader pass = full training
+            total_samples = args.max_steps * args.gradient_accumulation_steps * args.batch_size
             train_dataset = CurriculumDataset(asap_dataset, atepp_dataset, total_samples)
             shuffle_train = False  # order must be preserved for curriculum
         else:
@@ -835,17 +722,13 @@ def main():
             train_dataset = TokenizedDataset(args.data_file, **dataset_kwargs)
             shuffle_train = True
 
-        dataloader_kwargs = dict(
-            collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=args.num_workers,
-        )
-
         train_dataloader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
             shuffle=shuffle_train,
-            **dataloader_kwargs,
+            collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available() and not args.force_cpu,
+            num_workers=32,
         )
         
         # Load validation dataset (NO augmentation)
@@ -859,7 +742,9 @@ def main():
             val_dataset, 
             batch_size=args.val_batch_size,
             shuffle=False,  # No need to shuffle validation data
-            **dataloader_kwargs,
+            collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available() and not args.force_cpu,
+            num_workers=32,
         )
         
         # Load model with memory optimizations
@@ -897,9 +782,9 @@ def main():
         if current_vocab_size != VOCAB_SIZE:
             print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE}")
             model.resize_token_embeddings(VOCAB_SIZE)
-            print("Model embeddings resized successfully")
+            print(f"✓ Model embeddings resized successfully")
         else:
-            print(f"Model vocabulary size matches tokenization ({VOCAB_SIZE})")
+            print(f"✓ Model vocabulary size matches tokenization ({VOCAB_SIZE})")
         
         # Check memory after loading model
         print("GPU memory after loading model:")
@@ -954,15 +839,13 @@ def main():
         if torch.cuda.is_available():
             print("Clearing CUDA cache before training")
             torch.cuda.empty_cache()
+            torch.cuda.set_device(0)
         
         # Training loop
         print("Starting training...")
         model.train()
-        optimizer.zero_grad(set_to_none=True)
         completed_steps = 0
-        micro_batches_seen = 0
-        accumulation_loss_sum = 0.0
-        accumulation_loss_count = 0
+        step = 0
         
         # Lists to track losses and metrics
         train_losses = []
@@ -972,12 +855,7 @@ def main():
         validation_steps = []
         
         # Use standard tqdm with disable=False to ensure it always displays
-        progress_bar = tqdm(
-            total=args.max_steps,
-            desc="Training",
-            disable=not accelerator.is_local_main_process,
-        )
-        training_completed = False
+        progress_bar = tqdm(total=args.max_steps, desc="Training", disable=False)
         
         try:
             while completed_steps < args.max_steps:
@@ -987,29 +865,13 @@ def main():
                             # Forward pass with gradient scaling
                             outputs = model(**batch)
                             loss = outputs.loss
-                            micro_batches_seen += 1
                             
                             # Check for NaN loss
                             if torch.isnan(loss).any() or torch.isinf(loss).any():
                                 print(f"WARNING: NaN or Inf loss detected: {loss.item()}")
                                 # Skip this backward pass
-                                optimizer.zero_grad(set_to_none=True)
-                                accumulation_loss_sum = 0.0
-                                accumulation_loss_count = 0
+                                optimizer.zero_grad()
                                 continue
-
-                            accumulation_loss_sum += loss.detach().item()
-                            accumulation_loss_count += 1
-
-                            if accelerator.is_local_main_process:
-                                accumulation_step = (
-                                    (micro_batches_seen - 1) % args.gradient_accumulation_steps
-                                ) + 1
-                                progress_bar.set_postfix(
-                                    loss=f"{(accumulation_loss_sum / accumulation_loss_count):.4f}",
-                                    accum=f"{accumulation_step}/{args.gradient_accumulation_steps}",
-                                    opt_step=completed_steps,
-                                )
                                 
                             # Backward pass
                             accelerator.backward(loss)
@@ -1029,52 +891,26 @@ def main():
                                         
                                 if has_nan_grads:
                                     print("Skipping update due to NaN gradients")
-                                    optimizer.zero_grad(set_to_none=True)
-                                    accumulation_loss_sum = 0.0
-                                    accumulation_loss_count = 0
+                                    optimizer.zero_grad()
                                     continue
                                 
                                 # Only update optimizer and scheduler here
                                 optimizer.step()
                                 scheduler.step()
-                                optimizer.zero_grad(set_to_none=True)
-                                accumulation_loss_metrics = torch.tensor(
-                                    [
-                                        accumulation_loss_sum,
-                                        float(accumulation_loss_count),
-                                    ],
-                                    dtype=torch.float64,
-                                    device=accelerator.device,
-                                )
-                                global_accumulation_loss_metrics = accelerator.reduce(
-                                    accumulation_loss_metrics,
-                                    reduction="sum",
-                                )
-                                reduced_loss = (
-                                    global_accumulation_loss_metrics[0].item()
-                                    / max(global_accumulation_loss_metrics[1].item(), 1.0)
-                                )
-                                accumulation_loss_sum = 0.0
-                                accumulation_loss_count = 0
+                                optimizer.zero_grad()
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
                                 progress_bar.update(1)
-                                train_losses.append(reduced_loss)
                                 
                                 # Log progress
-                                if (
-                                    accelerator.is_main_process
-                                    and (
-                                        completed_steps == 1
-                                        or completed_steps % args.log_every_steps == 0
-                                    )
-                                ):
+                                if completed_steps % 10 == 0:
+                                    # Store the training loss every 10 steps
+                                    train_losses.append(loss.item())
+                                    
                                     # Print more precise learning rate
-                                    tqdm.write(
-                                        f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
-                                        f"LR: {scheduler.get_last_lr()[0]:.8e}"
-                                    )
+                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
+                                          f"LR: {scheduler.get_last_lr()[0]:.8e}")
                                     
                                     # Check for NaN parameters periodically
                                     if check_model_for_nans(model):
@@ -1087,13 +923,13 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    accelerator.print(f"\nRunning validation at step {completed_steps}...")
+                                    print(f"\nRunning validation at step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    validation_steps.append(completed_steps)
+                                    validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)  # Store as percentage
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                    accelerator.print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -1106,21 +942,19 @@ def main():
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    accelerator.print(f"\nRunning validation at checkpoint step {completed_steps}...")
+                                    print(f"\nRunning validation at checkpoint step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    validation_steps.append(completed_steps)
+                                    validation_steps.append(completed_steps // 10)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                    accelerator.print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
                                     
                                     checkpoint_dir = args.output_dir / f"checkpoint-{completed_steps}"
-                                    if accelerator.is_main_process:
-                                        os.makedirs(checkpoint_dir, exist_ok=True)
-                                    accelerator.wait_for_everyone()
+                                    os.makedirs(checkpoint_dir, exist_ok=True)
                                     
                                     # Unwrap model before saving
                                     unwrapped_model = accelerator.unwrap_model(model)
@@ -1129,29 +963,30 @@ def main():
                                         is_main_process=accelerator.is_main_process,
                                         save_function=accelerator.save,
                                     )
-                                    accelerator.wait_for_everyone()
-                                    if accelerator.is_main_process:
-                                        print(f"Saved checkpoint to {checkpoint_dir}")
+                                    print(f"Saved checkpoint to {checkpoint_dir}")
                                     
                                     # Save the losses and metrics so far
-                                    if accelerator.is_main_process:
-                                        np.savez(
-                                            checkpoint_dir / "losses.npz",
-                                            train_losses=np.array(train_losses),
-                                            val_losses=np.array(val_losses),
-                                            val_accuracies=np.array(val_accuracies),
-                                            val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                                            validation_steps=np.array(validation_steps)
-                                        )
-                                        
-                                        # Create and save loss plot
-                                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
+                                    np.savez(
+                                        checkpoint_dir / "losses.npz",
+                                        train_losses=np.array(train_losses),
+                                        val_losses=np.array(val_losses),
+                                        val_accuracies=np.array(val_accuracies),
+                                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                                        validation_steps=np.array(validation_steps)
+                                    )
+                                    
+                                    # Create and save loss plot
+                                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
                                         torch.cuda.empty_cache()
                                         gc.collect()
                             
+                            # Zero gradients even if we don't sync (needed for some accelerator configurations)
+                            if not accelerator.sync_gradients:
+                                optimizer.zero_grad()
+                                
                             # Check if we've reached max steps
                             if completed_steps >= args.max_steps:
                                 break
@@ -1167,16 +1002,12 @@ def main():
                         elif "nan" in str(e).lower() or "inf" in str(e).lower():
                             print(f"NaN/Inf error: {str(e)}")
                             print("Trying to recover by skipping this batch...")
-                            optimizer.zero_grad(set_to_none=True)
-                            accumulation_loss_sum = 0.0
-                            accumulation_loss_count = 0
+                            optimizer.zero_grad()
                             continue
                         else:
                             print(f"Runtime error: {str(e)}")
                             print(traceback.format_exc())
                             raise
-
-            training_completed = completed_steps >= args.max_steps
             
         except Exception as e:
             print(f"Error during training: {e}")
@@ -1186,51 +1017,40 @@ def main():
             # Make sure we always close the progress bar
             progress_bar.close()
             
-            if not training_completed:
-                accelerator.print(
-                    "Skipping final validation/save because training did not complete cleanly."
-                )
-                return
-
-            # Save the final state and generate the final plot after a clean run
+            # Always try to save whatever we have and generate the final plot
             try:
                 # Final validation run
-                accelerator.print("\nRunning final validation...")
+                print("\nRunning final validation...")
                 final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                validation_steps.append(completed_steps)
+                validation_steps.append(completed_steps // 10)
                 val_losses.append(final_val_loss)
                 val_accuracies.append(final_val_acc * 100)
                 val_autoregressive_accuracies.append(final_auto_acc * 100)
-                accelerator.print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
+                print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
                 
                 # Final save
                 final_dir = args.output_dir / "final"
-                if accelerator.is_main_process:
-                    os.makedirs(final_dir, exist_ok=True)
-                accelerator.wait_for_everyone()
+                os.makedirs(final_dir, exist_ok=True)
                 unwrapped_model = accelerator.unwrap_model(model)
                 unwrapped_model.save_pretrained(
                     final_dir,
                     is_main_process=accelerator.is_main_process,
                     save_function=accelerator.save,
                 )
-                accelerator.wait_for_everyone()
-                if accelerator.is_main_process:
-                    print(f"Saved final model to {final_dir}")
+                print(f"Saved final model to {final_dir}")
                 
                 # Save the final losses
-                if accelerator.is_main_process:
-                    np.savez(
-                        final_dir / "losses.npz",
-                        train_losses=np.array(train_losses),
-                        val_losses=np.array(val_losses),
-                        val_accuracies=np.array(val_accuracies),
-                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                        validation_steps=np.array(validation_steps)
-                    )
-                    
-                    # Create and save final loss plot
-                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
+                np.savez(
+                    final_dir / "losses.npz",
+                    train_losses=np.array(train_losses),
+                    val_losses=np.array(val_losses),
+                    val_accuracies=np.array(val_accuracies),
+                    val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                    validation_steps=np.array(validation_steps)
+                )
+                
+                # Create and save final loss plot
+                plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
                 
             except Exception as save_error:
                 print(f"Error saving final model or generating plot: {save_error}")
