@@ -698,6 +698,23 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
     print(f"Training metrics plot saved to {output_dir / 'training_metrics.png'}")
 
 
+def save_training_args(output_dir, args, accelerator=None):
+    """Write the parsed training arguments to a plain-text file."""
+    if accelerator is not None and not accelerator.is_main_process:
+        return
+
+    arg_lines = []
+    for key in sorted(vars(args)):
+        value = getattr(args, key)
+        if isinstance(value, Path):
+            value = str(value)
+        arg_lines.append(f"{key}: {value}")
+
+    args_path = output_dir / "training_args.txt"
+    args_path.write_text("\n".join(arg_lines) + "\n", encoding="utf-8")
+    print(f"Saved training args to {args_path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_combined.txt'))
@@ -709,7 +726,7 @@ def main():
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./recover'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./masked_output'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
@@ -1048,6 +1065,7 @@ def main():
                                         is_main_process=accelerator.is_main_process,
                                         save_function=accelerator.save,
                                     )
+                                    save_training_args(checkpoint_dir, args, accelerator)
                                     print(f"Saved checkpoint to {checkpoint_dir}")
                                     
                                     # Save the losses and metrics so far
@@ -1122,6 +1140,7 @@ def main():
                     is_main_process=accelerator.is_main_process,
                     save_function=accelerator.save,
                 )
+                save_training_args(final_dir, args, accelerator)
                 print(f"Saved final model to {final_dir}")
                 
                 # Save the final losses
