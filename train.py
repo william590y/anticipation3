@@ -820,8 +820,14 @@ def main():
             asap_dataset = TokenizedDataset(args.asap_file, **dataset_kwargs)
             print(f"  Loading ATEPP dataset (low  quality) from {args.atepp_file}...")
             atepp_dataset = TokenizedDataset(args.atepp_file, **dataset_kwargs)
-            # total_samples covers the full training run so one dataloader pass = full training
-            total_samples = args.max_steps * args.gradient_accumulation_steps * args.batch_size
+            # Cover the full global training run so one logical pass spans all
+            # micro-batches across every distributed process.
+            total_samples = (
+                args.max_steps
+                * args.gradient_accumulation_steps
+                * args.batch_size
+                * accelerator.num_processes
+            )
             train_dataset = CurriculumDataset(asap_dataset, atepp_dataset, total_samples)
             shuffle_train = False  # order must be preserved for curriculum
         else:
@@ -829,13 +835,17 @@ def main():
             train_dataset = TokenizedDataset(args.data_file, **dataset_kwargs)
             shuffle_train = True
 
+        dataloader_kwargs = dict(
+            collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available() and not args.force_cpu,
+            num_workers=args.num_workers,
+        )
+
         train_dataloader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
             shuffle=shuffle_train,
-            collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=args.num_workers,
+            **dataloader_kwargs,
         )
         
         # Load validation dataset (NO augmentation)
@@ -849,9 +859,7 @@ def main():
             val_dataset, 
             batch_size=args.val_batch_size,
             shuffle=False,  # No need to shuffle validation data
-            collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=args.num_workers,
+            **dataloader_kwargs,
         )
         
         # Load model with memory optimizations
@@ -950,6 +958,7 @@ def main():
         # Training loop
         print("Starting training...")
         model.train()
+        optimizer.zero_grad(set_to_none=True)
         completed_steps = 0
         micro_batches_seen = 0
         
@@ -991,7 +1000,7 @@ def main():
                             if torch.isnan(loss).any() or torch.isinf(loss).any():
                                 print(f"WARNING: NaN or Inf loss detected: {loss.item()}")
                                 # Skip this backward pass
-                                optimizer.zero_grad()
+                                optimizer.zero_grad(set_to_none=True)
                                 continue
                                 
                             # Backward pass
@@ -1012,18 +1021,22 @@ def main():
                                         
                                 if has_nan_grads:
                                     print("Skipping update due to NaN gradients")
-                                    optimizer.zero_grad()
+                                    optimizer.zero_grad(set_to_none=True)
                                     continue
                                 
                                 # Only update optimizer and scheduler here
                                 optimizer.step()
                                 scheduler.step()
-                                optimizer.zero_grad()
+                                optimizer.zero_grad(set_to_none=True)
+                                reduced_loss = accelerator.reduce(
+                                    loss.detach(),
+                                    reduction="mean",
+                                ).item()
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
                                 progress_bar.update(1)
-                                train_losses.append(loss.item())
+                                train_losses.append(reduced_loss)
                                 
                                 # Log progress
                                 if (
@@ -1035,7 +1048,7 @@ def main():
                                 ):
                                     # Print more precise learning rate
                                     tqdm.write(
-                                        f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
+                                        f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
                                         f"LR: {scheduler.get_last_lr()[0]:.8e}"
                                     )
                                     
@@ -1115,10 +1128,6 @@ def main():
                                         torch.cuda.empty_cache()
                                         gc.collect()
                             
-                            # Zero gradients even if we don't sync (needed for some accelerator configurations)
-                            if not accelerator.sync_gradients:
-                                optimizer.zero_grad()
-                                
                             # Check if we've reached max steps
                             if completed_steps >= args.max_steps:
                                 break
@@ -1134,7 +1143,7 @@ def main():
                         elif "nan" in str(e).lower() or "inf" in str(e).lower():
                             print(f"NaN/Inf error: {str(e)}")
                             print("Trying to recover by skipping this batch...")
-                            optimizer.zero_grad()
+                            optimizer.zero_grad(set_to_none=True)
                             continue
                         else:
                             print(f"Runtime error: {str(e)}")
