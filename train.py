@@ -975,6 +975,7 @@ def main():
             desc="Training",
             disable=not accelerator.is_local_main_process,
         )
+        training_completed = False
         
         try:
             while completed_steps < args.max_steps:
@@ -1149,6 +1150,8 @@ def main():
                             print(f"Runtime error: {str(e)}")
                             print(traceback.format_exc())
                             raise
+
+            training_completed = completed_steps >= args.max_steps
             
         except Exception as e:
             print(f"Error during training: {e}")
@@ -1158,7 +1161,13 @@ def main():
             # Make sure we always close the progress bar
             progress_bar.close()
             
-            # Always try to save whatever we have and generate the final plot
+            if not training_completed:
+                accelerator.print(
+                    "Skipping final validation/save because training did not complete cleanly."
+                )
+                return
+
+            # Save the final state and generate the final plot after a clean run
             try:
                 # Final validation run
                 accelerator.print("\nRunning final validation...")
