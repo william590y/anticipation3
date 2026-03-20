@@ -6,10 +6,10 @@ This combines both datasets:
 - ASAP: Uses beat annotations for precise alignment
 - ATEPP: Uses direct note matching for alignment (for pieces with scores)
 
-Score normalization ENFORCES 1.0 second beat spacing regardless of original tempo.
+Score normalization ENFORCES 0.5 second beat spacing regardless of original tempo.
 Performance/control times preserve original tempo but are shifted to start at 0.
 
-Uses parallel processing with the available CPU workers.
+Uses parallel processing with configurable worker count.
 """
 
 import os
@@ -24,9 +24,7 @@ import tempfile
 import re
 import unicodedata
 import warnings
-import json
 from pathlib import Path
-from functools import lru_cache
 
 from anticipation.config import *
 from anticipation.vocab import *
@@ -38,7 +36,7 @@ from alignment import align_tokens2, load_annotation_file
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Number of parallel workers
-DEFAULT_NUM_WORKERS = os.cpu_count()
+DEFAULT_NUM_WORKERS = os.cpu_count() or 1
 NUM_WORKERS = DEFAULT_NUM_WORKERS
 
 # Dataset paths
@@ -49,17 +47,14 @@ ATEPP_PATH = 'ATEPP'  # Base folder containing the dataset
 ATEPP_DATA_PATH = os.path.join(ATEPP_PATH, 'ATEPP-1.2')  # Subfolder with actual MIDI/score files
 ATEPP_META_CSV = os.path.join(ATEPP_PATH, 'ATEPP-metadata-1.2.csv')
 # Output paths
-TRAIN_OUTPUT = 'data/train_combined2.txt'
-TEST_OUTPUT = 'data/test_combined2.txt'
-SPLIT_FILE = 'data/combined_split2.txt'
+TRAIN_OUTPUT = 'data/train_combined_01b10e4_hybrid.txt'
+TEST_OUTPUT = 'data/test_combined_01b10e4_hybrid.txt'
+SPLIT_FILE = 'data/combined_split_01b10e4_hybrid.txt'
 # Curriculum learning: separate files by source quality
-TRAIN_ASAP_OUTPUT = 'data/train_asap2.txt'
-TRAIN_ATEPP_OUTPUT = 'data/train_atepp2.txt'
-TEST_ASAP_OUTPUT = 'data/test_asap2.txt'
-TEST_ASAP_MUSTER_CACHE = 'data/test_asap_muster_cache2.jsonl'
+TRAIN_ASAP_OUTPUT = 'data/train_asap_01b10e4_hybrid.txt'
+TRAIN_ATEPP_OUTPUT = 'data/train_atepp_01b10e4_hybrid.txt'
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
-TARGET_BEAT_INTERVAL = 1.0
 
 print(f"Combined ASAP + ATEPP Tokenization")
 print(f"=" * 60)
@@ -86,148 +81,6 @@ def _make_temp_path(final_path):
 
 def _replace_atomic(temp_path, final_path):
     os.replace(str(temp_path), str(final_path))
-
-
-def _events_to_triplets(events):
-    assert len(events) % 3 == 0
-    triplets = []
-    for i in range(0, len(events), 3):
-        triplets.append([
-            int(round(events[i])),
-            int(round(events[i + 1])),
-            int(round(events[i + 2])),
-        ])
-    return triplets
-
-
-def _normalize_asap_score_time_and_duration(original_time_sec, original_duration_sec, score_beat_times):
-    normalized_time_sec = 0.0
-    time_scale_factor = 1.0
-
-    if score_beat_times and len(score_beat_times) >= 2:
-        if original_time_sec < score_beat_times[0]:
-            beat_duration = score_beat_times[1] - score_beat_times[0]
-            if beat_duration > 0:
-                progress = (original_time_sec - score_beat_times[0]) / beat_duration
-                time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
-            else:
-                progress = 0.0
-                time_scale_factor = 1.0
-            normalized_time_sec = progress * TARGET_BEAT_INTERVAL
-        else:
-            found = False
-            for i in range(len(score_beat_times) - 1):
-                if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
-                    beat_duration = score_beat_times[i + 1] - score_beat_times[i]
-                    if beat_duration > 0:
-                        progress = (original_time_sec - score_beat_times[i]) / beat_duration
-                        time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
-                    else:
-                        progress = 0.0
-                        time_scale_factor = 1.0
-                    normalized_time_sec = (
-                        i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
-                    )
-                    found = True
-                    break
-
-            if not found:
-                last_beat_idx = len(score_beat_times) - 1
-                if len(score_beat_times) >= 2:
-                    last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
-                else:
-                    last_beat_duration = 1.0
-
-                if last_beat_duration > 0:
-                    progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
-                    time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
-                else:
-                    progress = 0.0
-                    time_scale_factor = 1.0
-                normalized_time_sec = (
-                    last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
-                )
-    else:
-        normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
-
-    normalized_duration_sec = original_duration_sec * time_scale_factor
-    normalized_time_units = max(0, round(normalized_time_sec * TIME_RESOLUTION))
-    normalized_duration_units = max(0, round(normalized_duration_sec * TIME_RESOLUTION))
-    return normalized_time_units, normalized_duration_units
-
-
-def _normalize_asap_score_triplet(score_triplet, score_beat_times):
-    normalized_time_units, normalized_duration_units = _normalize_asap_score_time_and_duration(
-        (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION,
-        (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION,
-        score_beat_times,
-    )
-    return [
-        normalized_time_units + TIME_OFFSET,
-        normalized_duration_units + DUR_OFFSET,
-        score_triplet[2],
-    ]
-
-
-def _score_triplet_from_seconds(time_sec, duration_sec, note_token):
-    time_units = max(0, round(time_sec * TIME_RESOLUTION))
-    dur_units = min(max(0, round(duration_sec * TIME_RESOLUTION)), MAX_DUR - 1)
-    return [TIME_OFFSET + time_units, DUR_OFFSET + dur_units, note_token]
-
-
-@lru_cache(maxsize=256)
-def _load_musicxml_score_tuples_60bpm(score_musicxml):
-    score = m21_converter.parse(score_musicxml)
-    score_tuples = []
-
-    for element in score.flatten().notes:
-        onset_sec = float(element.offset)
-        dur_sec = float(element.duration.quarterLength)
-
-        if hasattr(element, 'pitches'):
-            for pitch in element.pitches:
-                score_tuples.append([onset_sec, dur_sec, int(pitch.midi)])
-        else:
-            score_tuples.append([onset_sec, dur_sec, int(element.pitch.midi)])
-
-    score_tuples.sort(key=lambda tup: (tup[0], tup[2], tup[1]))
-    return score_tuples
-
-
-def build_asap_eval_cache_record(filegroup):
-    _, perf_midi, score_midi, _perf_beats, score_beats = filegroup
-
-    try:
-        perf_triplets = _events_to_triplets(midi_to_events(perf_midi, quantize=False))
-        raw_score_triplets = _events_to_triplets(midi_to_events(score_midi, quantize=False))
-        score_annotations = load_annotation_file(score_beats)
-        score_beat_times = [anno[0] for anno in score_annotations]
-    except Exception:
-        return None
-
-    if len(perf_triplets) < 33 or len(raw_score_triplets) < 5:
-        return None
-
-    normalized_score_triplets = [
-        _normalize_asap_score_triplet(score_triplet, score_beat_times)
-        for score_triplet in raw_score_triplets
-    ]
-    perf_controls = [
-        [
-            ATIME_OFFSET + (triplet[0] - TIME_OFFSET),
-            ADUR_OFFSET + (triplet[1] - DUR_OFFSET),
-            ANOTE_OFFSET + (triplet[2] - NOTE_OFFSET),
-        ]
-        for triplet in perf_triplets
-    ]
-
-    return {
-        "perf_path": os.path.relpath(perf_midi, ASAP_PATH).replace("\\", "/"),
-        "perf_triplets": perf_controls,
-        "raw_score_triplets": raw_score_triplets,
-        "normalized_score_triplets": normalized_score_triplets,
-        "score_beat_times": score_beat_times,
-    }
 
 # ============================================================================
 # Composition Key Extraction
@@ -538,7 +391,7 @@ if len(all_datafiles) == 0:
 rng = np.random.default_rng(42)
 unique_comp_keys = list(sorted(set(all_composition_keys)))
 rng.shuffle(unique_comp_keys)
-n_test = int(np.ceil(0.1 * len(unique_comp_keys)))
+n_test = int(np.ceil(0.2 * len(unique_comp_keys)))
 test_comp_keys = set(unique_comp_keys[:n_test])
 
 train_pairs = []
@@ -591,13 +444,27 @@ def align_atepp_tokens(perf_midi, score_musicxml, thres=0.1):
     Returns: List of [perf_triplet, perf_idx, score_triplet, score_idx]
     """
     try:
+        # Convert MusicXML to MIDI for consistent processing
+        score = m21_converter.parse(score_musicxml)
+        with tempfile.NamedTemporaryFile(suffix='.mid', delete=False) as f:
+            temp_score_midi = f.name
+        score.write('midi', fp=temp_score_midi)
+        
+        # Load both as events
         perf = midi_to_events(perf_midi, quantize=False)
-        score_tuples = _load_musicxml_score_tuples_60bpm(score_musicxml)
+        score_events = midi_to_events(temp_score_midi, quantize=False)
+        
+        # Clean up temp file
+        try:
+            os.unlink(temp_score_midi)
+        except:
+            pass
         
         # Create tuples: [time_sec, duration, pitch]
         p_tuples = [[perf[3*i]/TIME_RESOLUTION, perf[3*i+1] - DUR_OFFSET, perf[3*i+2] - NOTE_OFFSET] 
                     for i in range(int(len(perf)/3))]
-        s_tuples = score_tuples
+        s_tuples = [[score_events[3*i]/TIME_RESOLUTION, score_events[3*i+1] - DUR_OFFSET, score_events[3*i+2] - NOTE_OFFSET] 
+                    for i in range(int(len(score_events)/3))]
         
         if len(p_tuples) == 0 or len(s_tuples) == 0:
             return []
@@ -643,26 +510,13 @@ def align_atepp_tokens(perf_midi, score_musicxml, thres=0.1):
                     p_tuple[1] + ADUR_OFFSET,
                     p_tuple[2] + ANOTE_OFFSET
                 ]
-                score_triplet = _score_triplet_from_seconds(
-                    best_match[0],
-                    best_match[1],
-                    best_match[2] + NOTE_OFFSET,
-                )
+                score_triplet = [
+                    round(best_match[0] * TIME_RESOLUTION) + TIME_OFFSET,
+                    best_match[1] + DUR_OFFSET,
+                    best_match[2] + NOTE_OFFSET
+                ]
                 matched_tuples.append([perf_triplet, i, score_triplet, best_index])
                 s_tuples_copy.remove(best_match)
-            else:
-                perf_triplet = [
-                    round(p_tuple[0] * TIME_RESOLUTION) + ATIME_OFFSET,
-                    p_tuple[1] + ADUR_OFFSET,
-                    p_tuple[2] + ANOTE_OFFSET
-                ]
-                projected_score_time = p_time / tempo_ratio if tempo_ratio > 0 else p_time
-                score_triplet = _score_triplet_from_seconds(
-                    projected_score_time,
-                    0.0,
-                    REST,
-                )
-                matched_tuples.append([perf_triplet, i, score_triplet, None])
         
         return matched_tuples
         
@@ -678,26 +532,85 @@ def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
     
     try:
         # Align using beat annotations
-        matched_tuples = align_tokens2(
-            perf_midi,
-            score_midi,
-            perf_beats,
-            score_beats,
-            skip_Nones=False,
-            preserve_unmatched_perf=True,
-        )
+        matched_tuples = align_tokens2(perf_midi, score_midi, perf_beats, score_beats, skip_Nones=True)
         
         if len(matched_tuples) < 20:
             return []
-
-        # Pre-normalize score triplets into quarter-based 60 BPM space
+        
+        # Load score beat annotations for time normalization
+        score_annotations = load_annotation_file(score_beats)
+        score_beat_times = [anno[0] for anno in score_annotations]
+        
+        TARGET_BEAT_INTERVAL = 0.5
+        
+        # Pre-normalize ALL score triplets using beat mapping
         normalized_matched_tuples = []
         for match in matched_tuples:
             perf_triplet = match[0]
             score_triplet = match[2]
             
             if score_triplet[0] is not None:
-                normalized_score = _normalize_asap_score_triplet(score_triplet, score_beat_times)
+                original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
+                original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+                pitch = score_triplet[2]
+                
+                normalized_time_sec = 0.0
+                time_scale_factor = 1.0
+                
+                if score_beat_times and len(score_beat_times) >= 2:
+                    if original_time_sec < score_beat_times[0]:
+                        beat_duration = score_beat_times[1] - score_beat_times[0]
+                        if beat_duration > 0:
+                            progress = (original_time_sec - score_beat_times[0]) / beat_duration
+                            time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                        else:
+                            progress = 0
+                            time_scale_factor = 1.0
+                        normalized_time_sec = 0.0 + progress * TARGET_BEAT_INTERVAL
+                    else:
+                        found = False
+                        for i in range(len(score_beat_times) - 1):
+                            if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                                beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                                if beat_duration > 0:
+                                    progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                                    time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
+                                else:
+                                    progress = 0
+                                    time_scale_factor = 1.0
+                                normalized_time_sec = i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                                found = True
+                                break
+                        
+                        if not found:
+                            last_beat_idx = len(score_beat_times) - 1
+                            if len(score_beat_times) >= 2:
+                                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+                            else:
+                                last_beat_duration = 1.0
+                            
+                            if last_beat_duration > 0:
+                                progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+                                time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
+                            else:
+                                progress = 0
+                                time_scale_factor = 1.0
+                            normalized_time_sec = last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+                else:
+                    normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0)
+                    time_scale_factor = 1.0
+                
+                normalized_duration_sec = original_duration_sec * time_scale_factor
+                
+                normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
+                normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
+                normalized_time_units = max(0, normalized_time_units)
+                normalized_duration_units = max(0, normalized_duration_units)
+                normalized_score = [
+                    normalized_time_units + TIME_OFFSET,
+                    normalized_duration_units + DUR_OFFSET,
+                    pitch
+                ]
             else:
                 normalized_score = score_triplet
             
@@ -722,7 +635,34 @@ def tokenize_sliding_windows_atepp(filegroup, prefix_controls=33):
         if len(matched_tuples) < 20:
             return []
         
-        return _build_sequences(matched_tuples, prefix_controls)
+        # For ATEPP without beat annotations, we normalize score time 
+        # by estimating beats from note density
+        # Simpler approach: just shift score times to start at 0
+        
+        normalized_matched_tuples = []
+        
+        # Get min score time
+        score_times = [m[2][0] - TIME_OFFSET for m in matched_tuples if m[2][0] is not None]
+        min_score_time = min(score_times) if score_times else 0
+        
+        for match in matched_tuples:
+            perf_triplet = match[0]
+            score_triplet = match[2]
+            
+            if score_triplet[0] is not None:
+                # Shift score time to start at 0
+                normalized_time = score_triplet[0] - min_score_time
+                normalized_score = [
+                    max(0, normalized_time),
+                    score_triplet[1],
+                    score_triplet[2]
+                ]
+            else:
+                normalized_score = score_triplet
+            
+            normalized_matched_tuples.append([perf_triplet, match[1], normalized_score, match[3]])
+        
+        return _build_sequences(normalized_matched_tuples, prefix_controls)
         
     except Exception as e:
         return []
@@ -847,7 +787,7 @@ if __name__ == '__main__':
         '--num_workers',
         type=int,
         default=DEFAULT_NUM_WORKERS,
-        help='Worker processes for tokenization/cache building',
+        help='Worker processes for tokenization',
     )
     args = parser.parse_args()
     worker_count = max(1, args.num_workers)
@@ -855,13 +795,10 @@ if __name__ == '__main__':
     print(f"Using {worker_count} worker processes for tokenization")
     print("Processing training set...")
     os.makedirs('data', exist_ok=True)
-
     train_output_tmp = _make_temp_path(TRAIN_OUTPUT)
     train_asap_tmp = _make_temp_path(TRAIN_ASAP_OUTPUT)
     train_atepp_tmp = _make_temp_path(TRAIN_ATEPP_OUTPUT)
     test_output_tmp = _make_temp_path(TEST_OUTPUT)
-    test_asap_tmp = _make_temp_path(TEST_ASAP_OUTPUT)
-    test_asap_cache_tmp = _make_temp_path(TEST_ASAP_MUSTER_CACHE)
     
     train_sequences_total = 0
     train_pieces_success = 0
@@ -869,10 +806,10 @@ if __name__ == '__main__':
     train_asap_success = 0
     train_atepp_success = 0
     
-    with Pool(processes=worker_count) as pool:
-        with open(train_output_tmp, 'w') as f_train, \
-             open(train_asap_tmp, 'w') as f_asap, \
-             open(train_atepp_tmp, 'w') as f_atepp:
+    with open(train_output_tmp, 'w') as f_train, \
+         open(train_asap_tmp, 'w') as f_asap, \
+         open(train_atepp_tmp, 'w') as f_atepp:
+        with Pool(processes=worker_count) as pool:
             with tqdm(total=len(train_pairs), desc='Train', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, train_pairs):
                     if count > 0:
@@ -891,26 +828,25 @@ if __name__ == '__main__':
                     else:
                         train_pieces_failed += 1
                     pbar.update(1)
-
-        print(f"Train: {train_sequences_total} sequences from {train_pieces_success} pieces ({train_asap_success} ASAP, {train_atepp_success} ATEPP), {train_pieces_failed} failed")
-        
-        # Process test set
-        print("\nProcessing test set...")
-        
-        test_sequences_total = 0
-        test_pieces_success = 0
-        test_pieces_failed = 0
-        test_asap_success = 0
-        test_atepp_success = 0
-        
-        with open(test_output_tmp, 'w') as f_test, open(test_asap_tmp, 'w') as f_test_asap:
+    
+    print(f"Train: {train_sequences_total} sequences from {train_pieces_success} pieces ({train_asap_success} ASAP, {train_atepp_success} ATEPP), {train_pieces_failed} failed")
+    
+    # Process test set
+    print("\nProcessing test set...")
+    
+    test_sequences_total = 0
+    test_pieces_success = 0
+    test_pieces_failed = 0
+    test_asap_success = 0
+    test_atepp_success = 0
+    
+    with open(test_output_tmp, 'w') as f_test:
+        with Pool(processes=worker_count) as pool:
             with tqdm(total=len(test_pairs), desc='Test', unit='piece') as pbar:
                 for sequences, count, dataset_type in pool.imap_unordered(process_single_piece, test_pairs):
                     if count > 0:
                         for seq in sequences:
                             f_test.write(seq + '\n')
-                            if dataset_type == 'asap':
-                                f_test_asap.write(seq + '\n')
                         test_sequences_total += count
                         test_pieces_success += 1
                         if dataset_type == 'asap':
@@ -921,33 +857,13 @@ if __name__ == '__main__':
                         test_pieces_failed += 1
                     pbar.update(1)
 
-        print("\nBuilding ASAP test MUSTER cache...")
-        test_asap_filegroups = sorted(
-            [pair for pair in test_pairs if pair[0] == 'asap'],
-            key=lambda fg: os.path.relpath(fg[1], ASAP_PATH).replace('\\', '/'),
-        )
-        cache_records = []
-        if test_asap_filegroups:
-            with tqdm(total=len(test_asap_filegroups), desc='ASAP cache', unit='piece') as pbar:
-                for record in pool.imap(build_asap_eval_cache_record, test_asap_filegroups):
-                    if record is not None:
-                        cache_records.append(record)
-                    pbar.update(1)
-    cache_records = sorted(cache_records, key=lambda record: record['perf_path'])
-    with open(test_asap_cache_tmp, 'w', encoding='utf-8') as f_cache:
-        for record in cache_records:
-            f_cache.write(json.dumps(record) + '\n')
-
     _replace_atomic(split_tmp, SPLIT_FILE)
     _replace_atomic(train_output_tmp, TRAIN_OUTPUT)
     _replace_atomic(train_asap_tmp, TRAIN_ASAP_OUTPUT)
     _replace_atomic(train_atepp_tmp, TRAIN_ATEPP_OUTPUT)
     _replace_atomic(test_output_tmp, TEST_OUTPUT)
-    _replace_atomic(test_asap_tmp, TEST_ASAP_OUTPUT)
-    _replace_atomic(test_asap_cache_tmp, TEST_ASAP_MUSTER_CACHE)
     
     print(f"Test: {test_sequences_total} sequences from {test_pieces_success} pieces ({test_asap_success} ASAP, {test_atepp_success} ATEPP), {test_pieces_failed} failed")
-    print(f"ASAP test MUSTER cache: {len(cache_records)} pieces")
     
     # Verification
     print("\n" + "="*80)
@@ -1008,7 +924,5 @@ if __name__ == '__main__':
     print(f"  {TRAIN_ASAP_OUTPUT}")
     print(f"  {TRAIN_ATEPP_OUTPUT}")
     print(f"  {TEST_OUTPUT}")
-    print(f"  {TEST_ASAP_OUTPUT}")
-    print(f"  {TEST_ASAP_MUSTER_CACHE}")
     print(f"  {SPLIT_FILE}")
     print("\nTokenization complete!")
