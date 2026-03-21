@@ -394,8 +394,11 @@ class TokenizedDataset(Dataset):
         if torch.any(performance_loss_mask).item():
             labels[performance_loss_mask] = -100
         
-        # Attention remains dense; score masking is applied by zeroing embeddings.
+        # Masked score tokens are removed from the visible context and also get
+        # zeroed embeddings in forward_batch.
         attention_mask = torch.ones_like(augmented_tokens)
+        if torch.any(score_mask).item():
+            attention_mask[score_mask] = 0
 
         return {
             "input_ids": augmented_tokens,
