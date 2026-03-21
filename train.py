@@ -65,12 +65,14 @@ class TokenizedDataset(Dataset):
     """
     def __init__(self, file_path, onset_jitter_std=0.0, dur_jitter_range=0.0,
                  mask_prob=0.75, transpose_range_semitones=0, tempo_scale_range=0.0,
+                 loss_mask_performance_tokens=False,
                  is_training=True):
         self.onset_jitter_std = onset_jitter_std if is_training else 0.0
         self.dur_jitter_range = dur_jitter_range if is_training else 0.0
         self.mask_prob = mask_prob if is_training else 0.0
         self.transpose_range_semitones = transpose_range_semitones if is_training else 0
         self.tempo_scale_range = tempo_scale_range if is_training else 0.0
+        self.loss_mask_performance_tokens = loss_mask_performance_tokens
         self.is_training = is_training
         
 
@@ -111,9 +113,11 @@ class TokenizedDataset(Dataset):
                   f"dur_jitter_range={self.dur_jitter_range} (U(1±range)), "
                   f"score_mask_ratio={self.mask_prob}, "
                   f"transpose_range={self.transpose_range_semitones} semitones, "
-                  f"tempo_scale_range=U(1±{self.tempo_scale_range})")
+                  f"tempo_scale_range=U(1±{self.tempo_scale_range}), "
+                  f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}")
         else:
-            print(f"  Validation mode: no augmentation")
+            print(f"  Validation mode: no augmentation, "
+                  f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}")
     
     def __len__(self):
         return len(self.offsets)
@@ -314,6 +318,35 @@ class TokenizedDataset(Dataset):
             score_mask[start:start + 3] = True
 
         return score_mask
+
+    def _build_performance_loss_mask(self, tokens):
+        """Mask performance/control triplets out of the loss when requested."""
+        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR
+
+        loss_mask = torch.zeros_like(tokens, dtype=torch.bool)
+        if not self.loss_mask_performance_tokens:
+            return loss_mask
+
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_control_triplet = (
+                tok0 >= CONTROL_OFFSET and
+                tok1 >= CONTROL_OFFSET and
+                tok2 >= CONTROL_OFFSET and
+                tok0 != SEPARATOR
+            )
+
+            if is_control_triplet:
+                loss_mask[i:i + 3] = True
+                i += 3
+            else:
+                i += 1
+
+        return loss_mask
     
     def __getitem__(self, idx):
         tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
@@ -356,6 +389,10 @@ class TokenizedDataset(Dataset):
         from anticipation.vocab import VOCAB_SIZE
         augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
         labels = torch.clamp(labels, 0, VOCAB_SIZE - 1)
+
+        performance_loss_mask = self._build_performance_loss_mask(labels)
+        if torch.any(performance_loss_mask).item():
+            labels[performance_loss_mask] = -100
         
         # Attention remains dense; score masking is applied by zeroing embeddings.
         attention_mask = torch.ones_like(augmented_tokens)
@@ -544,20 +581,25 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     autoregressive_total = 0
     
     if autoregressive_samples > 0:
-        # Collect a few sequences for autoregressive evaluation
+        # Randomly sample sequences for autoregressive evaluation using
+        # reservoir sampling so we don't need to store the full validation set.
         all_sequences = []
+        sequences_seen = 0
         with torch.no_grad():
             for batch in dataloader:
                 input_ids = batch["input_ids"]
                 for seq in input_ids:
-                    all_sequences.append(seq)
-                    if len(all_sequences) >= autoregressive_samples:
-                        break
-                if len(all_sequences) >= autoregressive_samples:
-                    break
+                    seq = seq.detach().cpu()
+                    sequences_seen += 1
+                    if len(all_sequences) < autoregressive_samples:
+                        all_sequences.append(seq)
+                    else:
+                        replace_idx = random.randrange(sequences_seen)
+                        if replace_idx < autoregressive_samples:
+                            all_sequences[replace_idx] = seq
         
         # Run autoregressive generation on each sequence
-        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
+        for seq in tqdm(all_sequences, desc="Autoregressive eval", leave=False):
             # Sequence format: [control+rest pairs (positions 0-197), alternating score/control (198+)]
             # We want to use the control tokens as context and generate the score tokens
             
@@ -743,6 +785,8 @@ def main():
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
     parser.add_argument('--mask_prob', type=float, default=0.75,
                         help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only, 0.0 to 1.0)')
+    parser.add_argument('--loss_mask_performance_tokens', action='store_true',
+                        help='Exclude all performance/control triplets from the loss by setting their labels to -100')
     parser.add_argument('--transpose_range_semitones', type=int, default=12,
                         help='Max transposition shift in semitones, uniform in [-range, +range] (training only)')
     parser.add_argument('--tempo_scale_range', type=float, default=0.2,
@@ -796,6 +840,7 @@ def main():
             mask_prob=args.mask_prob,
             transpose_range_semitones=args.transpose_range_semitones,
             tempo_scale_range=args.tempo_scale_range,
+            loss_mask_performance_tokens=args.loss_mask_performance_tokens,
             is_training=True,
         )
 
@@ -837,6 +882,7 @@ def main():
         print(f"Loading validation dataset from {args.val_file}...")
         val_dataset = TokenizedDataset(
             args.val_file,
+            loss_mask_performance_tokens=args.loss_mask_performance_tokens,
             is_training=False
         )
         
