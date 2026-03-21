@@ -958,6 +958,9 @@ def main():
         
         # Use standard tqdm with disable=False to ensure it always displays
         progress_bar = tqdm(total=args.max_steps, desc="Training", disable=False)
+
+        def log_progress(message):
+            progress_bar.write(message)
         
         try:
             while completed_steps < args.max_steps:
@@ -970,7 +973,7 @@ def main():
                             
                             # Check for NaN loss
                             if torch.isnan(loss).any() or torch.isinf(loss).any():
-                                print(f"WARNING: NaN or Inf loss detected: {loss.item()}")
+                                log_progress(f"WARNING: NaN or Inf loss detected: {loss.item()}")
                                 # Skip this backward pass
                                 optimizer.zero_grad()
                                 continue
@@ -987,12 +990,12 @@ def main():
                                 has_nan_grads = False
                                 for name, param in model.named_parameters():
                                     if param.grad is not None and torch.isnan(param.grad).any():
-                                        print(f"NaN gradient detected in {name}")
+                                        log_progress(f"NaN gradient detected in {name}")
                                         has_nan_grads = True
                                         break
                                         
                                 if has_nan_grads:
-                                    print("Skipping update due to NaN gradients")
+                                    log_progress("Skipping update due to NaN gradients")
                                     optimizer.zero_grad()
                                     continue
                                 
@@ -1011,12 +1014,14 @@ def main():
                                     train_losses.append(loss.item())
                                     
                                     # Print more precise learning rate
-                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
-                                          f"LR: {scheduler.get_last_lr()[0]:.8e}")
+                                    log_progress(
+                                        f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
+                                        f"LR: {scheduler.get_last_lr()[0]:.8e}"
+                                    )
                                     
                                     # Check for NaN parameters periodically
                                     if check_model_for_nans(model):
-                                        print("NaN parameters detected in model! Training may be unstable.")
+                                        log_progress("NaN parameters detected in model! Training may be unstable.")
                                     
                                     # Check memory periodically
                                     if completed_steps % 100 == 0:
@@ -1025,13 +1030,16 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    print(f"\nRunning validation at step {completed_steps}...")
+                                    log_progress(f"Running validation at step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)  # Store as percentage
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    log_progress(
+                                        f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                                        f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
+                                    )
                                     
                                     # Return to training mode
                                     model.train()
@@ -1044,13 +1052,16 @@ def main():
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    print(f"\nRunning validation at checkpoint step {completed_steps}...")
+                                    log_progress(f"Running validation at checkpoint step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
                                     validation_steps.append(completed_steps // 10)
                                     val_losses.append(val_loss)
                                     val_accuracies.append(val_acc * 100)
                                     val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    log_progress(
+                                        f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                                        f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
+                                    )
                                     
                                     # Return to training mode
                                     model.train()
@@ -1066,7 +1077,7 @@ def main():
                                         save_function=accelerator.save,
                                     )
                                     save_training_args(checkpoint_dir, args, accelerator)
-                                    print(f"Saved checkpoint to {checkpoint_dir}")
+                                    log_progress(f"Saved checkpoint to {checkpoint_dir}")
                                     
                                     # Save the losses and metrics so far
                                     np.savez(
@@ -1096,20 +1107,20 @@ def main():
                             
                     except RuntimeError as e:
                         if "CUDA out of memory" in str(e):
-                            print(f"CUDA OOM error! Current batch size: {args.batch_size}")
-                            print(f"Current memory usage:")
+                            log_progress(f"CUDA OOM error! Current batch size: {args.batch_size}")
+                            log_progress("Current memory usage:")
                             print_gpu_memory_stats()
-                            print("Consider reducing batch size or model size.")
-                            print(f"Error details: {str(e)}")
+                            log_progress("Consider reducing batch size or model size.")
+                            log_progress(f"Error details: {str(e)}")
                             raise
                         elif "nan" in str(e).lower() or "inf" in str(e).lower():
-                            print(f"NaN/Inf error: {str(e)}")
-                            print("Trying to recover by skipping this batch...")
+                            log_progress(f"NaN/Inf error: {str(e)}")
+                            log_progress("Trying to recover by skipping this batch...")
                             optimizer.zero_grad()
                             continue
                         else:
-                            print(f"Runtime error: {str(e)}")
-                            print(traceback.format_exc())
+                            log_progress(f"Runtime error: {str(e)}")
+                            log_progress(traceback.format_exc())
                             raise
             
         except Exception as e:
