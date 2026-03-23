@@ -523,6 +523,12 @@ def main():
     print(f"  Output test file: {TEST_OUTPUT}")
     print(f"  Split file: {SPLIT_FILE}")
 
+    if train_sequences_total == 0 or test_sequences_total == 0:
+        print()
+        print("WARNING: ASAP-only tokenization produced an empty output split.")
+        print("Training will fail if either the train or test token file has zero sequences.")
+        print("Check the piece success/failure counts above to see whether pieces were too short or failed during processing.")
+
 
 if __name__ == '__main__':
     main()

@@ -543,6 +543,11 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     # Randomly sample indices, then take only those batches from the dataloader
     # We need to iterate through dataloader (not convert to list) to preserve device placement
     total_batches = len(dataloader)
+    if total_batches == 0:
+        raise ValueError(
+            "Validation dataloader is empty. This usually means the validation "
+            "token file has zero sequences."
+        )
     if total_batches > 0:
         # Calculate how many batches we need for max_samples (estimate batch_size as 8)
         estimated_batch_size = 8
@@ -610,6 +615,12 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     # Always move in steps of 3 to maintain triplet alignment
                     i += 3
     
+    if total_samples == 0:
+        raise ValueError(
+            "Validation produced zero samples. Check that the validation token "
+            "file is non-empty and the DataLoader can read it."
+        )
+
     avg_loss = total_loss / total_samples
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
     
@@ -910,6 +921,12 @@ def main():
             train_dataset = TokenizedDataset(args.data_file, **dataset_kwargs)
             shuffle_train = True
 
+        if len(train_dataset) == 0:
+            raise ValueError(
+                "Training dataset is empty. Check the tokenized training file "
+                "and rerun tokenization if needed."
+            )
+
         train_dataloader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
@@ -926,6 +943,11 @@ def main():
             loss_mask_performance_tokens=args.loss_mask_performance_tokens,
             is_training=False
         )
+        if len(val_dataset) == 0:
+            raise ValueError(
+                f"Validation dataset is empty: {args.val_file}. "
+                "The ASAP-only tokenizer likely produced zero validation sequences."
+            )
         
         val_dataloader = DataLoader(
             val_dataset, 
