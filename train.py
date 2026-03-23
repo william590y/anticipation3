@@ -276,15 +276,11 @@ class TokenizedDataset(Dataset):
         
         return augmented
 
-    def _sample_score_mask(self, tokens):
-        """Mask score/event triplets in the context by zeroing their token embeddings."""
+    def _build_score_token_mask(self, tokens):
+        """Mark score/event triplets that are eligible for score-token dropout."""
         from anticipation.vocab import CONTROL_OFFSET, REST
 
-        score_mask = torch.zeros_like(tokens, dtype=torch.bool)
-        if not self.is_training or self.mask_prob <= 0:
-            return score_mask
-
-        score_triplet_starts = []
+        score_token_mask = torch.zeros_like(tokens, dtype=torch.bool)
         i = 0
         while i < len(tokens) - 2:
             tok0 = tokens[i].item()
@@ -299,12 +295,26 @@ class TokenizedDataset(Dataset):
             )
 
             if is_score_triplet:
-                score_triplet_starts.append(i)
+                score_token_mask[i:i + 3] = True
                 i += 3
             else:
                 i += 1
 
-        if not score_triplet_starts:
+        return score_token_mask
+
+    def _sample_score_mask(self, score_token_mask):
+        """Sample which eligible score tokens to drop from the input context."""
+        score_mask = torch.zeros_like(score_token_mask, dtype=torch.bool)
+        if not self.is_training or self.mask_prob <= 0:
+            return score_mask
+
+        prev_score_token_mask = torch.zeros_like(score_token_mask)
+        prev_score_token_mask[1:] = score_token_mask[:-1]
+        score_triplet_starts = torch.nonzero(
+            score_token_mask & ~prev_score_token_mask,
+            as_tuple=False,
+        ).flatten()
+        if len(score_triplet_starts) == 0:
             return score_mask
 
         num_to_mask = int(round(len(score_triplet_starts) * self.mask_prob))
@@ -314,7 +324,7 @@ class TokenizedDataset(Dataset):
 
         selected = torch.randperm(len(score_triplet_starts))[:num_to_mask]
         for idx in selected.tolist():
-            start = score_triplet_starts[idx]
+            start = score_triplet_starts[idx].item()
             score_mask[start:start + 3] = True
 
         return score_mask
@@ -383,12 +393,12 @@ class TokenizedDataset(Dataset):
                 apply_timing_augmentation=False,
             )
 
-        score_mask = self._sample_score_mask(augmented_tokens)
-        
         # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
         from anticipation.vocab import VOCAB_SIZE
         augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
         labels = torch.clamp(labels, 0, VOCAB_SIZE - 1)
+        score_token_mask = self._build_score_token_mask(augmented_tokens)
+        score_mask = self._sample_score_mask(score_token_mask)
 
         performance_loss_mask = self._build_performance_loss_mask(labels)
         if torch.any(performance_loss_mask).item():
@@ -404,6 +414,7 @@ class TokenizedDataset(Dataset):
             "input_ids": augmented_tokens,
             "attention_mask": attention_mask,
             "labels": labels,
+            "score_token_mask": score_token_mask,
             "score_mask": score_mask,
         }
 
@@ -470,6 +481,7 @@ def forward_batch(model, batch):
     input_ids = batch["input_ids"]
     attention_mask = batch["attention_mask"]
     labels = batch["labels"]
+    score_token_mask = batch.get("score_token_mask")
     score_mask = batch.get("score_mask")
 
     if score_mask is None or not torch.any(score_mask).item():
@@ -477,6 +489,30 @@ def forward_batch(model, batch):
 
     inputs_embeds = _get_input_embedding_layer(model)(input_ids)
     inputs_embeds = inputs_embeds.masked_fill(score_mask.unsqueeze(-1), 0.0)
+
+    if score_token_mask is not None:
+        kept_score_mask = score_token_mask & ~score_mask
+        eligible_counts = score_token_mask.sum(dim=1)
+        kept_counts = kept_score_mask.sum(dim=1)
+
+        # Rescale only the surviving score-token embeddings so score-context
+        # magnitude stays comparable after token dropout.
+        scale = torch.ones(
+            input_ids.size(0),
+            device=inputs_embeds.device,
+            dtype=inputs_embeds.dtype,
+        )
+        nonzero_kept = kept_counts > 0
+        scale[nonzero_kept] = (
+            eligible_counts[nonzero_kept].to(inputs_embeds.dtype)
+            / kept_counts[nonzero_kept].to(inputs_embeds.dtype)
+        )
+        inputs_embeds = inputs_embeds * torch.where(
+            kept_score_mask.unsqueeze(-1),
+            scale[:, None, None],
+            torch.ones(1, device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+        )
+
     return model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
 
 
@@ -771,14 +807,14 @@ def main():
     parser.add_argument('--curriculum', action='store_true',
                         help='Enable curriculum learning: linear transition from ATEPP to ASAP over training')
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./masked_40k'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./rescaled'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
-    parser.add_argument('--max_steps', type=int, default=40000)
+    parser.add_argument('--max_steps', type=int, default=4500)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=100)
+    parser.add_argument('--eval_steps', type=int, default=250)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
@@ -829,11 +865,13 @@ def main():
             input_ids = torch.stack([item["input_ids"] for item in batch])
             attention_mask = torch.stack([item["attention_mask"] for item in batch])
             labels = torch.stack([item["labels"] for item in batch])
+            score_token_mask = torch.stack([item["score_token_mask"] for item in batch])
             score_mask = torch.stack([item["score_mask"] for item in batch])
             return {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 "labels": labels,
+                "score_token_mask": score_token_mask,
                 "score_mask": score_mask,
             }
 

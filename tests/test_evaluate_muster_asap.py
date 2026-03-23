@@ -14,7 +14,7 @@ import torch
 
 import evaluate_muster_asap as ema
 from anticipation.config import TIME_RESOLUTION
-from anticipation.convert import midi_to_events
+from anticipation.convert import events_to_midi, midi_to_events
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
@@ -23,6 +23,7 @@ from anticipation.vocab import (
     DUR_OFFSET,
     NOTE_OFFSET,
     REST,
+    SEPARATOR,
     SPECIAL_OFFSET,
     TIME_OFFSET,
 )
@@ -94,6 +95,37 @@ class FakeModel:
 
         logits = torch.full((1, input_ids.shape[1], vocab_size), -1e9)
         logits[0, -1, next_token] = 0.0
+
+        cached_length = 0 if past_key_values is None else int(past_key_values)
+        return SimpleNamespace(
+            logits=logits,
+            past_key_values=cached_length + int(input_ids.shape[1]),
+        )
+
+
+class InvalidPreferenceModel:
+    """Model that scores invalid tokens above valid ones for each score slot."""
+
+    def __init__(self):
+        self.config = SimpleNamespace(vocab_size=SPECIAL_OFFSET + 32)
+
+    def __call__(self, input_ids, past_key_values=None, use_cache=False):
+        vocab_size = self.config.vocab_size
+        last_token = int(input_ids[0, -1].item())
+
+        if last_token == REST or last_token >= NOTE_OFFSET:
+            valid_token = TIME_OFFSET + 7
+            invalid_token = SEPARATOR
+        elif last_token < DUR_OFFSET:
+            valid_token = DUR_OFFSET + 11
+            invalid_token = CONTROL_OFFSET + 9
+        else:
+            valid_token = NOTE_OFFSET + 60
+            invalid_token = SEPARATOR
+
+        logits = torch.full((1, input_ids.shape[1], vocab_size), -1e9)
+        logits[0, -1, invalid_token] = 5.0
+        logits[0, -1, valid_token] = 4.0
 
         cached_length = 0 if past_key_values is None else int(past_key_values)
         return SimpleNamespace(
@@ -199,6 +231,32 @@ class EvaluateMusterAsapTests(unittest.TestCase):
         self.assertEqual(stats["num_controls_used"], len(controls))
         self.assertEqual(stats["total_performance_notes"], len(controls))
         self.assertGreater(stats["score_start_idx"], 0)
+
+    def test_generator_masks_invalid_tokens_for_score_slots(self):
+        controls = [
+            [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 60],
+            [ATIME_OFFSET + 50, ADUR_OFFSET + 20, ANOTE_OFFSET + 62],
+        ]
+
+        pred_score, _ = ema.autoregressive_generate_from_controls(
+            InvalidPreferenceModel(),
+            controls,
+            device="cpu",
+            prefix_controls=1,
+            beam_size=1,
+            temperature=0.0,
+        )
+
+        self.assertEqual(len(pred_score), len(controls))
+        for time_tok, dur_tok, pitch_tok in pred_score:
+            self.assertGreaterEqual(time_tok, TIME_OFFSET)
+            self.assertLess(time_tok, DUR_OFFSET)
+            self.assertGreaterEqual(dur_tok, DUR_OFFSET)
+            self.assertLess(dur_tok, NOTE_OFFSET)
+            self.assertGreaterEqual(pitch_tok, NOTE_OFFSET)
+            self.assertLess(pitch_tok, REST)
+
+        events_to_midi(ema.triplets_to_events(pred_score))
 
     def test_score_normalization_and_export_use_half_second_beats(self):
         with WorkspaceTempDir() as tmpdir:

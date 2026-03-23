@@ -60,6 +60,11 @@ NUM_WORKERS = os.cpu_count()
 TARGET_BEAT_INTERVAL = 0.5
 PREFIX_CONTROLS = 33
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+SCORE_SLOT_RANGES = (
+    (TIME_OFFSET, DUR_OFFSET),
+    (DUR_OFFSET, NOTE_OFFSET),
+    (NOTE_OFFSET, REST),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -418,25 +423,36 @@ def autoregressive_generate_from_controls(
         _ensure_primed()
         return next_logits
 
-    def _sample_next():
-        logits = _get_logits()
+    def _slot_logits(logits, slot_idx):
+        start, end = SCORE_SLOT_RANGES[slot_idx]
+        return logits[start:end], start
+
+    def _decode_from_logits(logits, slot_idx, sample):
+        slot_logits, start = _slot_logits(logits, slot_idx)
         if temperature > 0:
-            logits = logits / temperature
-        token = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+            slot_logits = slot_logits / temperature
+        if sample:
+            token = torch.multinomial(torch.softmax(slot_logits, dim=-1), 1).item()
+        else:
+            token = slot_logits.argmax().item()
+        return start + token
+
+    def _decode_next(slot_idx, sample):
+        logits = _get_logits()
+        token = _decode_from_logits(logits, slot_idx, sample=sample)
         context.append(token)
         _feed([token])
         return token
 
-    def _greedy_next():
-        logits = _get_logits()
-        if temperature > 0:
-            logits = logits / temperature
-            token = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
-        else:
-            token = logits.argmax().item()
-        context.append(token)
-        _feed([token])
-        return token
+    def _assert_valid_score_triplet(time_tok, dur_tok, pitch_tok):
+        time_ok = TIME_OFFSET <= time_tok < DUR_OFFSET
+        dur_ok = DUR_OFFSET <= dur_tok < NOTE_OFFSET
+        pitch_ok = NOTE_OFFSET <= pitch_tok < REST
+        if not (time_ok and dur_ok and pitch_ok):
+            raise ValueError(
+                "decoder produced invalid score triplet "
+                f"({time_tok}, {dur_tok}, {pitch_tok})"
+            )
 
     def _renormalize_alt_times(alt_tokens):
         """
@@ -472,23 +488,32 @@ def autoregressive_generate_from_controls(
     for _note_idx in range(num_controls):
         if beam_size > 1:
             beams = [(list(context), 0.0)]
-            for _slot in range(3):
+            for slot_idx in range(3):
                 candidates = []
                 for beam_context, log_prob in beams:
                     with torch.no_grad():
                         logits = model(
                             torch.tensor([_clamp(beam_context)], device=device)
                         ).logits[0, -1, :]
+                    slot_logits, start = _slot_logits(logits, slot_idx)
                     if temperature > 0:
-                        logits = logits / temperature
-                    beam_log_probs = torch.log_softmax(logits, dim=-1)
-                    top_log_probs, top_tokens = torch.topk(beam_log_probs, beam_size)
+                        slot_logits = slot_logits / temperature
+                    beam_log_probs = torch.log_softmax(slot_logits, dim=-1)
+                    top_k = min(beam_size, int(beam_log_probs.shape[0]))
+                    top_log_probs, top_tokens = torch.topk(beam_log_probs, top_k)
                     for token, token_log_prob in zip(top_tokens.tolist(), top_log_probs.tolist()):
-                        candidates.append((beam_context + [token], log_prob + token_log_prob))
+                        candidates.append(
+                            (beam_context + [start + token], log_prob + token_log_prob)
+                        )
                 candidates.sort(key=lambda item: item[1], reverse=True)
                 beams = candidates[:beam_size]
 
             best_context, best_log_prob = max(beams, key=lambda item: item[1])
+            _assert_valid_score_triplet(
+                best_context[-3],
+                best_context[-2],
+                best_context[-1],
+            )
             stats["beam_log_prob"] += best_log_prob
             pred_score_triplets.append([
                 best_context[-3] + time_offset,
@@ -499,14 +524,11 @@ def autoregressive_generate_from_controls(
             past = None
             next_logits = None
         else:
-            if temperature > 0:
-                token_time = _sample_next()
-                token_dur = _sample_next()
-                token_pitch = _sample_next()
-            else:
-                token_time = _greedy_next()
-                token_dur = _greedy_next()
-                token_pitch = _greedy_next()
+            sample = temperature > 0
+            token_time = _decode_next(0, sample=sample)
+            token_dur = _decode_next(1, sample=sample)
+            token_pitch = _decode_next(2, sample=sample)
+            _assert_valid_score_triplet(token_time, token_dur, token_pitch)
             pred_score_triplets.append([
                 token_time + time_offset,
                 token_dur,
