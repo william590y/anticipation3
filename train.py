@@ -786,7 +786,7 @@ def main():
                         help='Std of N(1, std²) multiplier applied to each inter-onset interval of control tokens (training only)')
     parser.add_argument('--dur_jitter_range', type=float, default=0.1,
                         help='Half-range of U(1-r, 1+r) duration rescaling per control note, e.g. 0.05 gives U(0.95, 1.05) (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0.2,
+    parser.add_argument('--mask_prob', type=float, default=0.75,
                         help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only, 0.0 to 1.0)')
     parser.add_argument('--loss_mask_performance_tokens', action='store_true',
                         help='Exclude all performance/control triplets from the loss by setting their labels to -100')
