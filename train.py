@@ -777,7 +777,7 @@ def main():
     parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
-    parser.add_argument('--save_steps', type=int, default=250)
+    parser.add_argument('--save_steps', type=int, default=2500)
     parser.add_argument('--eval_steps', type=int, default=100)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
