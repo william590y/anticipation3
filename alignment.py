@@ -5,6 +5,11 @@ from anticipation.config import *
 from anticipation.vocab import *
 from itertools import combinations
 
+try:
+    from alignment_cython import match_perf_to_score as _match_perf_to_score_cython
+except ImportError:
+    _match_perf_to_score_cython = None
+
 
 def load_annotation_file(file_path):
     annotations = []
@@ -55,6 +60,73 @@ def power_set(lst, min_length=2, max_length=6):
     for i in range(min_length, min(max_length + 1, len(lst) + 1)):
         result.extend(combinations(lst, i))
     return result
+
+
+def _compute_mapped_times(p_tuples, map_fn, p_min, p_max):
+    """Map performance onsets into score time once, preserving interp1d behavior."""
+    if not p_tuples:
+        return []
+
+    p_times = np.asarray([tup[0] for tup in p_tuples], dtype=np.float64)
+    mapped_times = np.full(len(p_tuples), np.nan, dtype=np.float64)
+    in_range = (p_times >= p_min) & (p_times <= p_max)
+
+    if np.any(in_range):
+        mapped_times[in_range] = np.asarray(map_fn(p_times[in_range]), dtype=np.float64)
+
+    return mapped_times.tolist()
+
+
+def _match_perf_to_score_python(p_tuples, s_tuples, p_min, p_max, mapped_times, thres):
+    """
+    Python reference implementation for align_tokens2's matching loop.
+
+    Returns a list with one entry per performance tuple: the matched score tuple
+    index in the original `s_tuples`, or -1 if no match was found.
+    """
+    matches = [-1] * len(p_tuples)
+    s_tuples_copy = s_tuples.copy()
+
+    for i, p_tuple in enumerate(p_tuples):
+        best_dist = np.inf
+        best_match = None
+        best_index = -1
+
+        p_time, p_note = p_tuple[0], p_tuple[2]
+
+        if p_min <= p_time <= p_max:
+            mapped_time = mapped_times[i]
+            for s_tuple in s_tuples_copy:
+                s_time, s_note = s_tuple[0], s_tuple[2]
+                k = s_tuples.index(s_tuple)
+                dist = abs(mapped_time - s_time)
+
+                if p_note != s_note:
+                    continue
+
+                if dist <= thres and dist <= best_dist:
+                    best_dist = dist
+                    best_match = s_tuple
+                    best_index = k
+
+        if best_index != -1:
+            matches[i] = best_index
+            s_tuples_copy.remove(best_match)
+
+    return matches
+
+
+def _match_perf_to_score(p_tuples, s_tuples, p_min, p_max, mapped_times, thres):
+    if _match_perf_to_score_cython is not None:
+        return _match_perf_to_score_cython(
+            p_tuples,
+            s_tuples,
+            p_min,
+            p_max,
+            mapped_times,
+            thres,
+        )
+    return _match_perf_to_score_python(p_tuples, s_tuples, p_min, p_max, mapped_times, thres)
 
 
 def align_tokens(file1, file2, file3, file4, skip_Nones=True):
@@ -175,9 +247,6 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
     perf = midi_to_events(file1, quantize=False)
     score = midi_to_events(file2, quantize=False)
 
-    p_beats, s_beats = compare_annotations(file3, file4, interpolate=False)
-    s_beats = np.array(s_beats)
-    p_beats = np.array(p_beats)
     map = compare_annotations(file3, file4)
 
     # create tuples, scaling arrival time back to seconds, which is the unit the annotation mapping uses
@@ -188,39 +257,16 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
 
     matched_tuples = []
 
-    s_tuples_copy = s_tuples.copy()
-
     p_min = map.x.min()
     p_max = map.x.max()
+    mapped_times = _compute_mapped_times(p_tuples, map, p_min, p_max)
+    match_indices = _match_perf_to_score(p_tuples, s_tuples, p_min, p_max, mapped_times, thres)
 
-    for i, p_tuple in enumerate(p_tuples):
-        best_dist = np.inf
-        best_match = [None, None, None]
-        best_index = None
-
-        p_time, p_note = p_tuple[0], p_tuple[2]
-
-        if p_min <= p_time <= p_max:
-            for j, s_tuple in enumerate(s_tuples_copy):
-                s_time, s_note = s_tuple[0], s_tuple[2]
-
-                k = s_tuples.index(s_tuple)
-
-                dist = np.abs(map(p_time) - s_time)
-
-                if p_note != s_note:
-                    continue
-
-                if dist <= thres and dist <= best_dist:
-                    best_dist = dist
-                    best_match = s_tuple
-                    best_index = k
-
-        if best_index is not None:
-            matched_tuples.append([p_tuple, i, best_match, best_index])
-            s_tuples_copy.remove(best_match)
+    for i, (p_tuple, best_index) in enumerate(zip(p_tuples, match_indices)):
+        if best_index != -1:
+            matched_tuples.append([p_tuple, i, s_tuples[best_index], best_index])
         elif not skip_Nones:
-            matched_tuples.append([p_tuple, i, best_match, best_index])
+            matched_tuples.append([p_tuple, i, [None, None, None], None])
 
     # revert back to token format
     for i, l in enumerate(matched_tuples):

@@ -42,6 +42,7 @@ SPLIT_FILE = 'data/asap_only_split.txt'
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 TARGET_BEAT_INTERVAL = 0.5
+TEST_SPLIT_RATIO = 0.1
 
 print("ASAP-Only Tokenization")
 print("=" * 60)
@@ -197,11 +198,11 @@ def load_asap_data():
 
 
 def split_by_composition(datafiles, composition_keys, piece_names):
-    """Create a reproducible 80/20 train/test split by composition key."""
+    """Create a reproducible 90/10 train/test split by composition key."""
     rng = np.random.default_rng(42)
     unique_comp_keys = list(sorted(set(composition_keys)))
     rng.shuffle(unique_comp_keys)
-    n_test = int(np.ceil(0.2 * len(unique_comp_keys)))
+    n_test = int(np.ceil(TEST_SPLIT_RATIO * len(unique_comp_keys)))
     test_comp_keys = set(unique_comp_keys[:n_test])
 
     train_pairs = []
@@ -241,6 +242,37 @@ def write_split_file(total_pieces, train_piece_names, test_piece_names):
     print(f"Split file written: {SPLIT_FILE}\n")
 
 
+def _normalize_score_time_sec(original_time_sec, score_beat_times):
+    """Map a raw score time into the fixed 0.5s-per-beat timeline."""
+    if score_beat_times and len(score_beat_times) >= 2:
+        if original_time_sec < score_beat_times[0]:
+            beat_duration = score_beat_times[1] - score_beat_times[0]
+            if beat_duration > 0:
+                progress = (original_time_sec - score_beat_times[0]) / beat_duration
+            else:
+                progress = 0.0
+            return progress * TARGET_BEAT_INTERVAL
+
+        for i in range(len(score_beat_times) - 1):
+            if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
+                beat_duration = score_beat_times[i + 1] - score_beat_times[i]
+                if beat_duration > 0:
+                    progress = (original_time_sec - score_beat_times[i]) / beat_duration
+                else:
+                    progress = 0.0
+                return i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+
+        last_beat_idx = len(score_beat_times) - 1
+        last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
+        if last_beat_duration > 0:
+            progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
+        else:
+            progress = 0.0
+        return last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
+
+    return original_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
+
+
 def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
     """
     Tokenize an ASAP performance-score pair using beat annotations.
@@ -264,62 +296,15 @@ def tokenize_sliding_windows_asap(filegroup, prefix_controls=33):
             if score_triplet[0] is not None:
                 original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
                 original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
+                original_end_time_sec = original_time_sec + original_duration_sec
                 pitch = score_triplet[2]
 
-                normalized_time_sec = 0.0
-                time_scale_factor = 1.0
-
-                if score_beat_times and len(score_beat_times) >= 2:
-                    if original_time_sec < score_beat_times[0]:
-                        beat_duration = score_beat_times[1] - score_beat_times[0]
-                        if beat_duration > 0:
-                            progress = (original_time_sec - score_beat_times[0]) / beat_duration
-                            time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
-                        else:
-                            progress = 0
-                            time_scale_factor = 1.0
-                        normalized_time_sec = progress * TARGET_BEAT_INTERVAL
-                    else:
-                        found = False
-                        for i in range(len(score_beat_times) - 1):
-                            if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
-                                beat_duration = score_beat_times[i + 1] - score_beat_times[i]
-                                if beat_duration > 0:
-                                    progress = (original_time_sec - score_beat_times[i]) / beat_duration
-                                    time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
-                                else:
-                                    progress = 0
-                                    time_scale_factor = 1.0
-                                normalized_time_sec = (
-                                    i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
-                                )
-                                found = True
-                                break
-
-                        if not found:
-                            last_beat_idx = len(score_beat_times) - 1
-                            if len(score_beat_times) >= 2:
-                                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
-                            else:
-                                last_beat_duration = 1.0
-
-                            if last_beat_duration > 0:
-                                progress = (
-                                    original_time_sec - score_beat_times[-1]
-                                ) / last_beat_duration
-                                time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
-                            else:
-                                progress = 0
-                                time_scale_factor = 1.0
-                            normalized_time_sec = (
-                                last_beat_idx * TARGET_BEAT_INTERVAL
-                                + progress * TARGET_BEAT_INTERVAL
-                            )
-                else:
-                    normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0)
-                    time_scale_factor = 1.0
-
-                normalized_duration_sec = original_duration_sec * time_scale_factor
+                normalized_time_sec = _normalize_score_time_sec(original_time_sec, score_beat_times)
+                normalized_end_time_sec = _normalize_score_time_sec(
+                    original_end_time_sec,
+                    score_beat_times,
+                )
+                normalized_duration_sec = max(0.0, normalized_end_time_sec - normalized_time_sec)
 
                 normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
                 normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
