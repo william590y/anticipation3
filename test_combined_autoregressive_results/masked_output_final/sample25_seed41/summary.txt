@@ -1,0 +1,22 @@
+Test Combined Autoregressive Evaluation
+============================================================
+Checkpoint: masked_output/final
+Test file: data/test_combined.txt
+Total sequences available: 1151643
+Sampled sequences: 25
+Constrained score decoding: True
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 99.50%
+  Time accuracy: 1.87%
+  Duration accuracy: 19.59%
+  Exact triplet accuracy: 0.41%
+  Sequences evaluated: 25
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 99.50% (+-0.61)
+
+Per-sequence outputs:
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json
