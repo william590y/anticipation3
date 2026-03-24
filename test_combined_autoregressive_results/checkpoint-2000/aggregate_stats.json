@@ -1,0 +1,20 @@
+{
+  "time_correct": 2,
+  "time_total": 127,
+  "dur_correct": 0,
+  "dur_total": 127,
+  "pitch_correct": 127,
+  "pitch_total": 127,
+  "overall_correct": 0,
+  "overall_total": 127,
+  "num_sequences_evaluated": 1,
+  "num_sequences_failed": 0,
+  "time_accuracy": 1.5748031496062993,
+  "dur_accuracy": 0.0,
+  "pitch_accuracy": 100.0,
+  "overall_accuracy": 0.0,
+  "autoregressive_accuracy": 1.0,
+  "autoregressive_accuracy_pct": 100.0,
+  "per_sequence_pitch_accuracy_mean": 100.0,
+  "per_sequence_pitch_accuracy_std": 0.0
+}

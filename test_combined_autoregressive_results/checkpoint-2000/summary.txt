@@ -1,0 +1,22 @@
+Test Combined Autoregressive Evaluation
+============================================================
+Checkpoint: checkpoint-2000
+Test file: data/test_combined.txt
+Total sequences available: 1151643
+Sampled sequences: 1
+Constrained score decoding: True
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 100.00%
+  Time accuracy: 1.57%
+  Duration accuracy: 0.00%
+  Exact triplet accuracy: 0.00%
+  Sequences evaluated: 1
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 100.00% (+-0.00)
+
+Per-sequence outputs:
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json

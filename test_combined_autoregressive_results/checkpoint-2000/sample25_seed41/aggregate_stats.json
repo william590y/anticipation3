@@ -1,0 +1,20 @@
+{
+  "time_correct": 54,
+  "time_total": 3425,
+  "dur_correct": 60,
+  "dur_total": 3425,
+  "pitch_correct": 3053,
+  "pitch_total": 3425,
+  "overall_correct": 0,
+  "overall_total": 3425,
+  "num_sequences_evaluated": 25,
+  "num_sequences_failed": 0,
+  "time_accuracy": 1.5766423357664234,
+  "dur_accuracy": 1.7518248175182483,
+  "pitch_accuracy": 89.13868613138686,
+  "overall_accuracy": 0.0,
+  "autoregressive_accuracy": 0.8913868613138686,
+  "autoregressive_accuracy_pct": 89.13868613138686,
+  "per_sequence_pitch_accuracy_mean": 89.13868613138686,
+  "per_sequence_pitch_accuracy_std": 25.39921124370677
+}
