@@ -301,8 +301,8 @@ class EvaluateMusterAsapTests(unittest.TestCase):
     def test_no_overlap_windows_restart_from_next_control(self):
         controls = [
             [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 60],
-            [ATIME_OFFSET + 50, ADUR_OFFSET + 20, ANOTE_OFFSET + 62],
-            [ATIME_OFFSET + 100, ADUR_OFFSET + 20, ANOTE_OFFSET + 64],
+            [ATIME_OFFSET + 200, ADUR_OFFSET + 20, ANOTE_OFFSET + 62],
+            [ATIME_OFFSET + 400, ADUR_OFFSET + 20, ANOTE_OFFSET + 64],
         ]
 
         with mock.patch.object(ema, "PACKED_SEQUENCE_LENGTH", 12):

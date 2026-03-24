@@ -238,6 +238,16 @@ def initialize_generation_window(
     return header, prefix_count, future_idx, time_offset
 
 
+def max_predicted_score_end_units(pred_score_triplets):
+    """Return the latest predicted score offset end time in plain time units."""
+    if not pred_score_triplets:
+        return 0
+    return max(
+        max(0, triplet[0] - TIME_OFFSET) + max(1, triplet[1] - DUR_OFFSET)
+        for triplet in pred_score_triplets
+    )
+
+
 def rebuild_overlap_window(
     control_triplets,
     kept_alt_tokens,
@@ -687,7 +697,7 @@ def autoregressive_generate_from_controls(
                     window_start_idx=window_start_idx,
                     prefix_controls=prefix_controls,
                 )
-                score_time_offset = control_time_offset
+                score_time_offset = max_predicted_score_end_units(pred_score_triplets)
                 context = list(header)
                 score_start_idx = len(header)
                 past = None
