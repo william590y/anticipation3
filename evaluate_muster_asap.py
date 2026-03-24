@@ -641,7 +641,10 @@ def print_piece_muster_metrics(piece_name, metrics, gen_stats):
         summary.append(f"MER+V={metrics['mean_error_rate_with_voice']:.2f}%")
     summary.append(f"slides={gen_stats['num_slides']}")
     summary.append(f"window_mode={gen_stats['window_mode']}")
-    tqdm.write(f"[MUSTER] {piece_name}: " + ", ".join(summary))
+    tqdm.write(
+        f"[MUSTER] {piece_name}: " + ", ".join(summary),
+        file=sys.stderr,
+    )
 
 
 def evaluate_asap_muster(
