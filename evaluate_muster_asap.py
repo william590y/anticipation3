@@ -197,6 +197,47 @@ def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
     return header, k
 
 
+def control_time_units(control_triplet):
+    """Decode a control-triplet onset into plain time units."""
+    return max(0, control_triplet[0] - ATIME_OFFSET)
+
+
+def localize_control_triplet(control_triplet, time_offset):
+    """Shift a control triplet into the current local window timeline."""
+    local_time = max(0, control_time_units(control_triplet) - time_offset)
+    return [ATIME_OFFSET + local_time, control_triplet[1], control_triplet[2]]
+
+
+def initialize_generation_window(
+    control_triplets,
+    window_start_idx,
+    prefix_controls=PREFIX_CONTROLS,
+):
+    """
+    Build a fresh generation window starting at `window_start_idx`.
+
+    Returns:
+        header: serialized prefix tokens for the window
+        prefix_count: number of controls used in the prefix
+        future_idx: next control index to append after the prefix
+        time_offset: absolute time origin of this window
+    """
+    if window_start_idx >= len(control_triplets):
+        return [], 0, len(control_triplets), 0
+
+    time_offset = control_time_units(control_triplet=control_triplets[window_start_idx])
+    localized_prefix_controls = [
+        localize_control_triplet(control_triplet, time_offset)
+        for control_triplet in control_triplets[window_start_idx:window_start_idx + prefix_controls]
+    ]
+    header, prefix_count = build_prefix_header(
+        localized_prefix_controls,
+        prefix_controls=prefix_controls,
+    )
+    future_idx = window_start_idx + prefix_count
+    return header, prefix_count, future_idx, time_offset
+
+
 def _file_fingerprint(path):
     stat = os.stat(path)
     return {
@@ -357,6 +398,7 @@ def autoregressive_generate_from_controls(
     prefix_controls=PREFIX_CONTROLS,
     beam_size=1,
     temperature=0.0,
+    overlap_windows=True,
 ):
     """
     Generate score triplets for an entire piece using performance-only controls.
@@ -365,34 +407,42 @@ def autoregressive_generate_from_controls(
     between one generated score triplet and the next performance control triplet.
     No ground-truth score tokens are ever inserted into the sequence.
     """
+    window_mode = "half_overlap" if overlap_windows else "no_overlap"
     if not control_triplets:
         return [], {
             "num_slides": 0,
+            "num_window_resets": 0,
             "beam_log_prob": 0.0,
             "num_controls_used": 0,
             "total_performance_notes": 0,
             "prefix_controls_used": 0,
             "score_start_idx": 0,
+            "window_mode": window_mode,
         }
 
     vocab_size = model.config.vocab_size
-    header, prefix_count = build_prefix_header(control_triplets, prefix_controls=prefix_controls)
+    header, prefix_count, future_idx, time_offset = initialize_generation_window(
+        control_triplets,
+        window_start_idx=0,
+        prefix_controls=prefix_controls,
+    )
     score_start_idx = len(header)
     context = list(header)
     pred_score_triplets = []
     stats = {
         "num_slides": 0,
+        "num_window_resets": 0,
         "beam_log_prob": 0.0,
         "num_controls_used": len(control_triplets),
         "total_performance_notes": len(control_triplets),
         "prefix_controls_used": prefix_count,
         "score_start_idx": score_start_idx,
+        "window_mode": window_mode,
     }
 
     past = None
     next_logits = None
-    future_idx = prefix_count
-    time_offset = 0
+    note_idx = 0
 
     def _clamp(tokens):
         return [min(max(int(token), 0), vocab_size - 1) for token in tokens]
@@ -485,7 +535,7 @@ def autoregressive_generate_from_controls(
         return new_alt, time_shift
 
     num_controls = len(control_triplets)
-    for _note_idx in range(num_controls):
+    while note_idx < num_controls:
         if beam_size > 1:
             beams = [(list(context), 0.0)]
             for slot_idx in range(3):
@@ -534,15 +584,30 @@ def autoregressive_generate_from_controls(
                 token_dur,
                 token_pitch,
             ])
+        note_idx += 1
 
         if future_idx < num_controls:
-            control_triplet = control_triplets[future_idx]
+            control_triplet = localize_control_triplet(control_triplets[future_idx], time_offset)
             context.extend(control_triplet)
             if past is not None:
                 _feed(control_triplet)
             future_idx += 1
 
-        if len(context) >= PACKED_SEQUENCE_LENGTH:
+        if len(context) >= PACKED_SEQUENCE_LENGTH and note_idx < num_controls:
+            if not overlap_windows:
+                header, prefix_count, future_idx, time_offset = initialize_generation_window(
+                    control_triplets,
+                    window_start_idx=note_idx,
+                    prefix_controls=prefix_controls,
+                )
+                context = list(header)
+                score_start_idx = len(header)
+                past = None
+                next_logits = None
+                stats["num_slides"] += 1
+                stats["num_window_resets"] += 1
+                continue
+
             alternating = context[score_start_idx:]
             half = (len(alternating) // 2) // 6 * 6
             if half > 0:
@@ -560,7 +625,33 @@ def autoregressive_generate_from_controls(
 # Evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir, beam_size=1, temperature=0.0):
+def print_piece_muster_metrics(piece_name, metrics, gen_stats):
+    """Print a compact MUSTER summary for one evaluated piece."""
+    summary = [
+        f"MER={metrics['mean_error_rate']:.2f}%",
+        f"PER={metrics['pitch_error_rate']:.2f}%",
+        f"MNR={metrics['missing_note_rate']:.2f}%",
+        f"ENR={metrics['extra_note_rate']:.2f}%",
+        f"OTER={metrics['onset_time_error_rate']:.2f}%",
+        f"OFTER={metrics['offset_time_error_rate']:.2f}%",
+    ]
+    if "voice_error_rate" in metrics:
+        summary.append(f"VER={metrics['voice_error_rate']:.2f}%")
+    if "mean_error_rate_with_voice" in metrics:
+        summary.append(f"MER+V={metrics['mean_error_rate_with_voice']:.2f}%")
+    summary.append(f"slides={gen_stats['num_slides']}")
+    summary.append(f"window_mode={gen_stats['window_mode']}")
+    tqdm.write(f"[MUSTER] {piece_name}: " + ", ".join(summary))
+
+
+def evaluate_asap_muster(
+    checkpoint_path,
+    piece_infos,
+    output_dir,
+    beam_size=1,
+    temperature=0.0,
+    overlap_windows=True,
+):
     """Run model + MUSTER on full-piece ASAP sequences using fair conditioning."""
     model, device = load_model(checkpoint_path)
     os.makedirs(output_dir, exist_ok=True)
@@ -603,6 +694,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir, beam_size=1, 
                 prefix_controls=PREFIX_CONTROLS,
                 beam_size=beam_size,
                 temperature=temperature,
+                overlap_windows=overlap_windows,
             )
         except Exception as exc:
             print(f"  {piece_name}: generation failed - {exc}")
@@ -655,6 +747,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir, beam_size=1, 
         metrics["prefix_controls_used"] = gen_stats["prefix_controls_used"]
         metrics["score_start_idx"] = gen_stats["score_start_idx"]
         metrics["num_slides"] = gen_stats["num_slides"]
+        metrics["num_window_resets"] = gen_stats["num_window_resets"]
         metrics["beam_log_prob"] = gen_stats["beam_log_prob"]
         metrics["cache_hit"] = piece_info["cache_hit"]
         metrics["cache_path"] = piece_info["cache_path"]
@@ -663,6 +756,8 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir, beam_size=1, 
             gen_stats["num_controls_used"] == len(control_triplets)
         )
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
+        metrics["window_mode"] = gen_stats["window_mode"]
+        print_piece_muster_metrics(piece_name, metrics, gen_stats)
 
         per_sequence_metrics.append(metrics)
         for key in aggregate_metrics:
@@ -677,6 +772,7 @@ def evaluate_asap_muster(checkpoint_path, piece_infos, output_dir, beam_size=1, 
         "evaluation_protocol": "fair_control_driven",
         "gt_score_beat_interval_sec": TARGET_BEAT_INTERVAL,
         "all_performance_notes_used": True,
+        "window_mode": "half_overlap" if overlap_windows else "no_overlap",
         "num_sequences_evaluated": num_successful,
         "num_sequences_failed": num_failed,
         "num_cache_hits": num_cache_hits,
@@ -730,6 +826,11 @@ def main():
     )
     parser.add_argument("--beam", type=int, default=1, metavar="BEAM_SIZE")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--no-overlap",
+        action="store_true",
+        help="Use disjoint control windows instead of the default half-overlap slides",
+    )
     args = parser.parse_args()
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -786,7 +887,8 @@ def main():
 
     mode_suffix = f"_beam{args.beam}" if args.beam > 1 else ""
     temp_suffix = f"_temp{args.temperature}" if args.temperature > 0 else ""
-    subdir = f"{args.checkpoint}_asap_fair{mode_suffix}{temp_suffix}"
+    overlap_suffix = "_nooverlap" if args.no_overlap else ""
+    subdir = f"{args.checkpoint}_asap_fair{mode_suffix}{temp_suffix}{overlap_suffix}"
     output_dir = str(Path(OUTPUT_BASE) / subdir)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -807,6 +909,7 @@ def main():
         output_dir,
         beam_size=args.beam,
         temperature=args.temperature,
+        overlap_windows=not args.no_overlap,
     )
 
     print_muster_summary(args.checkpoint, stats)
