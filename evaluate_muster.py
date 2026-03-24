@@ -684,6 +684,13 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                     best_dur  = d
             # Clamp duration to match type (MUSTER needs consistent dur/type)
             return best_type, best_dur
+
+        def emit_forward(parent, duration_bins):
+            """Advance the measure cursor without inventing a note/rest spelling."""
+            if duration_bins <= 0:
+                return
+            forward_el = SubElement(parent, 'forward')
+            SubElement(forward_el, 'duration').text = str(duration_bins)
         
         # Build XML
         root = Element('score-partwise', version='3.0')
@@ -717,21 +724,35 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                 SubElement(clef_el, 'line').text  = '2'
             
             # Collect notes in this measure
-            m_notes = [(o, d, p) for o, d, p in notes if o >= m_start and o < m_end]
+            m_notes = [(o - m_start, d, p) for o, d, p in notes if o >= m_start and o < m_end]
             
-            # Emit notes sorted by onset; use <chord> for simultaneous notes
-            prev_onset = None
-            for onset, dur, pitch in m_notes:
-                note_el = SubElement(measure_el, 'note')
-                # Chord tag if same onset as previous
-                if prev_onset is not None and onset == prev_onset:
-                    SubElement(note_el, 'chord')
-                midi_to_pitch_elements(note_el, pitch)
-                
-                note_type, clamped_dur = dur_to_type(dur)
-                SubElement(note_el, 'duration').text = str(clamped_dur)
-                SubElement(note_el, 'type').text = note_type
-                prev_onset = onset
+            # Emit notes in measure-local time, preserving gaps with <forward>.
+            cursor = 0
+            note_pos = 0
+            while note_pos < len(m_notes):
+                onset = m_notes[note_pos][0]
+                if onset > cursor:
+                    emit_forward(measure_el, onset - cursor)
+                    cursor = onset
+
+                chord_notes = []
+                while note_pos < len(m_notes) and m_notes[note_pos][0] == onset:
+                    chord_notes.append(m_notes[note_pos])
+                    note_pos += 1
+
+                group_advance = 0
+                for chord_idx, (_, dur, pitch) in enumerate(chord_notes):
+                    note_el = SubElement(measure_el, 'note')
+                    if chord_idx > 0:
+                        SubElement(note_el, 'chord')
+                    midi_to_pitch_elements(note_el, pitch)
+
+                    note_type, clamped_dur = dur_to_type(dur)
+                    SubElement(note_el, 'duration').text = str(clamped_dur)
+                    SubElement(note_el, 'type').text = note_type
+                    group_advance = max(group_advance, clamped_dur)
+
+                cursor = max(cursor, onset + group_advance)
             
             # If no notes, emit a whole rest so the measure is not empty
             if not m_notes:

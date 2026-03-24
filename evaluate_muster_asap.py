@@ -238,6 +238,87 @@ def initialize_generation_window(
     return header, prefix_count, future_idx, time_offset
 
 
+def rebuild_overlap_window(
+    control_triplets,
+    kept_alt_tokens,
+    window_start_idx,
+    prefix_controls,
+    score_time_offset,
+):
+    """
+    Rebuild a slid overlap window so both prefix and kept tail come from the
+    same middle-of-piece start index.
+
+    The new prefix is reconstructed from control triplets beginning at
+    `window_start_idx`, while the kept score tail is rebased to start at local
+    score time zero and the kept control tail is regenerated from the absolute
+    performance controls for the same window.
+    """
+    header, prefix_count, _, control_time_offset = initialize_generation_window(
+        control_triplets,
+        window_start_idx=window_start_idx,
+        prefix_controls=prefix_controls,
+    )
+
+    if not kept_alt_tokens:
+        return (
+            header,
+            [],
+            prefix_count,
+            window_start_idx + prefix_count,
+            control_time_offset,
+            score_time_offset,
+        )
+
+    rebuilt_tail = []
+    tail_control_count = 0
+    local_score_shift = None
+    piece_idx = window_start_idx
+    pos = 0
+
+    while pos + 2 < len(kept_alt_tokens):
+        score_triplet = kept_alt_tokens[pos:pos + 3]
+        if score_triplet[0] >= CONTROL_OFFSET:
+            break
+
+        if local_score_shift is None:
+            local_score_shift = score_triplet[0] - TIME_OFFSET
+
+        rebuilt_tail.extend([
+            max(TIME_OFFSET, score_triplet[0] - local_score_shift),
+            score_triplet[1],
+            score_triplet[2],
+        ])
+        pos += 3
+
+        if pos + 2 < len(kept_alt_tokens):
+            maybe_control = kept_alt_tokens[pos:pos + 3]
+            if all(token >= CONTROL_OFFSET for token in maybe_control):
+                control_idx = piece_idx + prefix_count
+                if control_idx < len(control_triplets):
+                    rebuilt_tail.extend(
+                        localize_control_triplet(
+                            control_triplets[control_idx],
+                            control_time_offset,
+                        )
+                    )
+                    tail_control_count += 1
+                pos += 3
+
+        piece_idx += 1
+
+    new_future_idx = window_start_idx + prefix_count + tail_control_count
+    new_score_time_offset = score_time_offset + (local_score_shift or 0)
+    return (
+        header,
+        rebuilt_tail,
+        prefix_count,
+        new_future_idx,
+        control_time_offset,
+        new_score_time_offset,
+    )
+
+
 def _file_fingerprint(path):
     stat = os.stat(path)
     return {
@@ -421,7 +502,7 @@ def autoregressive_generate_from_controls(
         }
 
     vocab_size = model.config.vocab_size
-    header, prefix_count, future_idx, time_offset = initialize_generation_window(
+    header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
         control_triplets,
         window_start_idx=0,
         prefix_controls=prefix_controls,
@@ -443,6 +524,8 @@ def autoregressive_generate_from_controls(
     past = None
     next_logits = None
     note_idx = 0
+    window_start_idx = 0
+    score_time_offset = 0
 
     def _clamp(tokens):
         return [min(max(int(token), 0), vocab_size - 1) for token in tokens]
@@ -566,7 +649,7 @@ def autoregressive_generate_from_controls(
             )
             stats["beam_log_prob"] += best_log_prob
             pred_score_triplets.append([
-                best_context[-3] + time_offset,
+                best_context[-3] + score_time_offset,
                 best_context[-2],
                 best_context[-1],
             ])
@@ -580,14 +663,17 @@ def autoregressive_generate_from_controls(
             token_pitch = _decode_next(2, sample=sample)
             _assert_valid_score_triplet(token_time, token_dur, token_pitch)
             pred_score_triplets.append([
-                token_time + time_offset,
+                token_time + score_time_offset,
                 token_dur,
                 token_pitch,
             ])
         note_idx += 1
 
         if future_idx < num_controls:
-            control_triplet = localize_control_triplet(control_triplets[future_idx], time_offset)
+            control_triplet = localize_control_triplet(
+                control_triplets[future_idx],
+                control_time_offset,
+            )
             context.extend(control_triplet)
             if past is not None:
                 _feed(control_triplet)
@@ -595,11 +681,13 @@ def autoregressive_generate_from_controls(
 
         if len(context) >= PACKED_SEQUENCE_LENGTH and note_idx < num_controls:
             if not overlap_windows:
-                header, prefix_count, future_idx, time_offset = initialize_generation_window(
+                window_start_idx = note_idx
+                header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
                     control_triplets,
-                    window_start_idx=note_idx,
+                    window_start_idx=window_start_idx,
                     prefix_controls=prefix_controls,
                 )
+                score_time_offset = control_time_offset
                 context = list(header)
                 score_start_idx = len(header)
                 past = None
@@ -611,9 +699,24 @@ def autoregressive_generate_from_controls(
             alternating = context[score_start_idx:]
             half = (len(alternating) // 2) // 6 * 6
             if half > 0:
-                remaining, time_shift = _renormalize_alt_times(alternating[half:])
+                discarded_pairs = half // 6
+                window_start_idx += discarded_pairs
+                (
+                    header,
+                    remaining,
+                    prefix_count,
+                    future_idx,
+                    control_time_offset,
+                    score_time_offset,
+                ) = rebuild_overlap_window(
+                    control_triplets,
+                    alternating[half:],
+                    window_start_idx=window_start_idx,
+                    prefix_controls=prefix_controls,
+                    score_time_offset=score_time_offset,
+                )
                 context = header + remaining
-                time_offset += time_shift
+                score_start_idx = len(header)
                 past = None
                 next_logits = None
                 stats["num_slides"] += 1
@@ -641,10 +744,11 @@ def print_piece_muster_metrics(piece_name, metrics, gen_stats):
         summary.append(f"MER+V={metrics['mean_error_rate_with_voice']:.2f}%")
     summary.append(f"slides={gen_stats['num_slides']}")
     summary.append(f"window_mode={gen_stats['window_mode']}")
-    tqdm.write(
-        f"[MUSTER] {piece_name}: " + ", ".join(summary),
-        file=sys.stderr,
-    )
+    message = f"[MUSTER] {piece_name}: " + ", ".join(summary)
+    if sys.stderr.isatty():
+        tqdm.write(message, file=sys.stderr)
+    else:
+        print(message, file=sys.stderr, flush=True)
 
 
 def evaluate_asap_muster(

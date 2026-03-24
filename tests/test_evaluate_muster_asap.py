@@ -239,6 +239,39 @@ class EvaluateMusterAsapTests(unittest.TestCase):
         self.assertEqual(localized[0], ATIME_OFFSET + 50)
         self.assertEqual(localized[1:], control[1:])
 
+    def test_rebuild_overlap_window_uses_middle_prefix_and_tail(self):
+        controls = [
+            [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 60],
+            [ATIME_OFFSET + 40, ADUR_OFFSET + 20, ANOTE_OFFSET + 62],
+            [ATIME_OFFSET + 80, ADUR_OFFSET + 20, ANOTE_OFFSET + 64],
+            [ATIME_OFFSET + 120, ADUR_OFFSET + 20, ANOTE_OFFSET + 65],
+            [ATIME_OFFSET + 160, ADUR_OFFSET + 20, ANOTE_OFFSET + 67],
+        ]
+        kept_tail = [
+            TIME_OFFSET + 30, DUR_OFFSET + 10, NOTE_OFFSET + 70,
+            ATIME_OFFSET + 120, ADUR_OFFSET + 20, ANOTE_OFFSET + 65,
+            TIME_OFFSET + 55, DUR_OFFSET + 10, NOTE_OFFSET + 72,
+        ]
+
+        header, rebuilt_tail, prefix_count, future_idx, control_offset, score_offset = (
+            ema.rebuild_overlap_window(
+                controls,
+                kept_tail,
+                window_start_idx=1,
+                prefix_controls=2,
+                score_time_offset=5,
+            )
+        )
+
+        self.assertEqual(prefix_count, 2)
+        self.assertEqual(control_offset, 40)
+        self.assertEqual(score_offset, 35)
+        self.assertEqual(header[0:3], [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 62])
+        self.assertEqual(header[6:9], [ATIME_OFFSET + 40, ADUR_OFFSET + 20, ANOTE_OFFSET + 64])
+        self.assertEqual(rebuilt_tail[0:3], [TIME_OFFSET + 0, DUR_OFFSET + 10, NOTE_OFFSET + 70])
+        self.assertEqual(rebuilt_tail[3:6], [ATIME_OFFSET + 80, ADUR_OFFSET + 20, ANOTE_OFFSET + 65])
+        self.assertEqual(future_idx, 4)
+
     def test_generator_masks_invalid_tokens_for_score_slots(self):
         controls = [
             [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 60],
@@ -317,6 +350,28 @@ class EvaluateMusterAsapTests(unittest.TestCase):
             tree = ET.parse(xml_path)
             first_duration = int(tree.find(".//note/duration").text)
             self.assertEqual(first_duration, expected_bins)
+
+    def test_musicxml_export_preserves_intra_measure_gap(self):
+        with WorkspaceTempDir() as tmpdir:
+            root = Path(tmpdir)
+            xml_path = root / "gapped_score.xml"
+            triplets = [
+                [TIME_OFFSET + 0, DUR_OFFSET + 50, NOTE_OFFSET + 60],
+                [TIME_OFFSET + 100, DUR_OFFSET + 50, NOTE_OFFSET + 62],
+            ]
+
+            self.assertTrue(
+                ema.triplets_to_musicxml(
+                    triplets,
+                    str(xml_path),
+                    beat_seconds=ema.TARGET_BEAT_INTERVAL,
+                )
+            )
+
+            tree = ET.parse(xml_path)
+            forwards = tree.findall(".//forward")
+            self.assertEqual(len(forwards), 1)
+            self.assertEqual(int(forwards[0].find("duration").text), 50)
 
     def test_end_to_end_smoke_reports_fair_protocol_metadata(self):
         with WorkspaceTempDir() as tmpdir:
