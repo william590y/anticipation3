@@ -231,6 +231,13 @@ class EvaluateMusterAsapTests(unittest.TestCase):
         self.assertEqual(stats["num_controls_used"], len(controls))
         self.assertEqual(stats["total_performance_notes"], len(controls))
         self.assertGreater(stats["score_start_idx"], 0)
+        self.assertEqual(stats["window_mode"], "half_overlap")
+
+    def test_localize_control_triplet_shifts_to_window_time(self):
+        control = [ATIME_OFFSET + 150, ADUR_OFFSET + 20, ANOTE_OFFSET + 64]
+        localized = ema.localize_control_triplet(control, time_offset=100)
+        self.assertEqual(localized[0], ATIME_OFFSET + 50)
+        self.assertEqual(localized[1:], control[1:])
 
     def test_generator_masks_invalid_tokens_for_score_slots(self):
         controls = [
@@ -257,6 +264,28 @@ class EvaluateMusterAsapTests(unittest.TestCase):
             self.assertLess(pitch_tok, REST)
 
         events_to_midi(ema.triplets_to_events(pred_score))
+
+    def test_no_overlap_windows_restart_from_next_control(self):
+        controls = [
+            [ATIME_OFFSET + 0, ADUR_OFFSET + 20, ANOTE_OFFSET + 60],
+            [ATIME_OFFSET + 50, ADUR_OFFSET + 20, ANOTE_OFFSET + 62],
+            [ATIME_OFFSET + 100, ADUR_OFFSET + 20, ANOTE_OFFSET + 64],
+        ]
+
+        with mock.patch.object(ema, "PACKED_SEQUENCE_LENGTH", 12):
+            pred_score, stats = ema.autoregressive_generate_from_controls(
+                FakeModel(),
+                controls,
+                device="cpu",
+                prefix_controls=1,
+                beam_size=1,
+                temperature=0.0,
+                overlap_windows=False,
+            )
+
+        self.assertEqual([triplet[0] for triplet in pred_score], [0, 50, 100])
+        self.assertEqual(stats["window_mode"], "no_overlap")
+        self.assertEqual(stats["num_window_resets"], 2)
 
     def test_score_normalization_and_export_use_half_second_beats(self):
         with WorkspaceTempDir() as tmpdir:
@@ -338,6 +367,7 @@ class EvaluateMusterAsapTests(unittest.TestCase):
             self.assertEqual(metrics["gt_score_beat_interval_sec"], ema.TARGET_BEAT_INTERVAL)
             self.assertEqual(metrics["num_controls_used"], metrics["total_performance_notes"])
             self.assertEqual(metrics["num_gt_notes"], len(piece_info["gt_score_triplets"]))
+            self.assertEqual(metrics["window_mode"], "half_overlap")
 
 
 if __name__ == "__main__":
