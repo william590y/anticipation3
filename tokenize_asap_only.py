@@ -28,66 +28,30 @@ from alignment import align_tokens2, load_annotation_file
 # Suppress music21-style warnings that can surface via imported utilities.
 warnings.filterwarnings('ignore', category=UserWarning)
 
-DEFAULT_MAX_WORKERS = 32
-DEFAULT_MAX_TASKS_PER_CHILD = 32
-WORKER_ENV_VAR = 'ASAP_TOKENIZE_WORKERS'
-MAX_TASKS_ENV_VAR = 'ASAP_TOKENIZE_MAX_TASKS_PER_CHILD'
-
-
-def _read_positive_int_env(var_name):
-    raw_value = os.environ.get(var_name)
-    if raw_value is None:
-        return None
-
-    try:
-        value = int(raw_value)
-    except ValueError:
-        warnings.warn(f"Ignoring invalid {var_name}={raw_value!r}; expected a positive integer.")
-        return None
-
-    if value <= 0:
-        warnings.warn(f"Ignoring invalid {var_name}={raw_value!r}; expected a positive integer.")
-        return None
-
-    return value
-
-
-def _resolve_num_workers():
-    cpu_count = os.cpu_count() or 1
-    env_override = _read_positive_int_env(WORKER_ENV_VAR)
-    if env_override is not None:
-        return env_override
-
-    workers = min(cpu_count, DEFAULT_MAX_WORKERS)
-
-    # Multiprocessing pools use several pipes/queues per worker. On shared
-    # clusters with a modest RLIMIT_NOFILE, a CPU-count-sized pool can fail
-    # during teardown/recreation with "Too many open files".
+def _raise_open_file_limit():
+    """
+    Best-effort bump of the soft RLIMIT_NOFILE to the hard limit on POSIX.
+    Returns (old_soft, hard, new_soft) when available, else None.
+    """
     try:
         import resource
+    except ImportError:
+        return None
 
-        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if soft_limit > 0:
-            fd_headroom = 128
-            approx_fds_per_worker = 8
-            fd_capped_workers = max(1, (soft_limit - fd_headroom) // approx_fds_per_worker)
-            workers = min(workers, fd_capped_workers)
-    except (ImportError, OSError, ValueError):
-        pass
-
-    return max(1, workers)
-
-
-def _resolve_max_tasks_per_child():
-    env_override = _read_positive_int_env(MAX_TASKS_ENV_VAR)
-    if env_override is not None:
-        return env_override
-    return DEFAULT_MAX_TASKS_PER_CHILD
+    try:
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard_limit > soft_limit:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard_limit, hard_limit))
+            new_soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+            return soft_limit, hard_limit, new_soft_limit
+        return soft_limit, hard_limit, soft_limit
+    except (OSError, ValueError):
+        return None
 
 
 # Number of parallel workers
-NUM_WORKERS = _resolve_num_workers()
-POOL_MAX_TASKS_PER_CHILD = _resolve_max_tasks_per_child()
+NUM_WORKERS = os.cpu_count()
+OPEN_FILE_LIMIT_INFO = _raise_open_file_limit()
 
 # Dataset paths
 ASAP_PATH = 'asap-dataset-master'
@@ -106,7 +70,9 @@ print("ASAP-Only Tokenization")
 print("=" * 60)
 print("Configuration:")
 print(f"  Workers: {NUM_WORKERS}")
-print(f"  Max tasks/child: {POOL_MAX_TASKS_PER_CHILD}")
+if OPEN_FILE_LIMIT_INFO is not None:
+    old_soft_limit, hard_limit, new_soft_limit = OPEN_FILE_LIMIT_INFO
+    print(f"  Open-file limit: {old_soft_limit} -> {new_soft_limit} (hard: {hard_limit})")
 print(f"  Context size: {CONTEXT_SIZE}")
 print(f"  Serialized length: {PACKED_SEQUENCE_LENGTH}")
 print("  Prefix controls: 33 (fixed)")
@@ -477,31 +443,6 @@ def process_single_piece(filegroup):
     return sequences, len(sequences)
 
 
-def _process_split(pool, pairs, output_path, desc):
-    """
-    Process one split using an existing worker pool.
-
-    Returns: (total_sequences, pieces_success, pieces_failed)
-    """
-    sequences_total = 0
-    pieces_success = 0
-    pieces_failed = 0
-
-    with open(output_path, 'w') as output_file:
-        with tqdm(total=len(pairs), desc=desc, unit='piece') as progress:
-            for sequences, count in pool.imap_unordered(process_single_piece, pairs):
-                if count > 0:
-                    for sequence in sequences:
-                        output_file.write(sequence + '\n')
-                    sequences_total += count
-                    pieces_success += 1
-                else:
-                    pieces_failed += 1
-                progress.update(1)
-
-    return sequences_total, pieces_success, pieces_failed
-
-
 def main():
     print("Processing ASAP metadata...")
     os.makedirs('data', exist_ok=True)
@@ -525,27 +466,46 @@ def main():
 
     write_split_file(len(asap_datafiles), train_piece_names, test_piece_names)
 
-    with Pool(processes=NUM_WORKERS, maxtasksperchild=POOL_MAX_TASKS_PER_CHILD) as pool:
-        print("Processing training set...")
-        train_sequences_total, train_pieces_success, train_pieces_failed = _process_split(
-            pool,
-            train_pairs,
-            TRAIN_OUTPUT,
-            'Train',
-        )
+    print("Processing training set...")
+    train_sequences_total = 0
+    train_pieces_success = 0
+    train_pieces_failed = 0
 
-        print(
-            f"Train: {train_sequences_total} sequences from "
-            f"{train_pieces_success} ASAP pieces, {train_pieces_failed} failed"
-        )
+    with open(TRAIN_OUTPUT, 'w') as train_file:
+        with Pool(processes=NUM_WORKERS) as pool:
+            with tqdm(total=len(train_pairs), desc='Train', unit='piece') as progress:
+                for sequences, count in pool.imap_unordered(process_single_piece, train_pairs):
+                    if count > 0:
+                        for sequence in sequences:
+                            train_file.write(sequence + '\n')
+                        train_sequences_total += count
+                        train_pieces_success += 1
+                    else:
+                        train_pieces_failed += 1
+                    progress.update(1)
 
-        print("\nProcessing test set...")
-        test_sequences_total, test_pieces_success, test_pieces_failed = _process_split(
-            pool,
-            test_pairs,
-            TEST_OUTPUT,
-            'Test',
-        )
+    print(
+        f"Train: {train_sequences_total} sequences from "
+        f"{train_pieces_success} ASAP pieces, {train_pieces_failed} failed"
+    )
+
+    print("\nProcessing test set...")
+    test_sequences_total = 0
+    test_pieces_success = 0
+    test_pieces_failed = 0
+
+    with open(TEST_OUTPUT, 'w') as test_file:
+        with Pool(processes=NUM_WORKERS) as pool:
+            with tqdm(total=len(test_pairs), desc='Test', unit='piece') as progress:
+                for sequences, count in pool.imap_unordered(process_single_piece, test_pairs):
+                    if count > 0:
+                        for sequence in sequences:
+                            test_file.write(sequence + '\n')
+                        test_sequences_total += count
+                        test_pieces_success += 1
+                    else:
+                        test_pieces_failed += 1
+                    progress.update(1)
 
     print(
         f"Test: {test_sequences_total} sequences from "
