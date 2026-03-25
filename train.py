@@ -404,11 +404,9 @@ class TokenizedDataset(Dataset):
         if torch.any(performance_loss_mask).item():
             labels[performance_loss_mask] = -100
         
-        # Masked score tokens are removed from the visible context and also get
-        # zeroed embeddings in forward_batch.
+        # Masked score tokens stay visible to attention; forward_batch only
+        # zeroes their input embeddings.
         attention_mask = torch.ones_like(augmented_tokens)
-        if torch.any(score_mask).item():
-            attention_mask[score_mask] = 0
 
         return {
             "input_ids": augmented_tokens,
@@ -488,11 +486,10 @@ def forward_batch(model, batch):
 
     inputs_embeds = _get_input_embedding_layer(model)(input_ids)
     inputs_embeds = inputs_embeds.masked_fill(score_mask.unsqueeze(-1), 0.0)
-    masked_attention_mask = attention_mask.masked_fill(score_mask, 0)
 
     return model(
         inputs_embeds=inputs_embeds,
-        attention_mask=masked_attention_mask,
+        attention_mask=attention_mask,
         labels=labels,
     )
 
