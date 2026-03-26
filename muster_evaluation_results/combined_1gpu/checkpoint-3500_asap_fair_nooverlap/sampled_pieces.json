@@ -1,0 +1,17 @@
+[
+  {
+    "piece": "Schumann/Kreisleriana/7/Yarden09.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/cd86b2d20c5dc30e063d.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/10-1/Hou02M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/b9ce2f89e4e8d03fcb23.json"
+  },
+  {
+    "piece": "Bach/Fugue/bwv_873/Lisiecki02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/9014acdfcb22597d0c75.json"
+  }
+]

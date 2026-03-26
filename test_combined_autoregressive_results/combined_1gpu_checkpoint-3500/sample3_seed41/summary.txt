@@ -1,0 +1,22 @@
+Test Combined Autoregressive Evaluation
+============================================================
+Checkpoint: combined_1gpu/checkpoint-3500
+Test file: data/test_combined.txt
+Total sequences available: 1151643
+Sampled sequences: 3
+Constrained score decoding: True
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 94.40%
+  Time accuracy: 1.95%
+  Duration accuracy: 32.12%
+  Exact triplet accuracy: 1.22%
+  Sequences evaluated: 3
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 94.40% (+-5.88)
+
+Per-sequence outputs:
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json
