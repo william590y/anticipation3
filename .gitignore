@@ -1,5 +1,27 @@
 # Ignore all safetensors files
 *.safetensors
+
+# Local datasets and large downloads
+ATEPP/
 data/
+
+# Local environments and editor metadata
+.venv/
+.cursor/
+.ipynb_checkpoints/
+__MACOSX/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Native/build artifacts
+build/
+*.pyd
+*.obj
+*.lib
+*.exp
+*.pdb
+
 __pycache__/
 *.py[cod]
