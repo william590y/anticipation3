@@ -1,9 +1,9 @@
 """
-Tokenize ASAP dataset using sliding window to extract all possible 1024-token sequences.
+Tokenize ASAP dataset using sliding window to extract all possible packed 1020-token sequences.
 
 This creates multiple training examples from each piece by starting the interleaving
 process at every valid position that has enough remaining notes to form a complete
-1024-token sequence.
+packed sequence.
 
 Score normalization ENFORCES 0.5 second beat spacing regardless of original tempo.
 Performance/control times preserve original tempo but are shifted to start at 0.
@@ -37,6 +37,7 @@ SPLIT_FILE = 'data/normalized_split.txt'
 print(f"Tokenization configuration:")
 print(f"  Workers: {NUM_WORKERS}")
 print(f"  Context size: {CONTEXT_SIZE}")
+print(f"  Serialized length: {CONTEXT_SIZE - 4}")
 print(f"  Prefix controls: 33 (fixed)")
 print(f"  Strategy: Sliding window over all piece positions")
 print(f"  Output format: space-separated tokens (one sequence per line)")
@@ -96,7 +97,7 @@ with open(SPLIT_FILE, 'w') as f:
     f.write(f"# Train/Test Split (seed=42, test_frac=0.2)\n")
     f.write(f"# Total pieces: {len(datafiles)} (train: {len(train_pairs)}, test: {len(test_pairs)})\n")
     f.write(f"# Split by unique scores to prevent data leakage\n")
-    f.write(f"# Strategy: Sliding window - all possible 1024-token sequences from each piece\n\n")
+    f.write(f"# Strategy: Sliding window - all possible packed 1020-token sequences from each piece\n\n")
     
     f.write(f"=== TRAINING PIECES ===\n")
     for piece_name in sorted(train_piece_names):
@@ -111,7 +112,7 @@ print(f"Split file written: {SPLIT_FILE}\n")
 
 def tokenize_sliding_windows(filegroup, prefix_controls=33):
     """
-    Tokenize a single performance-score pair, extracting ALL possible 1024-token sequences
+    Tokenize a single performance-score pair, extracting all possible packed sequences
     using a sliding window approach.
     
     Matches the exact interleaving logic from tokenize-asap-openings.py but applied at
@@ -296,27 +297,23 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                         perf_triplet[2] + ANOTE_OFFSET    # pitch
                     ])
             
-            # Prepend 3 SEPs
-            interleaved_tokens[0:0] = [SEPARATOR, SEPARATOR, SEPARATOR]
-            
             # Check if we have enough tokens
-            max_body = EVENT_SIZE * M  # 1023
+            max_body = CONTEXT_SIZE - 4
             if len(interleaved_tokens) < max_body:
                 # Not enough tokens for a full sequence, stop trying later positions
                 break
             
-            # Trim to exactly 1023 tokens
+            # Trim to the packed serialized length
             interleaved_tokens = interleaved_tokens[:max_body]
             
             # Check if sequence is valid
             if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
                 continue  # Skip this sequence, try next position
             
-            # Add mode token
-            sequence = [ANTICIPATE] + interleaved_tokens
+            sequence = interleaved_tokens
             
             # Verify sequence length
-            assert len(sequence) == CONTEXT_SIZE, f"Expected {CONTEXT_SIZE} tokens, got {len(sequence)}"
+            assert len(sequence) == max_body, f"Expected {max_body} tokens, got {len(sequence)}"
             
             # Return as space-separated string
             token_str = ' '.join(str(tok) for tok in sequence)
@@ -396,16 +393,15 @@ if train_sequences_total > 0:
         first_seq = [int(x) for x in tokens_part.split()]
     
     print(f"First training sequence length: {len(first_seq)} tokens")
-    print(f"Mode token: {first_seq[0]} (expected {ANTICIPATE})")
-    print(f"Bootstrap: {first_seq[1:4]} (expected {[SEPARATOR, SEPARATOR, SEPARATOR]})")
+    print("No mode/bootstrap tokens are serialized")
     
     # Count control vs score tokens in first 100 triplets
     control_count = 0
     score_count = 0
     rest_count = 0
     
-    for i in range(min(100, (len(first_seq) - 4) // 3)):
-        pos = 4 + i * 3  # After mode + 3 SEPs
+    for i in range(min(100, len(first_seq) // 3)):
+        pos = i * 3
         if pos + 2 >= len(first_seq):
             break
         

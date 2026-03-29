@@ -5,13 +5,13 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from accelerate import Accelerator
-from transformers import AutoModelForCausalLM, get_cosine_schedule_with_warmup
+from transformers import AutoModelForCausalLM
 from torch.optim import AdamW
 from tqdm import tqdm
 import gc
 import traceback
 import matplotlib.pyplot as plt
-from anticipation.vocab import ANTICIPATE, AUTOREGRESS  # Import the flag token constants
+from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -33,7 +33,7 @@ def check_model_for_nans(model):
 if torch.cuda.is_available():
     device = torch.device("cuda")
     device_count = torch.cuda.device_count()
-    print(f"✓ CUDA is available with {device_count} device(s)")
+    print(f"[ok] CUDA is available with {device_count} device(s)")
     for i in range(device_count):
         device_name = torch.cuda.get_device_name(i)
         print(f"  Device {i}: {device_name}")
@@ -42,350 +42,535 @@ if torch.cuda.is_available():
         print(f"    - CUDA capability: {props.major}.{props.minor}")
 else:
     device = torch.device("cpu")
-    print("✗ CUDA is not available! Training will be much slower on CPU.")
+    print("[warn] CUDA is not available! Training will be much slower on CPU.")
 
 # Explicitly print which device we're using
 print(f"Using device: {device}")
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA version: {torch.version.cuda}")
 
+PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+PREFIX_CONTROLS = 33
+ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
+
 class TokenizedDataset(Dataset):
-    """Dataset that loads clean sequences and applies augmentation on-the-fly.
-    
-    Sequences are packed and formatted by tokenize-asap.py:
-    - Each sequence is exactly 1024 tokens
-    - Format: [ANTICIPATE, control_tokens..., score_tokens..., PAD...]
-    - Augmentation (perturbation + masking) applied during training, not tokenization
-    """
-    def __init__(self, file_path, perturb_std_ms=0.0, mask_prob=0.0, is_training=True):
-        self.sequences = []
-        self.perturb_std_ms = perturb_std_ms if is_training else 0.0
+    """Dataset that loads packed ASAP sequences and applies augmentation on-the-fly."""
+
+    def __init__(
+        self,
+        file_path,
+        onset_jitter_std=0.0,
+        dur_jitter_range=0.0,
+        mask_prob=0.75,
+        transpose_range_semitones=0,
+        tempo_scale_range=0.0,
+        loss_mask_performance_tokens=False,
+        is_training=True,
+    ):
+        self.onset_jitter_std = onset_jitter_std if is_training else 0.0
+        self.dur_jitter_range = dur_jitter_range if is_training else 0.0
         self.mask_prob = mask_prob if is_training else 0.0
+        self.transpose_range_semitones = transpose_range_semitones if is_training else 0
+        self.tempo_scale_range = tempo_scale_range if is_training else 0.0
+        self.loss_mask_performance_tokens = loss_mask_performance_tokens
         self.is_training = is_training
-        
-        with open(file_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if '|' in line:
-                    # New format: "token1 token2 ... | mask_idx1 mask_idx2 ..." (ignored, we augment on-the-fly)
-                    token_str, _ = line.split('|')
-                    tokens = list(map(int, token_str.strip().split()))
-                else:
-                    # Old format: just tokens
-                    tokens = list(map(int, line.split()))
-                
-                # Replace invalid tokens (e.g., -1 from negative time calculations) with 0 (TIME_OFFSET)
-                # This preserves sequence length and structure while fixing tokenization bugs
-                tokens = [max(0, t) for t in tokens]
-                
-                self.sequences.append(torch.tensor(tokens, dtype=torch.long))
-        
-        self.sequence_length = len(self.sequences[0]) if self.sequences else 0
-        print(f"Loaded {len(self.sequences)} sequences with length {self.sequence_length}")
-        if self.is_training:
-            print(f"  Training mode: perturb_std={self.perturb_std_ms}ms, mask_prob={self.mask_prob}")
-        else:
-            print(f"  Validation mode: no augmentation")
-        
-        # Validate format and token ranges
-        if self.sequences:
-            from anticipation.vocab import ANTICIPATE, VOCAB_SIZE
-            sample = self.sequences[0].tolist()
-            if len(sample) >= 1:
-                if sample[0] == ANTICIPATE:
-                    print(f"✓ Tokenization format validated (starts with ANTICIPATE token)")
-                else:
-                    print(f"⚠ Warning: First token is {sample[0]}, expected ANTICIPATE ({ANTICIPATE})")
-            
-            # Validate all tokens are within vocabulary range
-            max_token = max(max(seq.tolist()) for seq in self.sequences)
-            min_token = min(min(seq.tolist()) for seq in self.sequences)
-            if max_token >= VOCAB_SIZE or min_token < 0:
-                raise ValueError(f"Invalid token range: [{min_token}, {max_token}], must be [0, {VOCAB_SIZE-1}]")
-            print(f"✓ Token range validated: [{min_token}, {max_token}] within [0, {VOCAB_SIZE-1}]")
-    
-    def __len__(self):
-        return len(self.sequences)
-    
-    def _augment_sequence(self, tokens):
-        """Apply on-the-fly augmentation: time perturbation + masking.
-        
-        Only augments CONTROL triplets, not score triplets or special tokens.
-        Control triplets have all 3 tokens >= CONTROL_OFFSET.
-        Score triplets have all 3 tokens < CONTROL_OFFSET.
-        
-        Returns:
-            augmented_tokens: Perturbed tokens
-            mask_indices: List of positions to mask from attention
-        """
-        from anticipation.vocab import (CONTROL_OFFSET, SEPARATOR, ANTICIPATE, REST, VOCAB_SIZE,
-                                        ATIME_OFFSET, ADUR_OFFSET, ANOTE_OFFSET)
-        from anticipation.config import TIME_RESOLUTION, MAX_TIME, MAX_DUR
-        
-        if not self.is_training or (self.perturb_std_ms == 0 and self.mask_prob == 0):
-            # No augmentation for validation or if disabled
-            return tokens.clone(), []
-        
-        augmented = tokens.clone()
-        mask_indices = []
-        
-        # Convert perturbation std from ms to time resolution units
-        perturb_std_units = (self.perturb_std_ms / 1000.0) * TIME_RESOLUTION if self.perturb_std_ms > 0 else 0
-        
-        # Iterate through sequence in triplets
-        # Skip first token (ANTICIPATE mode token)
-        i = 1
-        while i < len(augmented) - 2:
-            # Check if this is a control triplet:
-            # - All 3 tokens must be >= CONTROL_OFFSET
-            # - First token must not be SEPARATOR or ANTICIPATE (these are also >= CONTROL_OFFSET)
-            if (augmented[i] >= CONTROL_OFFSET and 
-                augmented[i+1] >= CONTROL_OFFSET and 
-                augmented[i+2] >= CONTROL_OFFSET and
-                augmented[i] != SEPARATOR and 
-                augmented[i] != ANTICIPATE):
-                
-                # This is a control triplet (time, dur, pitch) with separate offsets
-                
-                # Decide whether to mask this triplet from attention
-                if self.mask_prob > 0 and torch.rand(1).item() < self.mask_prob:
-                    # Mark these 3 positions for masking
-                    mask_indices.extend([i, i+1, i+2])
-                
-                # Apply time perturbation to time and duration (NOT pitch)
-                
-                # Perturb time (first token)
-                # Valid range: [ATIME_OFFSET, ATIME_OFFSET + MAX_TIME - 1]
-                base_time = augmented[i].item() - ATIME_OFFSET
-                time_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_time = max(0, min(MAX_TIME - 1, base_time + time_perturbation))
-                augmented[i] = ATIME_OFFSET + perturbed_time
-                
-                # Perturb duration (second token)
-                # Valid range: [ADUR_OFFSET, ADUR_OFFSET + MAX_DUR - 1]
-                base_dur = augmented[i+1].item() - ADUR_OFFSET
-                dur_perturbation = int(torch.randn(1).item() * perturb_std_units)
-                perturbed_dur = max(0, min(MAX_DUR - 1, base_dur + dur_perturbation))
-                augmented[i+1] = ADUR_OFFSET + perturbed_dur
-                
-                # Leave pitch (third token) unchanged
-                # Valid range: [ANOTE_OFFSET, ANOTE_OFFSET + MAX_NOTE - 1]
-                
-                i += 3  # Skip to next triplet
+
+        self.file_path = str(file_path)
+        self.offsets = []
+        self.sequence_length = 0
+
+        print(f"Scanning {file_path} for line offsets...")
+        with open(self.file_path, "rb") as f:
+            offset = 0
+            for raw_line in f:
+                stripped = raw_line.strip()
+                if stripped:
+                    self.offsets.append(offset)
+                offset += len(raw_line)
+
+        print(f"Found {len(self.offsets)} sequences")
+
+        if self.offsets:
+            tokens = self._read_tokens(0)
+            self.sequence_length = len(tokens)
+            if self.sequence_length != PACKED_SEQUENCE_LENGTH:
+                print(
+                    f"Warning: Sequence length is {self.sequence_length}, "
+                    f"expected {PACKED_SEQUENCE_LENGTH}"
+                )
+            elif self.sequence_length % 3 != 0:
+                print(f"Warning: Sequence length {self.sequence_length} is not triplet-aligned")
             else:
-                # Not a control triplet - could be score, rest, separator, etc.
-                # Don't augment, just move to next token
+                print("Tokenization format validated (triplet-aligned, no header tokens)")
+            print(f"Sequence length: {self.sequence_length}")
+
+        if self.is_training:
+            print(
+                "  Training mode: "
+                f"onset_jitter_std={self.onset_jitter_std}, "
+                f"dur_jitter_range={self.dur_jitter_range}, "
+                f"score_mask_ratio={self.mask_prob}, "
+                f"transpose_range={self.transpose_range_semitones}, "
+                f"tempo_scale_range={self.tempo_scale_range}, "
+                f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}"
+            )
+        else:
+            print(
+                "  Validation mode: no augmentation, "
+                f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}"
+            )
+
+    def __len__(self):
+        return len(self.offsets)
+
+    def _read_tokens(self, idx):
+        with open(self.file_path, "rb") as f:
+            f.seek(self.offsets[idx])
+            raw_line = f.readline().decode("utf-8").strip()
+        if "|" in raw_line:
+            token_str, _ = raw_line.split("|", 1)
+            tokens = list(map(int, token_str.strip().split()))
+        else:
+            tokens = list(map(int, raw_line.split()))
+        return [max(0, t) for t in tokens]
+
+    def _sample_augmentation_params(self):
+        transpose_shift = 0
+        if self.transpose_range_semitones > 0:
+            transpose_shift = torch.randint(
+                -self.transpose_range_semitones,
+                self.transpose_range_semitones + 1,
+                (1,),
+            ).item()
+
+        tempo_factor = 1.0
+        if self.tempo_scale_range > 0.0:
+            tempo_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.tempo_scale_range
+
+        return transpose_shift, tempo_factor
+
+    def _augment_sequence(
+        self,
+        tokens,
+        transpose_shift=0,
+        tempo_factor=1.0,
+        apply_timing_augmentation=True,
+    ):
+        from anticipation.vocab import (
+            CONTROL_OFFSET,
+            SEPARATOR,
+            REST,
+            ATIME_OFFSET,
+            ADUR_OFFSET,
+            ANOTE_OFFSET,
+            TIME_OFFSET,
+            DUR_OFFSET,
+            NOTE_OFFSET,
+        )
+        from anticipation.config import MAX_TIME, MAX_DUR, MAX_PITCH
+
+        if not self.is_training:
+            return tokens.clone()
+
+        augmented = tokens.clone()
+        midi_min = 0
+        midi_max = MAX_PITCH - 1
+
+        def _transpose_note(raw_tok, note_base):
+            raw_note = raw_tok - note_base
+            instr = raw_note // MAX_PITCH
+            pitch = raw_note % MAX_PITCH
+            new_pitch = pitch + transpose_shift
+            while new_pitch > midi_max:
+                new_pitch -= 12
+            while new_pitch < midi_min:
+                new_pitch += 12
+            new_pitch = max(midi_min, min(midi_max, new_pitch))
+            return note_base + instr * MAX_PITCH + new_pitch
+
+        def _scale_time(raw_tok, time_base):
+            scaled = int(round((raw_tok - time_base) * tempo_factor))
+            return time_base + max(0, min(MAX_TIME - 1, scaled))
+
+        def _scale_dur(raw_tok, dur_base):
+            scaled = int(round((raw_tok - dur_base) * tempo_factor))
+            return dur_base + max(0, min(MAX_DUR - 1, scaled))
+
+        ctrl_positions = []
+
+        i = 0
+        while i < len(augmented) - 2:
+            tok0 = augmented[i].item()
+            tok1 = augmented[i + 1].item()
+            tok2 = augmented[i + 2].item()
+
+            is_event_triplet = tok0 < CONTROL_OFFSET and tok1 < CONTROL_OFFSET and tok2 < CONTROL_OFFSET
+            is_control_triplet = (
+                tok0 >= CONTROL_OFFSET
+                and tok1 >= CONTROL_OFFSET
+                and tok2 >= CONTROL_OFFSET
+                and tok0 != SEPARATOR
+            )
+
+            if is_event_triplet:
+                if apply_timing_augmentation and tempo_factor != 1.0:
+                    tok0 = _scale_time(tok0, TIME_OFFSET)
+                    tok1 = _scale_dur(tok1, DUR_OFFSET)
+                if transpose_shift != 0 and tok2 != REST:
+                    tok2 = _transpose_note(tok2, NOTE_OFFSET)
+                augmented[i] = tok0
+                augmented[i + 1] = tok1
+                augmented[i + 2] = tok2
+                i += 3
+            elif is_control_triplet:
+                ctrl_positions.append((i, tok0, tok1, tok2))
+                i += 3
+            else:
                 i += 1
-        
-        return augmented, mask_indices
-    
+
+        new_ctrl_times = None
+        if apply_timing_augmentation and self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
+            raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
+            new_time = float(raw_times[0])
+            jittered = [new_time]
+            for k in range(1, len(raw_times)):
+                ioi = raw_times[k] - raw_times[k - 1]
+                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                new_time = new_time + ioi * scale
+                jittered.append(new_time)
+            new_ctrl_times = [max(0, min(MAX_TIME - 1, int(round(t)))) for t in jittered]
+
+        for k, (pos_i, tok0, tok1, tok2) in enumerate(ctrl_positions):
+            if new_ctrl_times is not None:
+                tok0 = ATIME_OFFSET + new_ctrl_times[k]
+
+            if apply_timing_augmentation and self.dur_jitter_range > 0:
+                dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                base_dur = tok1 - ADUR_OFFSET
+                tok1 = ADUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * dur_factor))))
+
+            if apply_timing_augmentation and tempo_factor != 1.0:
+                tok0 = _scale_time(tok0, ATIME_OFFSET)
+                tok1 = _scale_dur(tok1, ADUR_OFFSET)
+
+            if transpose_shift != 0:
+                tok2 = _transpose_note(tok2, ANOTE_OFFSET)
+
+            augmented[pos_i] = tok0
+            augmented[pos_i + 1] = tok1
+            augmented[pos_i + 2] = tok2
+
+        return augmented
+
+    def _build_score_token_mask(self, tokens):
+        from anticipation.vocab import CONTROL_OFFSET, REST
+
+        score_token_mask = torch.zeros_like(tokens, dtype=torch.bool)
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_score_triplet = (
+                tok0 < CONTROL_OFFSET
+                and tok1 < CONTROL_OFFSET
+                and tok2 < CONTROL_OFFSET
+                and tok2 != REST
+            )
+
+            if is_score_triplet:
+                score_token_mask[i:i + 3] = True
+                i += 3
+            else:
+                i += 1
+
+        return score_token_mask
+
+    def _sample_score_mask(self, score_token_mask):
+        score_mask = torch.zeros_like(score_token_mask, dtype=torch.bool)
+        if not self.is_training or self.mask_prob <= 0:
+            return score_mask
+
+        prev_score_token_mask = torch.zeros_like(score_token_mask)
+        prev_score_token_mask[1:] = score_token_mask[:-1]
+        score_triplet_starts = torch.nonzero(
+            score_token_mask & ~prev_score_token_mask,
+            as_tuple=False,
+        ).flatten()
+        if len(score_triplet_starts) == 0:
+            return score_mask
+
+        num_to_mask = int(round(len(score_triplet_starts) * self.mask_prob))
+        num_to_mask = max(0, min(len(score_triplet_starts), num_to_mask))
+        if num_to_mask == 0:
+            return score_mask
+
+        selected = torch.randperm(len(score_triplet_starts))[:num_to_mask]
+        for idx in selected.tolist():
+            start = score_triplet_starts[idx].item()
+            score_mask[start:start + 3] = True
+
+        return score_mask
+
+    def _build_performance_loss_mask(self, tokens):
+        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR
+
+        loss_mask = torch.zeros_like(tokens, dtype=torch.bool)
+        if not self.loss_mask_performance_tokens:
+            return loss_mask
+
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_control_triplet = (
+                tok0 >= CONTROL_OFFSET
+                and tok1 >= CONTROL_OFFSET
+                and tok2 >= CONTROL_OFFSET
+                and tok0 != SEPARATOR
+            )
+
+            if is_control_triplet:
+                loss_mask[i:i + 3] = True
+                i += 3
+            else:
+                i += 1
+
+        return loss_mask
+
     def __getitem__(self, idx):
-        tokens = self.sequences[idx]
-        
-        # Apply on-the-fly augmentation (time perturbation + masking)
-        augmented_tokens, mask_idxs = self._augment_sequence(tokens)
-        
-        # Safety check: clamp all tokens to valid range [0, VOCAB_SIZE-1]
+        tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
+
+        no_augmentation = (
+            not self.is_training
+            or (
+                self.onset_jitter_std == 0
+                and self.dur_jitter_range == 0
+                and self.mask_prob == 0
+                and self.transpose_range_semitones == 0
+                and self.tempo_scale_range == 0.0
+            )
+        )
+
+        if no_augmentation:
+            augmented_tokens = tokens.clone()
+            labels = tokens.clone()
+        else:
+            transpose_shift, tempo_factor = self._sample_augmentation_params()
+            augmented_tokens = self._augment_sequence(
+                tokens,
+                transpose_shift=transpose_shift,
+                tempo_factor=tempo_factor,
+                apply_timing_augmentation=True,
+            )
+            labels = self._augment_sequence(
+                tokens,
+                transpose_shift=transpose_shift,
+                tempo_factor=tempo_factor,
+                apply_timing_augmentation=False,
+            )
+
         from anticipation.vocab import VOCAB_SIZE
+
         augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
-        
-        # Create attention mask (1 = attend, 0 = mask)
+        labels = torch.clamp(labels, 0, VOCAB_SIZE - 1)
+
+        score_token_mask = self._build_score_token_mask(augmented_tokens)
+        score_mask = self._sample_score_mask(score_token_mask)
+
+        performance_loss_mask = self._build_performance_loss_mask(labels)
+        if torch.any(performance_loss_mask).item():
+            labels[performance_loss_mask] = -100
+
         attention_mask = torch.ones_like(augmented_tokens)
-        if mask_idxs:
-            attention_mask[mask_idxs] = 0
-        
-        # Create labels (exclude masked positions from loss)
-        labels = augmented_tokens.clone()
-        if mask_idxs:
-            labels[mask_idxs] = -100
-        
-        return {"input_ids": augmented_tokens, "attention_mask": attention_mask, "labels": labels}
+
+        return {
+            "input_ids": augmented_tokens,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "score_token_mask": score_token_mask,
+            "score_mask": score_mask,
+        }
+
+def _get_input_embedding_layer(model):
+    if hasattr(model, "get_input_embeddings"):
+        return model.get_input_embeddings()
+    if hasattr(model, "module") and hasattr(model.module, "get_input_embeddings"):
+        return model.module.get_input_embeddings()
+    raise AttributeError("Model does not expose get_input_embeddings()")
+
+
+def forward_batch(model, batch):
+    input_ids = batch["input_ids"]
+    attention_mask = batch["attention_mask"]
+    labels = batch["labels"]
+    score_mask = batch.get("score_mask")
+
+    if score_mask is None or not torch.any(score_mask).item():
+        return model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+
+    inputs_embeds = _get_input_embedding_layer(model)(input_ids)
+    inputs_embeds = inputs_embeds.masked_fill(score_mask.unsqueeze(-1), 0.0)
+    return model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+
 
 def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
-    """Calculate validation loss and pitch accuracy on a dataset
-    
-    Args:
-        model: The model to evaluate
-        dataloader: DataLoader with validation data
-        accelerator: Accelerator instance
-        max_samples: Maximum number of sequences to evaluate for teacher-forced metrics (default: 500)
-        autoregressive_samples: Number of sequences to evaluate autoregressively (default: 20)
-    
-    Returns:
-        tuple: (avg_loss, teacher_forced_pitch_accuracy, autoregressive_pitch_accuracy)
-    """
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
     total_samples = 0
-    
-    # For teacher-forced pitch accuracy: track predictions on score note tokens
     correct_pitches = 0
     total_pitches = 0
-    
-    from anticipation.vocab import CONTROL_OFFSET, NOTE_OFFSET, REST
+
+    from anticipation.vocab import CONTROL_OFFSET, REST
     import random
-    
-    # Randomly sample indices, then take only those batches from the dataloader
-    # We need to iterate through dataloader (not convert to list) to preserve device placement
+
     total_batches = len(dataloader)
-    if total_batches > 0:
-        # Calculate how many batches we need for max_samples (estimate batch_size as 8)
-        estimated_batch_size = 8
-        num_batches_needed = min(total_batches, (max_samples + estimated_batch_size - 1) // estimated_batch_size)
-        
-        # Randomly select batch indices
-        selected_indices = set(random.sample(range(total_batches), num_batches_needed))
-    else:
-        selected_indices = set()
-    
+    if total_batches == 0:
+        raise ValueError(
+            "Validation dataloader is empty. This usually means the validation token file has zero sequences."
+        )
+
+    estimated_batch_size = 8
+    num_batches_needed = min(total_batches, (max_samples + estimated_batch_size - 1) // estimated_batch_size)
+    selected_indices = set(random.sample(range(total_batches), num_batches_needed))
+
     batches_processed = 0
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating", leave=False)):
-            # Only process selected batches
             if batch_idx not in selected_indices:
                 continue
-            
+
             batches_processed += 1
             if batches_processed > len(selected_indices):
                 break
-            outputs = model(**batch)
+
+            outputs = forward_batch(model, batch)
             loss = outputs.loss
             logits = outputs.logits
-            
             input_ids = batch["input_ids"]
             labels = batch["labels"]
-            
-            # Get batch size from the input shape
             batch_size = input_ids.size(0)
-            
-            # Accumulate loss (weighted by batch size)
+
             total_loss += loss.item() * batch_size
             total_samples += batch_size
-            
-            # Calculate pitch accuracy on score note tokens (position 2 of score triplets)
-            # Score triplets have all tokens < CONTROL_OFFSET
-            # IMPORTANT: Must iterate in triplet-aligned steps to avoid mis-identifying triplets
+
             for b in range(batch_size):
                 seq_input = input_ids[b]
                 seq_labels = labels[b]
                 seq_logits = logits[b]
-                
-                # Skip first token (mode token), iterate in steps of 3 to maintain triplet alignment
-                i = 1
+
+                i = 0
                 while i < len(seq_input) - 2:
-                    # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET, but not REST)
-                    if (seq_input[i] < CONTROL_OFFSET and 
-                        seq_input[i+1] < CONTROL_OFFSET and 
-                        seq_input[i+2] < CONTROL_OFFSET and
-                        seq_input[i+2] != REST):  # Exclude REST triplets
-                        # This is a score triplet
-                        # Position i+2 is the note token
+                    if (
+                        seq_input[i] < CONTROL_OFFSET
+                        and seq_input[i + 1] < CONTROL_OFFSET
+                        and seq_input[i + 2] < CONTROL_OFFSET
+                        and seq_input[i + 2] != REST
+                    ):
                         note_pos = i + 2
-                        
-                        # Only count if not masked in labels
                         if seq_labels[note_pos] != -100:
-                            predicted_token = seq_logits[note_pos - 1].argmax().item()  # Predict next token
+                            predicted_token = seq_logits[note_pos - 1].argmax().item()
                             true_token = seq_labels[note_pos].item()
-                            
-                            # Check if prediction matches ground truth
                             if predicted_token == true_token:
                                 correct_pitches += 1
                             total_pitches += 1
-                    
-                    # Always move in steps of 3 to maintain triplet alignment
                     i += 3
-    
+
+    if total_samples == 0:
+        raise ValueError(
+            "Validation produced zero samples. Check that the validation token file is non-empty and readable."
+        )
+
+    teacher_stats = torch.tensor(
+        [total_loss, total_samples, correct_pitches, total_pitches],
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    teacher_stats = accelerator.reduce(teacher_stats, reduction="sum")
+    total_loss = float(teacher_stats[0].item())
+    total_samples = int(teacher_stats[1].item())
+    correct_pitches = int(teacher_stats[2].item())
+    total_pitches = int(teacher_stats[3].item())
+
     avg_loss = total_loss / total_samples
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
-    
-    # Autoregressive evaluation: use performance (control) to generate score
-    # Format: ANTICIPATE + SEP SEP SEP + control+rest pairs + alternating score/control
-    # Goal: Given the performance context, autoregressively generate score triplets
+
     autoregressive_correct = 0
     autoregressive_total = 0
-    
+
     if autoregressive_samples > 0:
-        # Collect a few sequences for autoregressive evaluation
         all_sequences = []
+        sequences_seen = 0
         with torch.no_grad():
             for batch in dataloader:
                 input_ids = batch["input_ids"]
                 for seq in input_ids:
-                    all_sequences.append(seq)
-                    if len(all_sequences) >= autoregressive_samples:
-                        break
-                if len(all_sequences) >= autoregressive_samples:
-                    break
-        
-        # Run autoregressive generation on each sequence
-        for seq in tqdm(all_sequences[:autoregressive_samples], desc="Autoregressive eval", leave=False):
-            # Sequence format: [ANTICIPATE, SEP, SEP, SEP, control+rest pairs (positions 4-201), alternating score/control (202+)]
-            # We want to use the control tokens as context and generate the score tokens
-            
-            # Find where alternating section starts (position 202)
-            alternating_start = 202
-            if len(seq) <= alternating_start:
+                    seq = seq.detach().cpu()
+                    sequences_seen += 1
+                    if len(all_sequences) < autoregressive_samples:
+                        all_sequences.append(seq)
+                    else:
+                        replace_idx = random.randrange(sequences_seen)
+                        if replace_idx < autoregressive_samples:
+                            all_sequences[replace_idx] = seq
+
+        for seq in tqdm(all_sequences, desc="Autoregressive eval", leave=False):
+            if len(seq) <= ALTERNATING_START:
                 continue
-            
-            # Start context with: ANTICIPATE + SEP SEP SEP + all control+rest pairs (positions 0-201)
-            # This gives the model all the performance information
-            context = seq[:alternating_start].tolist()
-            
-            # Now autoregressively generate the alternating score/control section
-            # Pattern: score_triplet, control_triplet, score_triplet, control_triplet, ...
-            pos = alternating_start
+
+            context = seq[:ALTERNATING_START].tolist()
+            pos = ALTERNATING_START
             while pos + 5 < len(seq):
-                # Check if this is a score triplet (all 3 tokens < CONTROL_OFFSET)
-                if (seq[pos] < CONTROL_OFFSET and 
-                    seq[pos+1] < CONTROL_OFFSET and 
-                    seq[pos+2] < CONTROL_OFFSET and
-                    seq[pos+2] != REST):
-                    
-                    # This is a score triplet - generate it autoregressively
-                    # Generate TIME token
+                if (
+                    seq[pos] < CONTROL_OFFSET
+                    and seq[pos + 1] < CONTROL_OFFSET
+                    and seq[pos + 2] < CONTROL_OFFSET
+                    and seq[pos + 2] != REST
+                ):
                     input_tensor = torch.tensor([context]).to(accelerator.device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
-                        logits = outputs.logits[0, -1, :]
-                        pred_time = logits.argmax().item()
+                        pred_time = outputs.logits[0, -1, :].argmax().item()
                     context.append(pred_time)
-                    
-                    # Generate DURATION token
+
                     input_tensor = torch.tensor([context]).to(accelerator.device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
-                        logits = outputs.logits[0, -1, :]
-                        pred_dur = logits.argmax().item()
+                        pred_dur = outputs.logits[0, -1, :].argmax().item()
                     context.append(pred_dur)
-                    
-                    # Generate PITCH token
+
                     input_tensor = torch.tensor([context]).to(accelerator.device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
-                        logits = outputs.logits[0, -1, :]
-                        pred_pitch = logits.argmax().item()
+                        pred_pitch = outputs.logits[0, -1, :].argmax().item()
                     context.append(pred_pitch)
-                    
-                    # Check if predicted pitch matches ground truth
+
                     true_pitch = seq[pos + 2].item()
                     if pred_pitch == true_pitch:
                         autoregressive_correct += 1
                     autoregressive_total += 1
-                    
+
                     pos += 3
-                    
-                    # After score triplet, add ground truth control triplet to context
-                    # (We're only testing score generation, not control generation)
                     if pos + 2 < len(seq):
-                        context.extend([seq[pos].item(), seq[pos+1].item(), seq[pos+2].item()])
+                        context.extend([seq[pos].item(), seq[pos + 1].item(), seq[pos + 2].item()])
                         pos += 3
                 else:
-                    # Not a score triplet, add to context and continue
                     context.append(seq[pos].item())
                     pos += 1
-    
+
+    autoregressive_stats = torch.tensor(
+        [autoregressive_correct, autoregressive_total],
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
+    autoregressive_correct = int(autoregressive_stats[0].item())
+    autoregressive_total = int(autoregressive_stats[1].item())
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
-    
+
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
 def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
@@ -466,8 +651,41 @@ def main():
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
-    parser.add_argument('--perturb_std_ms', type=float, default=100.0, help='Standard deviation of time perturbation in milliseconds (training only)')
-    parser.add_argument('--mask_prob', type=float, default=0.5, help='Probability of masking control triplets (training only, 0.0 to 1.0)')
+    parser.add_argument(
+        '--onset_jitter_std',
+        type=float,
+        default=0.1,
+        help='Std of N(1, std^2) multiplier applied to each inter-onset interval of control tokens (training only)',
+    )
+    parser.add_argument(
+        '--dur_jitter_range',
+        type=float,
+        default=0.1,
+        help='Half-range of U(1-r, 1+r) duration rescaling per control note (training only)',
+    )
+    parser.add_argument(
+        '--mask_prob',
+        type=float,
+        default=0.75,
+        help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only)',
+    )
+    parser.add_argument(
+        '--loss_mask_performance_tokens',
+        action='store_true',
+        help='Exclude performance/control triplets from the loss by setting their labels to -100',
+    )
+    parser.add_argument(
+        '--transpose_range_semitones',
+        type=int,
+        default=12,
+        help='Max transposition shift in semitones, uniform in [-range, +range] (training only)',
+    )
+    parser.add_argument(
+        '--tempo_scale_range',
+        type=float,
+        default=0.2,
+        help='Tempo scale half-range sampled uniformly from [1-range, 1+range] (training only)',
+    )
     args = parser.parse_args()
     
     # Override device if requested
@@ -499,19 +717,35 @@ def main():
         print_gpu_memory_stats()
         
         # Load training dataset
-        print(f"Loading training dataset from {args.data_file}...")
-        train_dataset = TokenizedDataset(
-            args.data_file, 
-            perturb_std_ms=args.perturb_std_ms,
-            mask_prob=args.mask_prob,
-            is_training=True
-        )
-        
         def collate_fn(batch):
             input_ids = torch.stack([item["input_ids"] for item in batch])
             attention_mask = torch.stack([item["attention_mask"] for item in batch])
             labels = torch.stack([item["labels"] for item in batch])
-            return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+            score_token_mask = torch.stack([item["score_token_mask"] for item in batch])
+            score_mask = torch.stack([item["score_mask"] for item in batch])
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "labels": labels,
+                "score_token_mask": score_token_mask,
+                "score_mask": score_mask,
+            }
+
+        print(f"Loading training dataset from {args.data_file}...")
+        train_dataset = TokenizedDataset(
+            args.data_file,
+            onset_jitter_std=args.onset_jitter_std,
+            dur_jitter_range=args.dur_jitter_range,
+            mask_prob=args.mask_prob,
+            transpose_range_semitones=args.transpose_range_semitones,
+            tempo_scale_range=args.tempo_scale_range,
+            loss_mask_performance_tokens=args.loss_mask_performance_tokens,
+            is_training=True,
+        )
+        if len(train_dataset) == 0:
+            raise ValueError(
+                "Training dataset is empty. Check the tokenized training file and rerun tokenization if needed."
+            )
             
         train_dataloader = DataLoader(
             train_dataset, 
@@ -526,10 +760,13 @@ def main():
         print(f"Loading validation dataset from {args.val_file}...")
         val_dataset = TokenizedDataset(
             args.val_file,
-            perturb_std_ms=0.0,
-            mask_prob=0.0,
+            loss_mask_performance_tokens=args.loss_mask_performance_tokens,
             is_training=False
         )
+        if len(val_dataset) == 0:
+            raise ValueError(
+                f"Validation dataset is empty: {args.val_file}. Check the tokenized validation file."
+            )
         
         val_dataloader = DataLoader(
             val_dataset, 
@@ -575,9 +812,9 @@ def main():
         if current_vocab_size != VOCAB_SIZE:
             print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE}")
             model.resize_token_embeddings(VOCAB_SIZE)
-            print(f"✓ Model embeddings resized successfully")
+            print("Model embeddings resized successfully")
         else:
-            print(f"✓ Model vocabulary size matches tokenization ({VOCAB_SIZE})")
+            print(f"Model vocabulary size matches tokenization ({VOCAB_SIZE})")
         
         # Check memory after loading model
         print("GPU memory after loading model:")
@@ -656,7 +893,7 @@ def main():
                     try:
                         with accelerator.accumulate(model):
                             # Forward pass with gradient scaling
-                            outputs = model(**batch)
+                            outputs = forward_batch(model, batch)
                             loss = outputs.loss
                             
                             # Check for NaN loss
