@@ -122,23 +122,36 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
     This means beat[0]->0.0s, beat[1]->0.5s, beat[2]->1.0s, etc., regardless of original tempo.
     
     Performance/control times are normalized to start at 0 but keep original tempo.
+    Score times are first beat-normalized globally, then shifted to a window-local
+    timeline for each sliding window.
     
     Args:
         filegroup: Tuple of (perf_midi, score_midi, perf_beats, score_beats)
         prefix_controls: Number of control notes in the prefix (default 33)
     
     Returns:
-        List of string lines, each: "token1 token2 ... tokenN | "
-        Returns empty list if no valid sequences can be generated
+        Dict with:
+          - piece_id: piece identifier for warnings
+          - sequences: list of "token1 token2 ... tokenN | " strings
+          - count: number of sequences
+          - pickup_warning: aggregated pickup warning metadata or None
+          - failure_reason: human-readable reason when count == 0
     """
     file1, file2, file3, file4 = filegroup
+    piece_id = file1
     
     try:
         # Align the performance and score
         matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=True)
         
         if len(matched_tuples) < 20:  # Need at least 20 matched pairs
-            return []
+            return {
+                "piece_id": piece_id,
+                "sequences": [],
+                "count": 0,
+                "pickup_warning": None,
+                "failure_reason": f"only {len(matched_tuples)} matched pairs after alignment (need at least 20)",
+            }
         
         # Load score beat annotations to create time normalization mapping - DO THIS ONCE
         score_annotations = load_annotation_file(file4)
@@ -223,8 +236,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 # Triplet format: [time, duration, pitch]
                 normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
                 normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
-                # Clamp to non-negative to prevent invalid tokens
-                normalized_time_units = max(0, normalized_time_units)
+                # Keep negative pickup times for now; window-local shifting will make
+                # each emitted sequence non-negative while preserving relative order.
                 normalized_duration_units = max(0, normalized_duration_units)
                 normalized_score = [
                     normalized_time_units + TIME_OFFSET,
@@ -238,6 +251,10 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
         
         sequences = []
         k = min(prefix_controls, len(normalized_matched_tuples))
+        pickup_start_indices = []
+        most_negative_score_time_units = None
+        full_length_candidates = 0
+        skipped_for_max_time = 0
         
         # Try different starting positions
         for start_idx in range(len(normalized_matched_tuples)):
@@ -260,8 +277,32 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                     for triplet in perf_triplets
                 ]
             
-            # Extract already-normalized score triplets from subset
+            # Shift score times into the local sliding-window frame.
             score_triplets = [match[2] for match in subset]
+            score_time_units = [
+                triplet[0] - TIME_OFFSET
+                for triplet in score_triplets
+                if triplet[0] is not None
+            ]
+            if score_time_units:
+                min_score_time_units = min(score_time_units)
+                if min_score_time_units < 0:
+                    pickup_start_indices.append(start_idx)
+                    if (
+                        most_negative_score_time_units is None
+                        or min_score_time_units < most_negative_score_time_units
+                    ):
+                        most_negative_score_time_units = min_score_time_units
+                score_triplets = [
+                    [
+                        triplet[0] - min_score_time_units,
+                        triplet[1],
+                        triplet[2],
+                    ]
+                    if triplet[0] is not None
+                    else triplet
+                    for triplet in score_triplets
+                ]
             
             # Prefix: control + rest pairs using first k notes from normalized subset
             for i in range(k):
@@ -302,12 +343,14 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             if len(interleaved_tokens) < max_body:
                 # Not enough tokens for a full sequence, stop trying later positions
                 break
+            full_length_candidates += 1
             
             # Trim to the packed serialized length
             interleaved_tokens = interleaved_tokens[:max_body]
             
             # Check if sequence is valid
             if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
+                skipped_for_max_time += 1
                 continue  # Skip this sequence, try next position
             
             sequence = interleaved_tokens
@@ -318,21 +361,70 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             # Return as space-separated string
             token_str = ' '.join(str(tok) for tok in sequence)
             sequences.append(f"{token_str} | ")
-        
-        return sequences
+
+        pickup_warning = None
+        if pickup_start_indices:
+            pickup_warning = {
+                "piece_id": piece_id,
+                "affected_windows": len(pickup_start_indices),
+                "sample_start_indices": pickup_start_indices[:5],
+                "most_negative_time_units": most_negative_score_time_units,
+            }
+
+        failure_reason = None
+        if not sequences:
+            if full_length_candidates == 0:
+                failure_reason = (
+                    f"piece is too short to form a full packed sequence of {CONTEXT_SIZE - 4} tokens"
+                )
+            elif skipped_for_max_time == full_length_candidates:
+                failure_reason = (
+                    f"all {full_length_candidates} candidate windows exceeded MAX_TIME={MAX_TIME}"
+                )
+            else:
+                failure_reason = "no valid packed windows generated"
+
+        return {
+            "piece_id": piece_id,
+            "sequences": sequences,
+            "count": len(sequences),
+            "pickup_warning": pickup_warning,
+            "failure_reason": failure_reason,
+        }
         
     except Exception as e:
-        # Silently fail for problematic files
-        return []
+        return {
+            "piece_id": piece_id,
+            "sequences": [],
+            "count": 0,
+            "pickup_warning": None,
+            "failure_reason": f"{type(e).__name__}: {e}",
+        }
+
+
+def format_pickup_warning(warning_info):
+    preview_indices = ", ".join(str(idx) for idx in warning_info["sample_start_indices"])
+    if warning_info["affected_windows"] > len(warning_info["sample_start_indices"]):
+        preview_indices = f"{preview_indices}, ..."
+    most_negative_seconds = warning_info["most_negative_time_units"] / TIME_RESOLUTION
+    return (
+        f"WARNING: {warning_info['piece_id']}: shifted score times for pickup preservation in "
+        f"{warning_info['affected_windows']} window(s) (start_idx examples: {preview_indices}); "
+        f"most negative pre-shift score onset was {warning_info['most_negative_time_units']} bins "
+        f"({most_negative_seconds:.3f}s)."
+    )
+
+
+def format_failure_warning(piece_id, failure_reason):
+    return f"WARNING: {piece_id}: tokenization produced no sequences - {failure_reason}"
 
 
 def process_single_piece(filegroup):
     """
     Worker function for multiprocessing.
-    Returns: (list_of_sequences, num_sequences)
+    Returns a dict from tokenize_sliding_windows().
     """
-    sequences = tokenize_sliding_windows(filegroup)
-    return (sequences, len(sequences))
+    return tokenize_sliding_windows(filegroup)
 
 
 # Process train set with multiprocessing
@@ -346,7 +438,11 @@ train_pieces_failed = 0
 with open(TRAIN_OUTPUT, 'w') as f_train:
     with Pool(processes=NUM_WORKERS) as pool:
         with tqdm(total=len(train_pairs), desc='Train', unit='piece') as pbar:
-            for sequences, count in pool.imap_unordered(process_single_piece, train_pairs):
+            for result in pool.imap_unordered(process_single_piece, train_pairs):
+                sequences = result["sequences"]
+                count = result["count"]
+                if result["pickup_warning"] is not None:
+                    tqdm.write(format_pickup_warning(result["pickup_warning"]))
                 if count > 0:
                     for seq in sequences:
                         f_train.write(seq + '\n')
@@ -354,6 +450,7 @@ with open(TRAIN_OUTPUT, 'w') as f_train:
                     train_pieces_success += 1
                 else:
                     train_pieces_failed += 1
+                    tqdm.write(format_failure_warning(result["piece_id"], result["failure_reason"]))
                 pbar.update(1)
 
 print(f"Train: {train_sequences_total} sequences from {train_pieces_success} pieces, {train_pieces_failed} pieces failed")
@@ -368,7 +465,11 @@ test_pieces_failed = 0
 with open(TEST_OUTPUT, 'w') as f_test:
     with Pool(processes=NUM_WORKERS) as pool:
         with tqdm(total=len(test_pairs), desc='Test', unit='piece') as pbar:
-            for sequences, count in pool.imap_unordered(process_single_piece, test_pairs):
+            for result in pool.imap_unordered(process_single_piece, test_pairs):
+                sequences = result["sequences"]
+                count = result["count"]
+                if result["pickup_warning"] is not None:
+                    tqdm.write(format_pickup_warning(result["pickup_warning"]))
                 if count > 0:
                     for seq in sequences:
                         f_test.write(seq + '\n')
@@ -376,6 +477,7 @@ with open(TEST_OUTPUT, 'w') as f_test:
                     test_pieces_success += 1
                 else:
                     test_pieces_failed += 1
+                    tqdm.write(format_failure_warning(result["piece_id"], result["failure_reason"]))
                 pbar.update(1)
 
 print(f"Test: {test_sequences_total} sequences from {test_pieces_success} pieces, {test_pieces_failed} pieces failed")

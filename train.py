@@ -11,6 +11,7 @@ from tqdm import tqdm
 import gc
 import traceback
 import matplotlib.pyplot as plt
+import warnings
 from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
 
 # Helper function to monitor GPU memory usage
@@ -74,6 +75,7 @@ class TokenizedDataset(Dataset):
         self.tempo_scale_range = tempo_scale_range if is_training else 0.0
         self.loss_mask_performance_tokens = loss_mask_performance_tokens
         self.is_training = is_training
+        self._vocab_warning_counts = {}
 
         self.file_path = str(file_path)
         self.offsets = []
@@ -132,7 +134,7 @@ class TokenizedDataset(Dataset):
             tokens = list(map(int, token_str.strip().split()))
         else:
             tokens = list(map(int, raw_line.split()))
-        return [max(0, t) for t in tokens]
+        return tokens
 
     def _sample_augmentation_params(self):
         transpose_shift = 0
@@ -341,8 +343,37 @@ class TokenizedDataset(Dataset):
 
         return loss_mask
 
+    def _clamp_tokens_to_vocab(self, tokens, tensor_name, sample_idx):
+        from anticipation.vocab import VOCAB_SIZE
+
+        invalid_mask = (tokens < 0) | (tokens >= VOCAB_SIZE)
+        if not torch.any(invalid_mask).item():
+            return tokens
+
+        invalid_positions = torch.nonzero(invalid_mask, as_tuple=False).flatten()
+        preview_positions = invalid_positions[:5].tolist()
+        preview = ", ".join(
+            f"pos {pos} -> {tokens[pos].item()}"
+            for pos in preview_positions
+        )
+        invalid_count = int(invalid_mask.sum().item())
+        warning_count = self._vocab_warning_counts.get(tensor_name, 0)
+        if warning_count < 5:
+            suffix = ""
+            if warning_count == 4:
+                suffix = " Further warnings for this tensor type will be suppressed."
+            warnings.warn(
+                f"{tensor_name} contains {invalid_count} out-of-vocab token(s) for sample {sample_idx}: "
+                f"{preview}. Clamping to [0, {VOCAB_SIZE - 1}].{suffix}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        self._vocab_warning_counts[tensor_name] = warning_count + 1
+        return torch.clamp(tokens, 0, VOCAB_SIZE - 1)
+
     def __getitem__(self, idx):
         tokens = torch.tensor(self._read_tokens(idx), dtype=torch.long)
+        tokens = self._clamp_tokens_to_vocab(tokens, "Raw tokens", idx)
 
         no_augmentation = (
             not self.is_training
@@ -373,10 +404,8 @@ class TokenizedDataset(Dataset):
                 apply_timing_augmentation=False,
             )
 
-        from anticipation.vocab import VOCAB_SIZE
-
-        augmented_tokens = torch.clamp(augmented_tokens, 0, VOCAB_SIZE - 1)
-        labels = torch.clamp(labels, 0, VOCAB_SIZE - 1)
+        augmented_tokens = self._clamp_tokens_to_vocab(augmented_tokens, "Augmented input tokens", idx)
+        labels = self._clamp_tokens_to_vocab(labels, "Training labels", idx)
 
         score_token_mask = self._build_score_token_mask(augmented_tokens)
         score_mask = self._sample_score_mask(score_token_mask)
@@ -1013,10 +1042,6 @@ def main():
                                         torch.cuda.empty_cache()
                                         gc.collect()
                             
-                            # Zero gradients even if we don't sync (needed for some accelerator configurations)
-                            if not accelerator.sync_gradients:
-                                optimizer.zero_grad()
-                                
                             # Check if we've reached max steps
                             if completed_steps >= args.max_steps:
                                 break
