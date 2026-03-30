@@ -738,8 +738,10 @@ def main():
             mixed_precision=mixed_precision,
         )
         
-        # Create output directory
-        os.makedirs(args.output_dir, exist_ok=True)
+        # Create output directory once and synchronize before any rank writes into it.
+        if accelerator.is_main_process:
+            os.makedirs(args.output_dir, exist_ok=True)
+        accelerator.wait_for_everyone()
         
         # Monitor initial GPU memory
         print("Initial GPU memory stats:")
@@ -895,10 +897,12 @@ def main():
         torch.backends.cudnn.deterministic = False  # Better performance
         torch.backends.cudnn.benchmark = True  # Better performance
         
-        if torch.cuda.is_available():
-            print("Clearing CUDA cache before training")
+        if torch.cuda.is_available() and accelerator.device.type == "cuda":
+            print(f"Clearing CUDA cache before training on {accelerator.device}")
             torch.cuda.empty_cache()
-            torch.cuda.set_device(0)
+            device_index = accelerator.device.index
+            if device_index is not None:
+                torch.cuda.set_device(device_index)
         
         # Training loop
         print("Starting training...")
@@ -1013,7 +1017,9 @@ def main():
                                     model.train()
                                     
                                     checkpoint_dir = args.output_dir / f"checkpoint-{completed_steps}"
-                                    os.makedirs(checkpoint_dir, exist_ok=True)
+                                    if accelerator.is_main_process:
+                                        os.makedirs(checkpoint_dir, exist_ok=True)
+                                    accelerator.wait_for_everyone()
                                     
                                     # Unwrap model before saving
                                     unwrapped_model = accelerator.unwrap_model(model)
@@ -1022,20 +1028,22 @@ def main():
                                         is_main_process=accelerator.is_main_process,
                                         save_function=accelerator.save,
                                     )
-                                    print(f"Saved checkpoint to {checkpoint_dir}")
-                                    
-                                    # Save the losses and metrics so far
-                                    np.savez(
-                                        checkpoint_dir / "losses.npz",
-                                        train_losses=np.array(train_losses),
-                                        val_losses=np.array(val_losses),
-                                        val_accuracies=np.array(val_accuracies),
-                                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                                        validation_steps=np.array(validation_steps)
-                                    )
-                                    
-                                    # Create and save loss plot
-                                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
+                                    accelerator.wait_for_everyone()
+                                    if accelerator.is_main_process:
+                                        print(f"Saved checkpoint to {checkpoint_dir}")
+                                        
+                                        # Save the losses and metrics so far
+                                        np.savez(
+                                            checkpoint_dir / "losses.npz",
+                                            train_losses=np.array(train_losses),
+                                            val_losses=np.array(val_losses),
+                                            val_accuracies=np.array(val_accuracies),
+                                            val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                                            validation_steps=np.array(validation_steps)
+                                        )
+                                        
+                                        # Create and save loss plot
+                                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
@@ -1085,27 +1093,31 @@ def main():
                 
                 # Final save
                 final_dir = args.output_dir / "final"
-                os.makedirs(final_dir, exist_ok=True)
+                if accelerator.is_main_process:
+                    os.makedirs(final_dir, exist_ok=True)
+                accelerator.wait_for_everyone()
                 unwrapped_model = accelerator.unwrap_model(model)
                 unwrapped_model.save_pretrained(
                     final_dir,
                     is_main_process=accelerator.is_main_process,
                     save_function=accelerator.save,
                 )
-                print(f"Saved final model to {final_dir}")
-                
-                # Save the final losses
-                np.savez(
-                    final_dir / "losses.npz",
-                    train_losses=np.array(train_losses),
-                    val_losses=np.array(val_losses),
-                    val_accuracies=np.array(val_accuracies),
-                    val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                    validation_steps=np.array(validation_steps)
-                )
-                
-                # Create and save final loss plot
-                plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
+                accelerator.wait_for_everyone()
+                if accelerator.is_main_process:
+                    print(f"Saved final model to {final_dir}")
+                    
+                    # Save the final losses
+                    np.savez(
+                        final_dir / "losses.npz",
+                        train_losses=np.array(train_losses),
+                        val_losses=np.array(val_losses),
+                        val_accuracies=np.array(val_accuracies),
+                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                        validation_steps=np.array(validation_steps)
+                    )
+                    
+                    # Create and save final loss plot
+                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
                 
             except Exception as save_error:
                 print(f"Error saving final model or generating plot: {save_error}")
