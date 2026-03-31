@@ -432,6 +432,25 @@ def _get_input_embedding_layer(model):
     raise AttributeError("Model does not expose get_input_embeddings()")
 
 
+def _count_flagged_processes(accelerator, flag):
+    flag_tensor = torch.tensor(
+        int(bool(flag)),
+        device=accelerator.device,
+        dtype=torch.int64,
+    )
+    reduced = accelerator.reduce(flag_tensor, reduction="sum")
+    return int(reduced.item())
+
+
+def _find_invalid_gradient_parameter(model):
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            continue
+        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+            return name
+    return None
+
+
 def forward_batch(model, batch):
     input_ids = batch["input_ids"]
     attention_mask = batch["attention_mask"]
@@ -462,13 +481,29 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             "Validation dataloader is empty. This usually means the validation token file has zero sequences."
         )
 
-    estimated_batch_size = 8
-    num_batches_needed = min(total_batches, (max_samples + estimated_batch_size - 1) // estimated_batch_size)
-    selected_indices = set(random.sample(range(total_batches), num_batches_needed))
+    estimated_batch_size = getattr(dataloader, "batch_size", None) or 8
+    per_rank_max_samples = 0
+    if max_samples > 0:
+        per_rank_max_samples = max(1, (max_samples + accelerator.num_processes - 1) // accelerator.num_processes)
+    num_batches_needed = min(
+        total_batches,
+        (per_rank_max_samples + estimated_batch_size - 1) // estimated_batch_size if per_rank_max_samples > 0 else 0,
+    )
+    if num_batches_needed >= total_batches:
+        selected_indices = set(range(total_batches))
+    else:
+        selected_indices = set(random.sample(range(total_batches), num_batches_needed))
 
     batches_processed = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating", leave=False)):
+        for batch_idx, batch in enumerate(
+            tqdm(
+                dataloader,
+                desc="Evaluating",
+                leave=False,
+                disable=not accelerator.is_local_main_process,
+            )
+        ):
             if batch_idx not in selected_indices:
                 continue
 
@@ -530,7 +565,14 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
     autoregressive_correct = 0
     autoregressive_total = 0
 
+    per_rank_autoregressive_samples = 0
     if autoregressive_samples > 0:
+        per_rank_autoregressive_samples = max(
+            1,
+            (autoregressive_samples + accelerator.num_processes - 1) // accelerator.num_processes,
+        )
+
+    if per_rank_autoregressive_samples > 0:
         all_sequences = []
         sequences_seen = 0
         with torch.no_grad():
@@ -539,14 +581,19 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 for seq in input_ids:
                     seq = seq.detach().cpu()
                     sequences_seen += 1
-                    if len(all_sequences) < autoregressive_samples:
+                    if len(all_sequences) < per_rank_autoregressive_samples:
                         all_sequences.append(seq)
                     else:
                         replace_idx = random.randrange(sequences_seen)
-                        if replace_idx < autoregressive_samples:
+                        if replace_idx < per_rank_autoregressive_samples:
                             all_sequences[replace_idx] = seq
 
-        for seq in tqdm(all_sequences, desc="Autoregressive eval", leave=False):
+        for seq in tqdm(
+            all_sequences,
+            desc="Autoregressive eval",
+            leave=False,
+            disable=not accelerator.is_local_main_process,
+        ):
             if len(seq) <= ALTERNATING_START:
                 continue
 
@@ -917,8 +964,9 @@ def main():
         val_autoregressive_accuracies = []
         validation_steps = []
         
-        # Use standard tqdm with disable=False to ensure it always displays
-        progress_bar = tqdm(total=args.max_steps, desc="Training", disable=False)
+        # Keep progress/logging on the main process so multi-GPU runs don't spam duplicate output.
+        progress_bar = tqdm(total=args.max_steps, desc="Training", disable=not accelerator.is_main_process)
+        training_failed = False
         
         try:
             while completed_steps < args.max_steps:
@@ -929,10 +977,15 @@ def main():
                             outputs = forward_batch(model, batch)
                             loss = outputs.loss
                             
-                            # Check for NaN loss
-                            if torch.isnan(loss).any() or torch.isinf(loss).any():
-                                print(f"WARNING: NaN or Inf loss detected: {loss.item()}")
-                                # Skip this backward pass
+                            # Keep NaN/Inf recovery in lockstep across ranks to avoid DDP hangs.
+                            local_invalid_loss = bool(torch.isnan(loss).any() or torch.isinf(loss).any())
+                            invalid_loss_processes = _count_flagged_processes(accelerator, local_invalid_loss)
+                            if invalid_loss_processes > 0:
+                                if accelerator.is_main_process:
+                                    print(
+                                        f"WARNING: NaN or Inf loss detected on {invalid_loss_processes}/"
+                                        f"{accelerator.num_processes} rank(s); skipping this synchronized step."
+                                    )
                                 optimizer.zero_grad()
                                 continue
                                 
@@ -941,38 +994,44 @@ def main():
                             
                             # Only update optimizer and scheduler when gradients are synchronized
                             if accelerator.sync_gradients:
-                                # Gradient clipping - industry standard value
-                                accelerator.clip_grad_norm_(model.parameters(), max_norm=2.0)
-                                
-                                # Check for NaN in gradients
-                                has_nan_grads = False
-                                for name, param in model.named_parameters():
-                                    if param.grad is not None and torch.isnan(param.grad).any():
-                                        print(f"NaN gradient detected in {name}")
-                                        has_nan_grads = True
-                                        break
-                                        
-                                if has_nan_grads:
-                                    print("Skipping update due to NaN gradients")
+                                invalid_grad_name = _find_invalid_gradient_parameter(model)
+                                invalid_grad_processes = _count_flagged_processes(
+                                    accelerator,
+                                    invalid_grad_name is not None,
+                                )
+                                if invalid_grad_processes > 0:
+                                    if accelerator.is_main_process:
+                                        detail = f" Example parameter: {invalid_grad_name}." if invalid_grad_name else ""
+                                        print(
+                                            f"WARNING: NaN or Inf gradients detected on {invalid_grad_processes}/"
+                                            f"{accelerator.num_processes} rank(s); skipping optimizer step.{detail}"
+                                        )
                                     optimizer.zero_grad()
                                     continue
+
+                                # Gradient clipping - industry standard value
+                                accelerator.clip_grad_norm_(model.parameters(), max_norm=2.0)
                                 
                                 # Only update optimizer and scheduler here
                                 optimizer.step()
                                 scheduler.step()
                                 optimizer.zero_grad()
+                                reduced_loss = accelerator.reduce(
+                                    loss.detach().to(device=accelerator.device, dtype=torch.float64),
+                                    reduction="mean",
+                                ).item()
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
                                 progress_bar.update(1)
                                 
                                 # Log progress
-                                if completed_steps % 10 == 0:
+                                if completed_steps % 10 == 0 and accelerator.is_main_process:
                                     # Store the training loss every 10 steps
-                                    train_losses.append(loss.item())
+                                    train_losses.append(reduced_loss)
                                     
                                     # Print more precise learning rate
-                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {loss.item():.4f}, "
+                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
                                           f"LR: {scheduler.get_last_lr()[0]:.8e}")
                                     
                                     # Check for NaN parameters periodically
@@ -986,13 +1045,15 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    print(f"\nRunning validation at step {completed_steps}...")
+                                    if accelerator.is_main_process:
+                                        print(f"\nRunning validation at step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
-                                    val_losses.append(val_loss)
-                                    val_accuracies.append(val_acc * 100)  # Store as percentage
-                                    val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    if accelerator.is_main_process:
+                                        validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
+                                        val_losses.append(val_loss)
+                                        val_accuracies.append(val_acc * 100)  # Store as percentage
+                                        val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
+                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -1005,13 +1066,15 @@ def main():
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    print(f"\nRunning validation at checkpoint step {completed_steps}...")
+                                    if accelerator.is_main_process:
+                                        print(f"\nRunning validation at checkpoint step {completed_steps}...")
                                     val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                                    validation_steps.append(completed_steps // 10)
-                                    val_losses.append(val_loss)
-                                    val_accuracies.append(val_acc * 100)
-                                    val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                    print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
+                                    if accelerator.is_main_process:
+                                        validation_steps.append(completed_steps // 10)
+                                        val_losses.append(val_loss)
+                                        val_accuracies.append(val_acc * 100)
+                                        val_autoregressive_accuracies.append(val_auto_acc * 100)
+                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
                                     
                                     # Return to training mode
                                     model.train()
@@ -1064,6 +1127,9 @@ def main():
                             raise
                         elif "nan" in str(e).lower() or "inf" in str(e).lower():
                             print(f"NaN/Inf error: {str(e)}")
+                            if accelerator.num_processes > 1:
+                                print("Distributed run detected; aborting instead of skipping locally to avoid rank desync.")
+                                raise
                             print("Trying to recover by skipping this batch...")
                             optimizer.zero_grad()
                             continue
@@ -1073,6 +1139,7 @@ def main():
                             raise
             
         except Exception as e:
+            training_failed = True
             print(f"Error during training: {e}")
             print(traceback.format_exc())
             raise
@@ -1080,47 +1147,53 @@ def main():
             # Make sure we always close the progress bar
             progress_bar.close()
             
-            # Always try to save whatever we have and generate the final plot
-            try:
-                # Final validation run
-                print("\nRunning final validation...")
-                final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
-                validation_steps.append(completed_steps // 10)
-                val_losses.append(final_val_loss)
-                val_accuracies.append(final_val_acc * 100)
-                val_autoregressive_accuracies.append(final_auto_acc * 100)
-                print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
-                
-                # Final save
-                final_dir = args.output_dir / "final"
+            # Only run final validation/save after a clean training loop exit.
+            if training_failed:
                 if accelerator.is_main_process:
-                    os.makedirs(final_dir, exist_ok=True)
-                accelerator.wait_for_everyone()
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(
-                    final_dir,
-                    is_main_process=accelerator.is_main_process,
-                    save_function=accelerator.save,
-                )
-                accelerator.wait_for_everyone()
-                if accelerator.is_main_process:
-                    print(f"Saved final model to {final_dir}")
+                    print("Skipping final validation/save because training exited with an error.")
+            else:
+                try:
+                    # Final validation run
+                    if accelerator.is_main_process:
+                        print("\nRunning final validation...")
+                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
+                    if accelerator.is_main_process:
+                        validation_steps.append(completed_steps // 10)
+                        val_losses.append(final_val_loss)
+                        val_accuracies.append(final_val_acc * 100)
+                        val_autoregressive_accuracies.append(final_auto_acc * 100)
+                        print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
                     
-                    # Save the final losses
-                    np.savez(
-                        final_dir / "losses.npz",
-                        train_losses=np.array(train_losses),
-                        val_losses=np.array(val_losses),
-                        val_accuracies=np.array(val_accuracies),
-                        val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                        validation_steps=np.array(validation_steps)
+                    # Final save
+                    final_dir = args.output_dir / "final"
+                    if accelerator.is_main_process:
+                        os.makedirs(final_dir, exist_ok=True)
+                    accelerator.wait_for_everyone()
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    unwrapped_model.save_pretrained(
+                        final_dir,
+                        is_main_process=accelerator.is_main_process,
+                        save_function=accelerator.save,
                     )
+                    accelerator.wait_for_everyone()
+                    if accelerator.is_main_process:
+                        print(f"Saved final model to {final_dir}")
+                        
+                        # Save the final losses
+                        np.savez(
+                            final_dir / "losses.npz",
+                            train_losses=np.array(train_losses),
+                            val_losses=np.array(val_losses),
+                            val_accuracies=np.array(val_accuracies),
+                            val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                            validation_steps=np.array(validation_steps)
+                        )
+                        
+                        # Create and save final loss plot
+                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
                     
-                    # Create and save final loss plot
-                    plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
-                
-            except Exception as save_error:
-                print(f"Error saving final model or generating plot: {save_error}")
+                except Exception as save_error:
+                    print(f"Error saving final model or generating plot: {save_error}")
             
     except Exception as setup_error:
         print(f"Error in setup: {setup_error}")
