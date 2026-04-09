@@ -1,8 +1,9 @@
 import argparse
 import os
 from pathlib import Path
+import random
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 from accelerate import Accelerator
 from transformers import AutoModelForCausalLM
@@ -475,6 +476,72 @@ def _move_batch_to_device(batch, device):
     return moved
 
 
+def _broadcast_int_from_main(accelerator, value):
+    value_tensor = torch.tensor(
+        int(value) if accelerator.is_main_process else 0,
+        device=accelerator.device,
+        dtype=torch.int64,
+    )
+    synchronized = accelerator.reduce(value_tensor, reduction="sum")
+    return int(synchronized.item())
+
+
+def _resolve_eval_subset_size(dataset_size, requested_size, world_size):
+    if dataset_size <= 0:
+        raise ValueError("Validation dataset is empty.")
+
+    sample_count = dataset_size if requested_size is None or requested_size <= 0 else min(requested_size, dataset_size)
+    if world_size <= 1:
+        return sample_count
+
+    if sample_count >= world_size:
+        adjusted = (sample_count // world_size) * world_size
+        if adjusted > 0:
+            return adjusted
+
+    return min(dataset_size, world_size)
+
+
+def _build_random_eval_dataloader(
+    dataset,
+    accelerator,
+    batch_size,
+    collate_fn,
+    pin_memory,
+    num_workers,
+    requested_size,
+    description,
+):
+    sample_count = _resolve_eval_subset_size(len(dataset), requested_size, accelerator.num_processes)
+    sample_seed = _broadcast_int_from_main(accelerator, random.randrange(1, 2**31))
+    rng = random.Random(sample_seed)
+
+    if sample_count >= len(dataset):
+        sampled_indices = list(range(len(dataset)))
+    else:
+        sampled_indices = rng.sample(range(len(dataset)), sample_count)
+
+    sampled_subset = Subset(dataset, sampled_indices)
+    dataloader = DataLoader(
+        sampled_subset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+    )
+    dataloader = accelerator.prepare_data_loader(dataloader, device_placement=False)
+
+    if accelerator.is_main_process:
+        requested_label = "full dataset" if requested_size is None or requested_size <= 0 else str(requested_size)
+        print(
+            f"{description}: using {sample_count}/{len(dataset)} validation sequences "
+            f"(requested {requested_label}, seed={sample_seed}, world_size={accelerator.num_processes})."
+        )
+
+    return dataloader
+
+
 def _capture_reference_parameters(model):
     reference_parameters = {}
     tensor_count = 0
@@ -518,7 +585,17 @@ def _compute_original_weight_l2_penalty(model, reference_parameters):
     return total_penalty / max(1, total_elements)
 
 
-def evaluate_model(model, dataloader, device, max_samples=500, autoregressive_samples=100, show_progress=True):
+def evaluate_model(
+    model,
+    accelerator,
+    dataset,
+    batch_size,
+    collate_fn,
+    pin_memory,
+    num_workers=0,
+    max_samples=500,
+    autoregressive_samples=100,
+):
     model.eval()
     total_loss = 0.0
     total_samples = 0
@@ -526,54 +603,38 @@ def evaluate_model(model, dataloader, device, max_samples=500, autoregressive_sa
     total_pitches = 0
 
     from anticipation.vocab import CONTROL_OFFSET, REST
-    import random
 
-    total_batches = len(dataloader)
-    if total_batches == 0:
-        raise ValueError(
-            "Validation dataloader is empty. This usually means the validation token file has zero sequences."
-        )
-
-    estimated_batch_size = getattr(dataloader, "batch_size", None) or 8
-    sampled_max = max_samples if max_samples > 0 else 0
-    num_batches_needed = min(
-        total_batches,
-        (sampled_max + estimated_batch_size - 1) // estimated_batch_size if sampled_max > 0 else 0,
+    accelerator.wait_for_everyone()
+    teacher_dataloader = _build_random_eval_dataloader(
+        dataset=dataset,
+        accelerator=accelerator,
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        requested_size=max_samples,
+        description="Teacher-forced eval",
     )
-    if num_batches_needed >= total_batches:
-        selected_indices = set(range(total_batches))
-    else:
-        selected_indices = set(random.sample(range(total_batches), num_batches_needed))
 
-    batches_processed = 0
     with torch.no_grad():
-        for batch_idx, batch in enumerate(
-            tqdm(
-                dataloader,
-                desc="Evaluating",
-                leave=False,
-                disable=not show_progress,
-            )
+        for batch in tqdm(
+            teacher_dataloader,
+            desc="Evaluating",
+            leave=False,
+            disable=not accelerator.is_local_main_process,
         ):
-            if batch_idx not in selected_indices:
-                continue
-
-            batches_processed += 1
-            if batches_processed > len(selected_indices):
-                break
-
-            batch = _move_batch_to_device(batch, device)
+            batch = _move_batch_to_device(batch, accelerator.device)
             outputs = forward_batch(model, batch)
             loss = outputs.loss
             logits = outputs.logits
             input_ids = batch["input_ids"]
             labels = batch["labels"]
-            batch_size = input_ids.size(0)
+            local_batch_size = input_ids.size(0)
 
-            total_loss += loss.item() * batch_size
-            total_samples += batch_size
+            total_loss += loss.item() * local_batch_size
+            total_samples += local_batch_size
 
-            for b in range(batch_size):
+            for b in range(local_batch_size):
                 seq_input = input_ids[b]
                 seq_labels = labels[b]
                 seq_logits = logits[b]
@@ -595,6 +656,17 @@ def evaluate_model(model, dataloader, device, max_samples=500, autoregressive_sa
                             total_pitches += 1
                     i += 3
 
+    teacher_stats = torch.tensor(
+        [total_loss, total_samples, correct_pitches, total_pitches],
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    teacher_stats = accelerator.reduce(teacher_stats, reduction="sum")
+    total_loss = float(teacher_stats[0].item())
+    total_samples = int(teacher_stats[1].item())
+    correct_pitches = int(teacher_stats[2].item())
+    total_pitches = int(teacher_stats[3].item())
+
     if total_samples == 0:
         raise ValueError(
             "Validation produced zero samples. Check that the validation token file is non-empty and readable."
@@ -607,93 +679,79 @@ def evaluate_model(model, dataloader, device, max_samples=500, autoregressive_sa
     autoregressive_total = 0
 
     if autoregressive_samples > 0:
-        all_sequences = []
-        sequences_seen = 0
+        autoregressive_dataloader = _build_random_eval_dataloader(
+            dataset=dataset,
+            accelerator=accelerator,
+            batch_size=batch_size,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
+            num_workers=num_workers,
+            requested_size=autoregressive_samples,
+            description="Autoregressive eval",
+        )
+
         with torch.no_grad():
-            for batch in dataloader:
+            for batch in tqdm(
+                autoregressive_dataloader,
+                desc="Autoregressive eval",
+                leave=False,
+                disable=not accelerator.is_local_main_process,
+            ):
                 input_ids = batch["input_ids"]
                 for seq in input_ids:
                     seq = seq.detach().cpu()
-                    sequences_seen += 1
-                    if len(all_sequences) < autoregressive_samples:
-                        all_sequences.append(seq)
-                    else:
-                        replace_idx = random.randrange(sequences_seen)
-                        if replace_idx < autoregressive_samples:
-                            all_sequences[replace_idx] = seq
+                    if len(seq) <= ALTERNATING_START:
+                        continue
 
-        for seq in tqdm(
-            all_sequences,
-            desc="Autoregressive eval",
-            leave=False,
-            disable=not show_progress,
-        ):
-            if len(seq) <= ALTERNATING_START:
-                continue
+                    context = seq[:ALTERNATING_START].tolist()
+                    pos = ALTERNATING_START
+                    while pos + 5 < len(seq):
+                        if (
+                            seq[pos] < CONTROL_OFFSET
+                            and seq[pos + 1] < CONTROL_OFFSET
+                            and seq[pos + 2] < CONTROL_OFFSET
+                            and seq[pos + 2] != REST
+                        ):
+                            input_tensor = torch.tensor([context], device=accelerator.device)
+                            outputs = model(input_tensor)
+                            pred_time = outputs.logits[0, -1, :].argmax().item()
+                            context.append(pred_time)
 
-            context = seq[:ALTERNATING_START].tolist()
-            pos = ALTERNATING_START
-            while pos + 5 < len(seq):
-                if (
-                    seq[pos] < CONTROL_OFFSET
-                    and seq[pos + 1] < CONTROL_OFFSET
-                    and seq[pos + 2] < CONTROL_OFFSET
-                    and seq[pos + 2] != REST
-                ):
-                    input_tensor = torch.tensor([context], device=device)
-                    with torch.no_grad():
-                        outputs = model(input_tensor)
-                        pred_time = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_time)
+                            input_tensor = torch.tensor([context], device=accelerator.device)
+                            outputs = model(input_tensor)
+                            pred_dur = outputs.logits[0, -1, :].argmax().item()
+                            context.append(pred_dur)
 
-                    input_tensor = torch.tensor([context], device=device)
-                    with torch.no_grad():
-                        outputs = model(input_tensor)
-                        pred_dur = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_dur)
+                            input_tensor = torch.tensor([context], device=accelerator.device)
+                            outputs = model(input_tensor)
+                            pred_pitch = outputs.logits[0, -1, :].argmax().item()
+                            context.append(pred_pitch)
 
-                    input_tensor = torch.tensor([context], device=device)
-                    with torch.no_grad():
-                        outputs = model(input_tensor)
-                        pred_pitch = outputs.logits[0, -1, :].argmax().item()
-                    context.append(pred_pitch)
+                            true_pitch = seq[pos + 2].item()
+                            if pred_pitch == true_pitch:
+                                autoregressive_correct += 1
+                            autoregressive_total += 1
 
-                    true_pitch = seq[pos + 2].item()
-                    if pred_pitch == true_pitch:
-                        autoregressive_correct += 1
-                    autoregressive_total += 1
+                            pos += 3
+                            if pos + 2 < len(seq):
+                                context.extend([seq[pos].item(), seq[pos + 1].item(), seq[pos + 2].item()])
+                                pos += 3
+                        else:
+                            context.append(seq[pos].item())
+                            pos += 1
 
-                    pos += 3
-                    if pos + 2 < len(seq):
-                        context.extend([seq[pos].item(), seq[pos + 1].item(), seq[pos + 2].item()])
-                        pos += 3
-                else:
-                    context.append(seq[pos].item())
-                    pos += 1
-
+    autoregressive_stats = torch.tensor(
+        [autoregressive_correct, autoregressive_total],
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
+    autoregressive_correct = int(autoregressive_stats[0].item())
+    autoregressive_total = int(autoregressive_stats[1].item())
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
 
+    accelerator.wait_for_everyone()
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
-
-
-def evaluate_model_on_main_process(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
-    metrics = (0.0, 0.0, 0.0)
-
-    model.eval()
-    accelerator.wait_for_everyone()
-
-    if accelerator.is_main_process:
-        metrics = evaluate_model(
-            accelerator.unwrap_model(model),
-            dataloader,
-            device=accelerator.device,
-            max_samples=max_samples,
-            autoregressive_samples=autoregressive_samples,
-            show_progress=True,
-        )
-
-    accelerator.wait_for_everyone()
-    return metrics
 
 def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
     """
@@ -762,7 +820,7 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./strong_reg'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./april_out'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
@@ -770,6 +828,24 @@ def main():
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
     parser.add_argument('--eval_steps', type=int, default=1000)
+    parser.add_argument(
+        '--eval_max_samples',
+        type=int,
+        default=500,
+        help='Random validation sequences for teacher-forced eval. <= 0 uses the full validation set.',
+    )
+    parser.add_argument(
+        '--eval_autoregressive_samples',
+        type=int,
+        default=100,
+        help='Random validation sequences for autoregressive eval. <= 0 disables autoregressive eval.',
+    )
+    parser.add_argument(
+        '--eval_num_workers',
+        type=int,
+        default=0,
+        help='Dataloader workers used for sampled validation subsets.',
+    )
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
@@ -811,13 +887,15 @@ def main():
     parser.add_argument(
         '--original_weight_l2',
         type=float,
-        default=1e4,
+        default=1e-2,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     args = parser.parse_args()
 
     if args.original_weight_l2 < 0:
         raise ValueError("--original_weight_l2 must be non-negative.")
+    if args.eval_num_workers < 0:
+        raise ValueError("--eval_num_workers must be non-negative.")
     
     # Override device if requested
     global device
@@ -839,11 +917,24 @@ def main():
             cpu=args.force_cpu,
             mixed_precision=mixed_precision,
         )
+        print(
+            "Distributed setup: "
+            f"type={accelerator.distributed_type}, "
+            f"world_size={accelerator.num_processes}, "
+            f"rank={accelerator.process_index}, "
+            f"local_rank={accelerator.local_process_index}, "
+            f"device={accelerator.device}"
+        )
         if accelerator.is_main_process:
             print(
                 "Global effective batch size: "
                 f"{args.batch_size * args.gradient_accumulation_steps * accelerator.num_processes}"
             )
+            if torch.cuda.is_available() and torch.cuda.device_count() > 1 and accelerator.num_processes == 1:
+                print(
+                    "WARNING: Multiple CUDA devices are visible, but training is running with world_size=1. "
+                    "Launch with accelerate or torchrun to use multiple GPUs."
+                )
         
         # Create output directory once and synchronize before any rank writes into it.
         if accelerator.is_main_process:
@@ -906,14 +997,12 @@ def main():
                 f"Validation dataset is empty: {args.val_file}. Check the tokenized validation file."
             )
         
-        val_dataloader = DataLoader(
-            val_dataset, 
-            batch_size=args.val_batch_size,
-            shuffle=False,  # No need to shuffle validation data
-            collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available() and not args.force_cpu,
-            num_workers=0,
-        )
+        val_loader_kwargs = {
+            "batch_size": args.val_batch_size,
+            "collate_fn": collate_fn,
+            "pin_memory": torch.cuda.is_available() and not args.force_cpu,
+            "num_workers": args.eval_num_workers,
+        }
         
         # Load model with memory optimizations
         print(f"Loading model {args.model_name}...")
@@ -1145,10 +1234,13 @@ def main():
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                                     if accelerator.is_main_process:
                                         print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model_on_main_process(
+                                    val_loss, val_acc, val_auto_acc = evaluate_model(
                                         model,
-                                        val_dataloader,
                                         accelerator,
+                                        val_dataset,
+                                        **val_loader_kwargs,
+                                        max_samples=args.eval_max_samples,
+                                        autoregressive_samples=args.eval_autoregressive_samples,
                                     )
                                     if accelerator.is_main_process:
                                         validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
@@ -1170,10 +1262,13 @@ def main():
                                     # Run validation before saving checkpoint
                                     if accelerator.is_main_process:
                                         print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model_on_main_process(
+                                    val_loss, val_acc, val_auto_acc = evaluate_model(
                                         model,
-                                        val_dataloader,
                                         accelerator,
+                                        val_dataset,
+                                        **val_loader_kwargs,
+                                        max_samples=args.eval_max_samples,
+                                        autoregressive_samples=args.eval_autoregressive_samples,
                                     )
                                     if accelerator.is_main_process:
                                         validation_steps.append(completed_steps // 10)
@@ -1263,10 +1358,13 @@ def main():
                     # Final validation run
                     if accelerator.is_main_process:
                         print("\nRunning final validation...")
-                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model_on_main_process(
+                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model(
                         model,
-                        val_dataloader,
                         accelerator,
+                        val_dataset,
+                        **val_loader_kwargs,
+                        max_samples=args.eval_max_samples,
+                        autoregressive_samples=args.eval_autoregressive_samples,
                     )
                     if accelerator.is_main_process:
                         validation_steps.append(completed_steps // 10)
