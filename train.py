@@ -465,7 +465,60 @@ def forward_batch(model, batch):
     return model(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
 
 
-def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
+def _move_batch_to_device(batch, device):
+    moved = {}
+    for key, value in batch.items():
+        if torch.is_tensor(value):
+            moved[key] = value.to(device, non_blocking=True)
+        else:
+            moved[key] = value
+    return moved
+
+
+def _capture_reference_parameters(model):
+    reference_parameters = {}
+    tensor_count = 0
+    parameter_count = 0
+    bytes_used = 0
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad or not torch.is_floating_point(param):
+            continue
+        reference = param.detach().clone()
+        reference_parameters[name] = reference
+        tensor_count += 1
+        parameter_count += param.numel()
+        bytes_used += reference.numel() * reference.element_size()
+
+    return reference_parameters, tensor_count, parameter_count, bytes_used
+
+
+def _compute_original_weight_l2_penalty(model, reference_parameters):
+    total_penalty = None
+    total_elements = 0
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad or not torch.is_floating_point(param):
+            continue
+        reference = reference_parameters.get(name)
+        if reference is None or reference.shape != param.shape:
+            continue
+
+        param_fp32 = param.float()
+        reference_fp32 = reference.float()
+        penalty = torch.sum((param_fp32 - reference_fp32) ** 2)
+        total_penalty = penalty if total_penalty is None else total_penalty + penalty
+        total_elements += param.numel()
+
+    if total_penalty is None:
+        first_param = next(model.parameters(), None)
+        device = first_param.device if first_param is not None else torch.device("cpu")
+        return torch.zeros((), device=device, dtype=torch.float32)
+
+    return total_penalty / max(1, total_elements)
+
+
+def evaluate_model(model, dataloader, device, max_samples=500, autoregressive_samples=100, show_progress=True):
     model.eval()
     total_loss = 0.0
     total_samples = 0
@@ -482,12 +535,10 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
         )
 
     estimated_batch_size = getattr(dataloader, "batch_size", None) or 8
-    per_rank_max_samples = 0
-    if max_samples > 0:
-        per_rank_max_samples = max(1, (max_samples + accelerator.num_processes - 1) // accelerator.num_processes)
+    sampled_max = max_samples if max_samples > 0 else 0
     num_batches_needed = min(
         total_batches,
-        (per_rank_max_samples + estimated_batch_size - 1) // estimated_batch_size if per_rank_max_samples > 0 else 0,
+        (sampled_max + estimated_batch_size - 1) // estimated_batch_size if sampled_max > 0 else 0,
     )
     if num_batches_needed >= total_batches:
         selected_indices = set(range(total_batches))
@@ -501,7 +552,7 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 dataloader,
                 desc="Evaluating",
                 leave=False,
-                disable=not accelerator.is_local_main_process,
+                disable=not show_progress,
             )
         ):
             if batch_idx not in selected_indices:
@@ -511,6 +562,7 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             if batches_processed > len(selected_indices):
                 break
 
+            batch = _move_batch_to_device(batch, device)
             outputs = forward_batch(model, batch)
             loss = outputs.loss
             logits = outputs.logits
@@ -548,31 +600,13 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
             "Validation produced zero samples. Check that the validation token file is non-empty and readable."
         )
 
-    teacher_stats = torch.tensor(
-        [total_loss, total_samples, correct_pitches, total_pitches],
-        device=accelerator.device,
-        dtype=torch.float64,
-    )
-    teacher_stats = accelerator.reduce(teacher_stats, reduction="sum")
-    total_loss = float(teacher_stats[0].item())
-    total_samples = int(teacher_stats[1].item())
-    correct_pitches = int(teacher_stats[2].item())
-    total_pitches = int(teacher_stats[3].item())
-
     avg_loss = total_loss / total_samples
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
 
     autoregressive_correct = 0
     autoregressive_total = 0
 
-    per_rank_autoregressive_samples = 0
     if autoregressive_samples > 0:
-        per_rank_autoregressive_samples = max(
-            1,
-            (autoregressive_samples + accelerator.num_processes - 1) // accelerator.num_processes,
-        )
-
-    if per_rank_autoregressive_samples > 0:
         all_sequences = []
         sequences_seen = 0
         with torch.no_grad():
@@ -581,18 +615,18 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                 for seq in input_ids:
                     seq = seq.detach().cpu()
                     sequences_seen += 1
-                    if len(all_sequences) < per_rank_autoregressive_samples:
+                    if len(all_sequences) < autoregressive_samples:
                         all_sequences.append(seq)
                     else:
                         replace_idx = random.randrange(sequences_seen)
-                        if replace_idx < per_rank_autoregressive_samples:
+                        if replace_idx < autoregressive_samples:
                             all_sequences[replace_idx] = seq
 
         for seq in tqdm(
             all_sequences,
             desc="Autoregressive eval",
             leave=False,
-            disable=not accelerator.is_local_main_process,
+            disable=not show_progress,
         ):
             if len(seq) <= ALTERNATING_START:
                 continue
@@ -606,19 +640,19 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     and seq[pos + 2] < CONTROL_OFFSET
                     and seq[pos + 2] != REST
                 ):
-                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    input_tensor = torch.tensor([context], device=device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
                         pred_time = outputs.logits[0, -1, :].argmax().item()
                     context.append(pred_time)
 
-                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    input_tensor = torch.tensor([context], device=device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
                         pred_dur = outputs.logits[0, -1, :].argmax().item()
                     context.append(pred_dur)
 
-                    input_tensor = torch.tensor([context]).to(accelerator.device)
+                    input_tensor = torch.tensor([context], device=device)
                     with torch.no_grad():
                         outputs = model(input_tensor)
                         pred_pitch = outputs.logits[0, -1, :].argmax().item()
@@ -637,17 +671,29 @@ def evaluate_model(model, dataloader, accelerator, max_samples=500, autoregressi
                     context.append(seq[pos].item())
                     pos += 1
 
-    autoregressive_stats = torch.tensor(
-        [autoregressive_correct, autoregressive_total],
-        device=accelerator.device,
-        dtype=torch.float64,
-    )
-    autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
-    autoregressive_correct = int(autoregressive_stats[0].item())
-    autoregressive_total = int(autoregressive_stats[1].item())
     autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
 
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
+
+
+def evaluate_model_on_main_process(model, dataloader, accelerator, max_samples=500, autoregressive_samples=100):
+    metrics = (0.0, 0.0, 0.0)
+
+    model.eval()
+    accelerator.wait_for_everyone()
+
+    if accelerator.is_main_process:
+        metrics = evaluate_model(
+            accelerator.unwrap_model(model),
+            dataloader,
+            device=accelerator.device,
+            max_samples=max_samples,
+            autoregressive_samples=autoregressive_samples,
+            show_progress=True,
+        )
+
+    accelerator.wait_for_everyone()
+    return metrics
 
 def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
     """
@@ -742,7 +788,7 @@ def main():
     parser.add_argument(
         '--mask_prob',
         type=float,
-        default=0.75,
+        default=0.5,
         help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only)',
     )
     parser.add_argument(
@@ -762,7 +808,16 @@ def main():
         default=0.2,
         help='Tempo scale half-range sampled uniformly from [1-range, 1+range] (training only)',
     )
+    parser.add_argument(
+        '--original_weight_l2',
+        type=float,
+        default=1e-4,
+        help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
+    )
     args = parser.parse_args()
+
+    if args.original_weight_l2 < 0:
+        raise ValueError("--original_weight_l2 must be non-negative.")
     
     # Override device if requested
     global device
@@ -770,7 +825,7 @@ def main():
         device = torch.device("cpu")
         print("Forcing CPU usage as requested")
     
-    print(f"Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
+    print(f"Per-rank effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"Final device confirmation: {device}")
     
     try:
@@ -784,6 +839,11 @@ def main():
             cpu=args.force_cpu,
             mixed_precision=mixed_precision,
         )
+        if accelerator.is_main_process:
+            print(
+                "Global effective batch size: "
+                f"{args.batch_size * args.gradient_accumulation_steps * accelerator.num_processes}"
+            )
         
         # Create output directory once and synchronize before any rank writes into it.
         if accelerator.is_main_process:
@@ -913,8 +973,28 @@ def main():
         
         # Prepare for training with accelerate - this handles device placement
         model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
-        val_dataloader = accelerator.prepare_data_loader(val_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
+
+        base_model = accelerator.unwrap_model(model)
+        original_weight_references = {}
+        if args.original_weight_l2 > 0:
+            (
+                original_weight_references,
+                anchored_tensor_count,
+                anchored_parameter_count,
+                anchored_bytes,
+            ) = _capture_reference_parameters(base_model)
+            if accelerator.is_main_process:
+                anchored_megabytes = anchored_bytes / (1024 ** 2)
+                print(
+                    "Original-weight L2 regularization enabled: "
+                    f"lambda={args.original_weight_l2}, "
+                    f"{anchored_tensor_count} tensors, "
+                    f"{anchored_parameter_count:,} parameters, "
+                    f"~{anchored_megabytes:.1f} MiB snapshot."
+                )
+        elif accelerator.is_main_process:
+            print("Original-weight L2 regularization disabled.")
         
         # Learning rate scheduler - cosine decay from 3e-5 to 3e-6 (no warmup)
         initial_lr = args.learning_rate  # 3e-5
@@ -976,6 +1056,13 @@ def main():
                             # Forward pass with gradient scaling
                             outputs = forward_batch(model, batch)
                             loss = outputs.loss
+                            l2_penalty = None
+                            if original_weight_references:
+                                l2_penalty = _compute_original_weight_l2_penalty(
+                                    base_model,
+                                    original_weight_references,
+                                )
+                                loss = loss + args.original_weight_l2 * l2_penalty
                             
                             # Keep NaN/Inf recovery in lockstep across ranks to avoid DDP hangs.
                             local_invalid_loss = bool(torch.isnan(loss).any() or torch.isinf(loss).any())
@@ -1020,6 +1107,12 @@ def main():
                                     loss.detach().to(device=accelerator.device, dtype=torch.float64),
                                     reduction="mean",
                                 ).item()
+                                reduced_l2_penalty = None
+                                if l2_penalty is not None:
+                                    reduced_l2_penalty = accelerator.reduce(
+                                        l2_penalty.detach().to(device=accelerator.device, dtype=torch.float64),
+                                        reduction="mean",
+                                    ).item()
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
@@ -1031,8 +1124,13 @@ def main():
                                     train_losses.append(reduced_loss)
                                     
                                     # Print more precise learning rate
-                                    print(f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
-                                          f"LR: {scheduler.get_last_lr()[0]:.8e}")
+                                    l2_detail = ""
+                                    if reduced_l2_penalty is not None:
+                                        l2_detail = f", AnchorL2: {reduced_l2_penalty:.6f}"
+                                    print(
+                                        f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
+                                        f"LR: {scheduler.get_last_lr()[0]:.8e}{l2_detail}"
+                                    )
                                     
                                     # Check for NaN parameters periodically
                                     if check_model_for_nans(model):
@@ -1047,7 +1145,11 @@ def main():
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
                                     if accelerator.is_main_process:
                                         print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc, val_auto_acc = evaluate_model_on_main_process(
+                                        model,
+                                        val_dataloader,
+                                        accelerator,
+                                    )
                                     if accelerator.is_main_process:
                                         validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
                                         val_losses.append(val_loss)
@@ -1068,7 +1170,11 @@ def main():
                                     # Run validation before saving checkpoint
                                     if accelerator.is_main_process:
                                         print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(model, val_dataloader, accelerator)
+                                    val_loss, val_acc, val_auto_acc = evaluate_model_on_main_process(
+                                        model,
+                                        val_dataloader,
+                                        accelerator,
+                                    )
                                     if accelerator.is_main_process:
                                         validation_steps.append(completed_steps // 10)
                                         val_losses.append(val_loss)
@@ -1107,6 +1213,7 @@ def main():
                                         
                                         # Create and save loss plot
                                         plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
+                                    accelerator.wait_for_everyone()
                                     
                                     # Free up memory
                                     if torch.cuda.is_available():
@@ -1156,7 +1263,11 @@ def main():
                     # Final validation run
                     if accelerator.is_main_process:
                         print("\nRunning final validation...")
-                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model(model, val_dataloader, accelerator)
+                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model_on_main_process(
+                        model,
+                        val_dataloader,
+                        accelerator,
+                    )
                     if accelerator.is_main_process:
                         validation_steps.append(completed_steps // 10)
                         val_losses.append(final_val_loss)
@@ -1191,6 +1302,7 @@ def main():
                         
                         # Create and save final loss plot
                         plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
+                    accelerator.wait_for_everyone()
                     
                 except Exception as save_error:
                     print(f"Error saving final model or generating plot: {save_error}")
