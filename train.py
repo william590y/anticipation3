@@ -716,27 +716,27 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./recover_dec'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./april_output'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=64) 
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
-    parser.add_argument('--max_steps', type=int, default=5000)
-    parser.add_argument('--save_steps', type=int, default=250)
-    parser.add_argument('--eval_steps', type=int, default=100)
+    parser.add_argument('--max_steps', type=int, default=40000)
+    parser.add_argument('--save_steps', type=int, default=2500)
+    parser.add_argument('--eval_steps', type=int, default=1000)
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
     parser.add_argument('--reduce_memory', action='store_true', help='Use memory-saving techniques')
     parser.add_argument(
         '--onset_jitter_std',
         type=float,
-        default=0.1,
+        default=0.05,
         help='Std of N(1, std^2) multiplier applied to each inter-onset interval of control tokens (training only)',
     )
     parser.add_argument(
         '--dur_jitter_range',
         type=float,
-        default=0.1,
+        default=0.05,
         help='Half-range of U(1-r, 1+r) duration rescaling per control note (training only)',
     )
     parser.add_argument(
