@@ -762,7 +762,7 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./april_output'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./strong_reg'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
@@ -811,7 +811,7 @@ def main():
     parser.add_argument(
         '--original_weight_l2',
         type=float,
-        default=1e-4,
+        default=1e4,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     args = parser.parse_args()
