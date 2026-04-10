@@ -65,6 +65,11 @@ def compile_muster_linux() -> bool:
     os.makedirs(MUSTER_PROGRAMS, exist_ok=True)
 
     code_dir = MUSTER_DIR / "Code"
+    if not code_dir.exists():
+        print(f"ERROR: MUSTER source directory not found: {code_dir}")
+        print("The repository is missing the MUSTER/Code sources needed for Linux compilation.")
+        return False
+
     compilations = [
         ("Fmt3xToSpr_v220118.cpp", "Fmt3xToSpr"),
         ("ScoreMatchEvaluation_VoicePlus_v220118.cpp", "ScoreMatchEvaluation_VoicePlus"),
