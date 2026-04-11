@@ -216,9 +216,6 @@ class TokenizedDataset(Dataset):
             )
 
             if is_event_triplet:
-                if apply_timing_augmentation and tempo_factor != 1.0:
-                    tok0 = _scale_time(tok0, TIME_OFFSET)
-                    tok1 = _scale_dur(tok1, DUR_OFFSET)
                 if transpose_shift != 0 and tok2 != REST:
                     tok2 = _transpose_note(tok2, NOTE_OFFSET)
                 augmented[i] = tok0
@@ -882,7 +879,7 @@ def main():
         '--tempo_scale_range',
         type=float,
         default=0.2,
-        help='Tempo scale half-range sampled uniformly from [1-range, 1+range] (training only)',
+        help='Tempo scale half-range sampled uniformly from [1-range, 1+range] and applied only to performance/control timing (training only)',
     )
     parser.add_argument(
         '--original_weight_l2',
