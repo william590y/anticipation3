@@ -864,7 +864,7 @@ def main():
     parser.add_argument(
         '--mask_prob',
         type=float,
-        default=0.5,
+        default=0.75,
         help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only)',
     )
     parser.add_argument(
@@ -887,7 +887,7 @@ def main():
     parser.add_argument(
         '--original_weight_l2',
         type=float,
-        default=1e-2,
+        default=1e2,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     args = parser.parse_args()
