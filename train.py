@@ -820,14 +820,14 @@ def main():
     parser.add_argument('--data_file', type=Path, default=Path('./data/train_normalized.txt'))
     parser.add_argument('--val_file', type=Path, default=Path('./data/test_normalized.txt'))
     parser.add_argument('--model_name', type=str, default='stanford-crfm/music-medium-800k')
-    parser.add_argument('--output_dir', type=Path, default=Path('./april_out'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./regularized'))
     parser.add_argument('--batch_size', type=int, default=8) 
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=1000)
+    parser.add_argument('--eval_steps', type=int, default=500)
     parser.add_argument(
         '--eval_max_samples',
         type=int,
@@ -887,7 +887,7 @@ def main():
     parser.add_argument(
         '--original_weight_l2',
         type=float,
-        default=1e2,
+        default=1e5,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     args = parser.parse_args()
@@ -1197,11 +1197,13 @@ def main():
                                     reduction="mean",
                                 ).item()
                                 reduced_l2_penalty = None
+                                reduced_anchor_term = None
                                 if l2_penalty is not None:
                                     reduced_l2_penalty = accelerator.reduce(
                                         l2_penalty.detach().to(device=accelerator.device, dtype=torch.float64),
                                         reduction="mean",
                                     ).item()
+                                    reduced_anchor_term = args.original_weight_l2 * reduced_l2_penalty
                                 
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
@@ -1215,7 +1217,10 @@ def main():
                                     # Print more precise learning rate
                                     l2_detail = ""
                                     if reduced_l2_penalty is not None:
-                                        l2_detail = f", AnchorL2: {reduced_l2_penalty:.6f}"
+                                        l2_detail = (
+                                            f", AnchorL2: {reduced_l2_penalty:.6e}, "
+                                            f"AnchorTerm: {reduced_anchor_term:.6e}"
+                                        )
                                     print(
                                         f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
                                         f"LR: {scheduler.get_last_lr()[0]:.8e}{l2_detail}"
@@ -1243,7 +1248,7 @@ def main():
                                         autoregressive_samples=args.eval_autoregressive_samples,
                                     )
                                     if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps // 10)  # Store step number (divided by 10 for plotting)
+                                        validation_steps.append(completed_steps)  # Store step number
                                         val_losses.append(val_loss)
                                         val_accuracies.append(val_acc * 100)  # Store as percentage
                                         val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
@@ -1271,7 +1276,7 @@ def main():
                                         autoregressive_samples=args.eval_autoregressive_samples,
                                     )
                                     if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps // 10)
+                                        validation_steps.append(completed_steps)
                                         val_losses.append(val_loss)
                                         val_accuracies.append(val_acc * 100)
                                         val_autoregressive_accuracies.append(val_auto_acc * 100)
@@ -1367,7 +1372,7 @@ def main():
                         autoregressive_samples=args.eval_autoregressive_samples,
                     )
                     if accelerator.is_main_process:
-                        validation_steps.append(completed_steps // 10)
+                        validation_steps.append(completed_steps)
                         val_losses.append(final_val_loss)
                         val_accuracies.append(final_val_acc * 100)
                         val_autoregressive_accuracies.append(final_auto_acc * 100)
