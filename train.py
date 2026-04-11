@@ -152,12 +152,64 @@ class TokenizedDataset(Dataset):
 
         return transpose_shift, tempo_factor
 
+    def _sample_control_timing_plan(self, tokens):
+        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR, ATIME_OFFSET
+
+        ctrl_positions = []
+        raw_times = []
+
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_control_triplet = (
+                tok0 >= CONTROL_OFFSET
+                and tok1 >= CONTROL_OFFSET
+                and tok2 >= CONTROL_OFFSET
+                and tok0 != SEPARATOR
+            )
+
+            if is_control_triplet:
+                ctrl_positions.append(i)
+                raw_times.append(tok0 - ATIME_OFFSET)
+                i += 3
+            else:
+                i += 1
+
+        new_ctrl_times = None
+        if self.onset_jitter_std > 0 and len(raw_times) >= 2:
+            new_time = float(raw_times[0])
+            jittered = [new_time]
+            for k in range(1, len(raw_times)):
+                ioi = raw_times[k] - raw_times[k - 1]
+                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                new_time = new_time + ioi * scale
+                jittered.append(new_time)
+            new_ctrl_times = jittered
+
+        dur_factors = None
+        if self.dur_jitter_range > 0 and ctrl_positions:
+            dur_factors = [
+                1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                for _ in ctrl_positions
+            ]
+
+        return {
+            "num_controls": len(ctrl_positions),
+            "new_ctrl_times": new_ctrl_times,
+            "dur_factors": dur_factors,
+        }
+
     def _augment_sequence(
         self,
         tokens,
         transpose_shift=0,
         tempo_factor=1.0,
         apply_timing_augmentation=True,
+        apply_tempo_scaling_to_controls=True,
+        control_timing_plan=None,
     ):
         from anticipation.vocab import (
             CONTROL_OFFSET,
@@ -200,6 +252,7 @@ class TokenizedDataset(Dataset):
             return dur_base + max(0, min(MAX_DUR - 1, scaled))
 
         ctrl_positions = []
+        ctrl_index = 0
 
         i = 0
         while i < len(augmented) - 2:
@@ -229,27 +282,38 @@ class TokenizedDataset(Dataset):
                 i += 1
 
         new_ctrl_times = None
-        if apply_timing_augmentation and self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
-            raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
-            new_time = float(raw_times[0])
-            jittered = [new_time]
-            for k in range(1, len(raw_times)):
-                ioi = raw_times[k] - raw_times[k - 1]
-                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
-                new_time = new_time + ioi * scale
-                jittered.append(new_time)
-            new_ctrl_times = [max(0, min(MAX_TIME - 1, int(round(t)))) for t in jittered]
+        if apply_timing_augmentation:
+            if control_timing_plan is not None:
+                planned_times = control_timing_plan.get("new_ctrl_times")
+                if planned_times is not None:
+                    new_ctrl_times = [
+                        max(0, min(MAX_TIME - 1, int(round(t))))
+                        for t in planned_times
+                    ]
+            elif self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
+                raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
+                new_time = float(raw_times[0])
+                jittered = [new_time]
+                for k in range(1, len(raw_times)):
+                    ioi = raw_times[k] - raw_times[k - 1]
+                    scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                    new_time = new_time + ioi * scale
+                    jittered.append(new_time)
+                new_ctrl_times = [max(0, min(MAX_TIME - 1, int(round(t)))) for t in jittered]
 
         for k, (pos_i, tok0, tok1, tok2) in enumerate(ctrl_positions):
             if new_ctrl_times is not None:
                 tok0 = ATIME_OFFSET + new_ctrl_times[k]
 
             if apply_timing_augmentation and self.dur_jitter_range > 0:
-                dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                if control_timing_plan is not None and control_timing_plan.get("dur_factors") is not None:
+                    dur_factor = control_timing_plan["dur_factors"][ctrl_index]
+                else:
+                    dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
                 base_dur = tok1 - ADUR_OFFSET
                 tok1 = ADUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * dur_factor))))
 
-            if apply_timing_augmentation and tempo_factor != 1.0:
+            if apply_tempo_scaling_to_controls and tempo_factor != 1.0:
                 tok0 = _scale_time(tok0, ATIME_OFFSET)
                 tok1 = _scale_dur(tok1, ADUR_OFFSET)
 
@@ -259,6 +323,7 @@ class TokenizedDataset(Dataset):
             augmented[pos_i] = tok0
             augmented[pos_i + 1] = tok1
             augmented[pos_i + 2] = tok2
+            ctrl_index += 1
 
         return augmented
 
@@ -389,17 +454,21 @@ class TokenizedDataset(Dataset):
             labels = tokens.clone()
         else:
             transpose_shift, tempo_factor = self._sample_augmentation_params()
+            control_timing_plan = self._sample_control_timing_plan(tokens)
             augmented_tokens = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=True,
+                apply_tempo_scaling_to_controls=True,
+                control_timing_plan=control_timing_plan,
             )
             labels = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=False,
+                apply_tempo_scaling_to_controls=not self.loss_mask_performance_tokens,
             )
 
         augmented_tokens = self._clamp_tokens_to_vocab(augmented_tokens, "Augmented input tokens", idx)
