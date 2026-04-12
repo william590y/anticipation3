@@ -1,0 +1,152 @@
+[
+  {
+    "piece": "Liszt/Concert_Etude_S145/2/Lo02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/be11c90a559baec58b26.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/16-1/LeeSH02M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/11f94f33fbf17edd3bd3.json"
+  },
+  {
+    "piece": "Bach/Fugue/bwv_883/Herbert02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/1dd6457f9f3738198548.json"
+  },
+  {
+    "piece": "Schubert/Impromptu_op142/1/Kleisen02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/b5e99d268373487dec2a.json"
+  },
+  {
+    "piece": "Chopin/Ballades/1/LinTao04.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/c4424edf6bb8f14c9f18.json"
+  },
+  {
+    "piece": "Chopin/Ballades/1/Ali01.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/6063571f47c12675b23b.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/31-2/HuangSW09.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/4bee7a57a2c42c9daf8c.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/17-1/Tuncali01.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/0370647b55ef2a55473a.json"
+  },
+  {
+    "piece": "Schubert/Impromptu_op.90_D.899/3/ZhaoK10M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/368ffac746c299a519f9.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/16-1/Khmara01.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/3dff19404fb826a44fb7.json"
+  },
+  {
+    "piece": "Schubert/Impromptu_op.90_D.899/2/HuNY06M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/2c8f27536e3187404f44.json"
+  },
+  {
+    "piece": "Schumann/Toccata/DupreeF13M.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/fcbb74c2dbdcdf766218.json"
+  },
+  {
+    "piece": "Haydn/Keyboard_Sonatas/50-1_no_repeat/Day01.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/53e709eb8fbd5e229792.json"
+  },
+  {
+    "piece": "Bach/Prelude/bwv_883/LuM01M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/c9af173a7d8e5a132610.json"
+  },
+  {
+    "piece": "Haydn/Keyboard_Sonatas/50-1_no_repeat/Kim01.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/106d3f5195b36b31ca42.json"
+  },
+  {
+    "piece": "Chopin/Etudes_op_10/12/HuNY03M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/4f00946fee0edd826a68.json"
+  },
+  {
+    "piece": "Bach/Fugue/bwv_883/Khmara04.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/00919ee82575fa56aa86.json"
+  },
+  {
+    "piece": "Bach/Fugue/bwv_883/KaiRuiR03.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/2ce7c262db66013663e6.json"
+  },
+  {
+    "piece": "Bach/Prelude/bwv_884/LiA01M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/6e67df1b3ceeeef2ca6d.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/31-2/ADIG05M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/5a06f1f318efdcbf26a7.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/31-2/Na06.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/1052284628fa7c1667c1.json"
+  },
+  {
+    "piece": "Chopin/Polonaises/53/YeF11M.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/b33066324bcf930be8e5.json"
+  },
+  {
+    "piece": "Haydn/Keyboard_Sonatas/50-1_no_repeat/Toscano03.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/4c7cab8e59d545e0b6e3.json"
+  },
+  {
+    "piece": "Scriabin/Etudes_op_8/11/Shi03.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/f6ddf958c7d4cae9fc79.json"
+  },
+  {
+    "piece": "Haydn/Keyboard_Sonatas/50-1_no_repeat/Gorucan01.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/0a8bbbf6f369c4fcbaf7.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/3-1/LUO01.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/aed878fbc5c4e3d5c4f4.json"
+  },
+  {
+    "piece": "Schubert/Impromptu_op.90_D.899/3/Mizumoto07M.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/453d7278a588e01abe4f.json"
+  },
+  {
+    "piece": "Liszt/Concert_Etude_S145/2/ZhangX03.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/84d977a1e6ee9069de64.json"
+  },
+  {
+    "piece": "Schubert/Impromptu_op.90_D.899/3/Ko08M.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/7ff6f5a9842ea13f1912.json"
+  },
+  {
+    "piece": "Schumann/Kreisleriana/1/ParkJH04M.mid",
+    "cache_hit": false,
+    "cache_path": "data/asap_muster_cache/6114e90076daa92e91b3.json"
+  }
+]
