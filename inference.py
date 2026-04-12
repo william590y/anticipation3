@@ -9,6 +9,7 @@ packed ASAP-normalized files on current main:
   - insert the ground-truth following control triplet after each prediction
   - save performance / ground-truth score / predicted score MIDIs
   - report time / duration / pitch / exact-triplet accuracy
+  - optionally compute MUSTER scores on predicted vs ground-truth score windows
 """
 
 from __future__ import annotations
@@ -40,6 +41,11 @@ from anticipation.vocab import (
     TIME_OFFSET,
     VOCAB_SIZE,
 )
+from evaluate_muster import (
+    check_muster_installation,
+    run_muster_evaluation,
+    triplets_to_musicxml,
+)
 
 
 TEST_FILE = "data/test_normalized.txt"
@@ -49,6 +55,17 @@ DEFAULT_RANDOM_SEED = 41
 DEFAULT_CONFIG_SOURCE = "checkpoint-2000"
 K_PREFIX = 33
 ALTERNATING_START = K_PREFIX * 2 * EVENT_SIZE
+TARGET_BEAT_INTERVAL = 0.5
+MUSTER_METRIC_KEYS = (
+    "pitch_error_rate",
+    "missing_note_rate",
+    "extra_note_rate",
+    "onset_time_error_rate",
+    "offset_time_error_rate",
+    "mean_error_rate",
+    "voice_error_rate",
+    "mean_error_rate_with_voice",
+)
 
 
 def guess_default_checkpoint() -> str:
@@ -315,6 +332,43 @@ def save_midi(triplets: list[list[int]], filepath: Path) -> bool:
         return False
 
 
+def format_muster_summary(metrics: dict[str, float | int]) -> str:
+    summary = [
+        f"MER={metrics['mean_error_rate']:.2f}%",
+        f"PER={metrics['pitch_error_rate']:.2f}%",
+        f"MNR={metrics['missing_note_rate']:.2f}%",
+        f"ENR={metrics['extra_note_rate']:.2f}%",
+        f"OTER={metrics['onset_time_error_rate']:.2f}%",
+        f"OFTER={metrics['offset_time_error_rate']:.2f}%",
+    ]
+    if "voice_error_rate" in metrics:
+        summary.append(f"VER={metrics['voice_error_rate']:.2f}%")
+    if "mean_error_rate_with_voice" in metrics:
+        summary.append(f"MER+V={metrics['mean_error_rate_with_voice']:.2f}%")
+    return ", ".join(summary)
+
+
+def evaluate_triplets_with_muster(
+    gt_triplets: list[list[int]],
+    pred_triplets: list[list[int]],
+    seq_dir: Path,
+    output_prefix: str,
+) -> tuple[dict[str, float] | None, str | None]:
+    gt_xml = seq_dir / "ground_truth_score.xml"
+    pred_xml = seq_dir / "output_score.xml"
+    if not triplets_to_musicxml(gt_triplets, str(gt_xml), beat_seconds=TARGET_BEAT_INTERVAL):
+        return None, "ground-truth MusicXML conversion failed"
+    if not triplets_to_musicxml(pred_triplets, str(pred_xml), beat_seconds=TARGET_BEAT_INTERVAL):
+        return None, "predicted-score MusicXML conversion failed"
+
+    work_dir = seq_dir / "muster_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    metrics = run_muster_evaluation(gt_xml, pred_xml, output_prefix, work_dir)
+    if not metrics:
+        return None, "MUSTER evaluation failed"
+    return metrics, None
+
+
 def compute_triplet_accuracy(
     gt_score: list[list[int]],
     pred_score: list[list[int]],
@@ -364,6 +418,7 @@ def evaluate_checkpoint(
     sampled_lines: list[tuple[int, str]],
     output_dir: Path,
     constrain_score_tokens: bool,
+    compute_muster: bool,
 ) -> dict[str, float | int]:
     model, device = load_model(checkpoint_path, config_source)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -379,7 +434,11 @@ def evaluate_checkpoint(
         "overall_total": 0,
         "num_sequences_evaluated": 0,
         "num_sequences_failed": 0,
+        "muster_enabled": compute_muster,
+        "num_sequences_muster_evaluated": 0,
+        "num_sequences_muster_failed": 0,
     }
+    muster_aggregate = {key: [] for key in MUSTER_METRIC_KEYS}
     per_sequence = []
 
     for original_index, line in tqdm(
@@ -421,6 +480,43 @@ def evaluate_checkpoint(
             save_midi(perf_triplets, seq_dir / "input_performance.mid")
             save_midi(gt_triplets, seq_dir / "ground_truth_score.mid")
             save_midi(pred_triplets, seq_dir / "output_score.mid")
+
+            if compute_muster:
+                muster_metrics, muster_error = evaluate_triplets_with_muster(
+                    gt_triplets,
+                    pred_triplets,
+                    seq_dir,
+                    f"sequence_{original_index:07d}",
+                )
+                if muster_metrics:
+                    metrics.update(muster_metrics)
+                    metrics["muster_status"] = "ok"
+                    aggregate["num_sequences_muster_evaluated"] += 1
+                    for key, values in muster_aggregate.items():
+                        if key in muster_metrics:
+                            values.append(float(muster_metrics[key]))
+                    tqdm.write(
+                        f"[MUSTER] sequence_{original_index:07d}: "
+                        f"{format_muster_summary(muster_metrics)}"
+                    )
+                    with open(seq_dir / "muster_metrics.json", "w", encoding="utf-8") as handle:
+                        json.dump(muster_metrics, handle, indent=2)
+                else:
+                    metrics["muster_status"] = "failed"
+                    metrics["muster_error"] = muster_error
+                    aggregate["num_sequences_muster_failed"] += 1
+                    tqdm.write(
+                        f"[MUSTER] sequence_{original_index:07d}: failed ({muster_error})"
+                    )
+                    with open(seq_dir / "muster_metrics.json", "w", encoding="utf-8") as handle:
+                        json.dump(
+                            {
+                                "status": "failed",
+                                "error": muster_error,
+                            },
+                            handle,
+                            indent=2,
+                        )
 
             with open(seq_dir / "stats.json", "w", encoding="utf-8") as handle:
                 json.dump(metrics, handle, indent=2)
@@ -464,6 +560,14 @@ def evaluate_checkpoint(
         aggregate["autoregressive_accuracy"] = 0.0
         aggregate["autoregressive_accuracy_pct"] = 0.0
 
+    if compute_muster:
+        for key, values in muster_aggregate.items():
+            if values:
+                aggregate[f"{key}_mean"] = float(np.mean(values))
+                aggregate[f"{key}_std"] = float(np.std(values))
+                aggregate[f"{key}_min"] = float(np.min(values))
+                aggregate[f"{key}_max"] = float(np.max(values))
+
     if per_sequence:
         aggregate["per_sequence_pitch_accuracy_mean"] = float(
             np.mean([item["pitch_accuracy"] for item in per_sequence])
@@ -497,6 +601,7 @@ def write_summary(
         f"Total sequences available: {total_available}",
         f"Sampled sequences: {len(sampled_lines)}",
         f"Constrained score decoding: {constrain_score_tokens}",
+        f"MUSTER scoring enabled: {aggregate.get('muster_enabled', False)}",
         "",
         "Aggregate metrics:",
         f"  Autoregressive accuracy (pitch): {aggregate['autoregressive_accuracy_pct']:.2f}%",
@@ -514,6 +619,38 @@ def write_summary(
             f"(+-{aggregate['per_sequence_pitch_accuracy_std']:.2f})"
         )
 
+    if aggregate.get("muster_enabled"):
+        summary_lines.extend(
+            [
+                "",
+                "Aggregate MUSTER metrics:",
+                f"  Windows MUSTER-evaluated: {aggregate['num_sequences_muster_evaluated']}",
+                f"  Windows MUSTER-failed: {aggregate['num_sequences_muster_failed']}",
+            ]
+        )
+        if "mean_error_rate_mean" in aggregate:
+            summary_lines.extend(
+                [
+                    f"  MER: {aggregate['mean_error_rate_mean']:.2f}% "
+                    f"(+-{aggregate['mean_error_rate_std']:.2f})",
+                    f"  PER: {aggregate['pitch_error_rate_mean']:.2f}% "
+                    f"(+-{aggregate['pitch_error_rate_std']:.2f})",
+                    f"  MNR: {aggregate['missing_note_rate_mean']:.2f}% "
+                    f"(+-{aggregate['missing_note_rate_std']:.2f})",
+                    f"  ENR: {aggregate['extra_note_rate_mean']:.2f}% "
+                    f"(+-{aggregate['extra_note_rate_std']:.2f})",
+                    f"  OTER: {aggregate['onset_time_error_rate_mean']:.2f}% "
+                    f"(+-{aggregate['onset_time_error_rate_std']:.2f})",
+                    f"  OFTER: {aggregate['offset_time_error_rate_mean']:.2f}% "
+                    f"(+-{aggregate['offset_time_error_rate_std']:.2f})",
+                ]
+            )
+            if "voice_error_rate_mean" in aggregate:
+                summary_lines.append(
+                    f"  VER: {aggregate['voice_error_rate_mean']:.2f}% "
+                    f"(+-{aggregate['voice_error_rate_std']:.2f})"
+                )
+
     summary_lines.extend(
         [
             "",
@@ -524,6 +661,15 @@ def write_summary(
             "  stats.json",
         ]
     )
+    if aggregate.get("muster_enabled"):
+        summary_lines.extend(
+            [
+                "  ground_truth_score.xml",
+                "  output_score.xml",
+                "  muster_metrics.json",
+                "  muster_work/",
+            ]
+        )
 
     with open(output_dir / "summary.txt", "w", encoding="utf-8") as handle:
         handle.write("\n".join(summary_lines) + "\n")
@@ -574,10 +720,17 @@ def main():
         action="store_true",
         help="Disable score-token type constraints during decoding",
     )
+    parser.add_argument(
+        "--compute-muster",
+        action="store_true",
+        help="Also compute MUSTER scores for predicted vs ground-truth score windows",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.test_file):
         raise FileNotFoundError(f"Test file not found: {args.test_file}")
+    if args.compute_muster:
+        check_muster_installation()
 
     sampled_lines, total_available = sample_test_lines(
         args.test_file,
@@ -612,6 +765,7 @@ def main():
         sampled_lines=sampled_lines,
         output_dir=output_dir,
         constrain_score_tokens=not args.no_slot_constraints,
+        compute_muster=args.compute_muster,
     )
 
     write_summary(
@@ -637,6 +791,12 @@ def main():
     print(f"Time accuracy: {aggregate['time_accuracy']:.2f}%")
     print(f"Duration accuracy: {aggregate['dur_accuracy']:.2f}%")
     print(f"Exact triplet accuracy: {aggregate['overall_accuracy']:.2f}%")
+    if args.compute_muster:
+        print(f"MUSTER windows evaluated: {aggregate['num_sequences_muster_evaluated']}")
+        print(f"MUSTER windows failed: {aggregate['num_sequences_muster_failed']}")
+        if "mean_error_rate_mean" in aggregate:
+            print(f"MUSTER MER: {aggregate['mean_error_rate_mean']:.2f}%")
+            print(f"MUSTER PER: {aggregate['pitch_error_rate_mean']:.2f}%")
     print(f"Outputs saved to: {output_dir}")
 
 
