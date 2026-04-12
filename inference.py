@@ -29,17 +29,21 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from anticipation.config import EVENT_SIZE
 from anticipation.convert import events_to_midi
+from anticipation.packed_sequence import (
+    ALTERNATING_START as PACKED_ALTERNATING_START,
+    extract_packed_components,
+    is_real_score_triplet,
+    is_score_triplet as packed_is_score_triplet,
+    iter_score_slot_positions,
+    triplet_values,
+)
+from anticipation.score_constraints import constrain_score_token_logits
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
     ATIME_OFFSET,
-    CONTROL_OFFSET,
     DUR_OFFSET,
-    MAX_NOTE,
-    NOTE_OFFSET,
-    REST,
     TIME_OFFSET,
-    VOCAB_SIZE,
 )
 from evaluate_muster import (
     check_muster_installation,
@@ -66,6 +70,8 @@ MUSTER_METRIC_KEYS = (
     "voice_error_rate",
     "mean_error_rate_with_voice",
 )
+
+assert ALTERNATING_START == PACKED_ALTERNATING_START
 
 
 def guess_default_checkpoint() -> str:
@@ -175,75 +181,11 @@ def parse_sequence(line: str) -> list[int]:
 
 
 def is_score_triplet(tokens: list[int], pos: int) -> bool:
-    return (
-        pos + 2 < len(tokens)
-        and tokens[pos] < CONTROL_OFFSET
-        and tokens[pos + 1] < CONTROL_OFFSET
-        and tokens[pos + 2] < CONTROL_OFFSET
-        and tokens[pos + 2] != REST
-    )
+    return packed_is_score_triplet(tokens, pos, ALTERNATING_START)
 
 
 def extract_components(tokens: list[int], score_start_idx: int):
-    performance_raw = []
-    for i in range(0, score_start_idx, 6):
-        if i + 2 >= len(tokens):
-            break
-        performance_raw.append(
-            [
-                tokens[i] - ATIME_OFFSET,
-                tokens[i + 1] - ADUR_OFFSET,
-                tokens[i + 2] - ANOTE_OFFSET,
-            ]
-        )
-
-    score_triplets = []
-    alternating = tokens[score_start_idx:]
-    pos = 0
-    while pos + 2 < len(alternating):
-        if (
-            alternating[pos] < CONTROL_OFFSET
-            and alternating[pos + 1] < CONTROL_OFFSET
-            and alternating[pos + 2] < CONTROL_OFFSET
-            and alternating[pos + 2] != REST
-        ):
-            score_triplets.append(
-                [alternating[pos], alternating[pos + 1], alternating[pos + 2]]
-            )
-            pos += 3
-            if pos + 2 < len(alternating):
-                c0, c1, c2 = alternating[pos], alternating[pos + 1], alternating[pos + 2]
-                if c0 >= CONTROL_OFFSET and c1 >= CONTROL_OFFSET and c2 >= CONTROL_OFFSET:
-                    performance_raw.append(
-                        [c0 - ATIME_OFFSET, c1 - ADUR_OFFSET, c2 - ANOTE_OFFSET]
-                    )
-                    pos += 3
-                else:
-                    break
-            else:
-                break
-        else:
-            break
-
-    return performance_raw, score_triplets
-
-
-def constrain_score_token_logits(logits: torch.Tensor, slot: int) -> torch.Tensor:
-    constrained = logits.clone()
-    constrained[CONTROL_OFFSET:VOCAB_SIZE] = -float("inf")
-
-    if slot == 0:
-        constrained[DUR_OFFSET:CONTROL_OFFSET] = -float("inf")
-    elif slot == 1:
-        constrained[TIME_OFFSET:DUR_OFFSET] = -float("inf")
-        constrained[NOTE_OFFSET:CONTROL_OFFSET] = -float("inf")
-    elif slot == 2:
-        constrained[TIME_OFFSET:NOTE_OFFSET] = -float("inf")
-        constrained[NOTE_OFFSET + MAX_NOTE : CONTROL_OFFSET] = -float("inf")
-    else:
-        raise ValueError(f"Invalid score slot: {slot}")
-
-    return constrained
+    return extract_packed_components(tokens, score_start_idx, include_dummy_score=False)
 
 
 def autoregressive_generate_score(
@@ -369,20 +311,32 @@ def evaluate_triplets_with_muster(
     return metrics, None
 
 
-def compute_triplet_accuracy(
-    gt_score: list[list[int]],
-    pred_score: list[list[int]],
+def compute_triplet_accuracy_from_tokens(
+    gt_tokens: list[int],
+    pred_tokens: list[int],
+    score_start_idx: int,
 ) -> dict[str, float | int]:
-    compared = min(len(gt_score), len(pred_score))
-    if compared <= 0:
-        raise ValueError("No comparable score triplets found")
-
+    compared = 0
     time_correct = 0
     dur_correct = 0
     pitch_correct = 0
     overall_correct = 0
 
-    for gt_triplet, pred_triplet in zip(gt_score[:compared], pred_score[:compared]):
+    if len(pred_tokens) < len(gt_tokens):
+        max_len = len(pred_tokens)
+    else:
+        max_len = len(gt_tokens)
+
+    for pos in iter_score_slot_positions(max_len, score_start_idx):
+        if pos + 2 >= len(gt_tokens) or pos + 2 >= len(pred_tokens):
+            break
+        if not is_real_score_triplet(gt_tokens, pos, score_start_idx):
+            continue
+
+        gt_triplet = list(triplet_values(gt_tokens, pos))
+        pred_triplet = list(triplet_values(pred_tokens, pos))
+        compared += 1
+
         if gt_triplet[0] == pred_triplet[0]:
             time_correct += 1
         if gt_triplet[1] == pred_triplet[1]:
@@ -391,6 +345,9 @@ def compute_triplet_accuracy(
             pitch_correct += 1
         if gt_triplet == pred_triplet:
             overall_correct += 1
+
+    if compared <= 0:
+        raise ValueError("No comparable score triplets found")
 
     return {
         "time_correct": time_correct,
@@ -401,8 +358,7 @@ def compute_triplet_accuracy(
         "pitch_total": compared,
         "overall_correct": overall_correct,
         "overall_total": compared,
-        "num_gt_notes": len(gt_score),
-        "num_pred_notes": len(pred_score),
+        "num_gt_notes": compared,
         "time_accuracy": 100.0 * time_correct / compared,
         "dur_accuracy": 100.0 * dur_correct / compared,
         "pitch_accuracy": 100.0 * pitch_correct / compared,
@@ -465,7 +421,13 @@ def evaluate_checkpoint(
             if not pred_score:
                 raise ValueError("No predicted score triplets found")
 
-            metrics = compute_triplet_accuracy(gt_score, pred_score)
+            metrics = compute_triplet_accuracy_from_tokens(
+                tokens,
+                predicted_tokens,
+                ALTERNATING_START,
+            )
+            metrics["num_gt_notes"] = len(gt_score)
+            metrics["num_pred_notes"] = len(pred_score)
             metrics["original_index"] = original_index
 
             seq_dir = output_dir / f"sequence_{original_index:07d}"

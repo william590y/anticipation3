@@ -20,7 +20,16 @@ from multiprocessing import Pool
 from anticipation.config import *
 from anticipation.vocab import *
 from anticipation import ops
-from alignment import align_tokens2, load_annotation_file
+from anticipation.asap_aligned_stream import (
+    STREAM_CACHE_DIR,
+    build_performance_anchored_stream,
+)
+from anticipation.packed_sequence import (
+    ALTERNATING_START,
+    is_dummy_score_triplet,
+    is_prefix_placeholder_triplet,
+    is_real_score_triplet,
+)
 
 # Number of parallel workers
 NUM_WORKERS = 128
@@ -41,6 +50,7 @@ print(f"  Serialized length: {CONTEXT_SIZE - 4}")
 print(f"  Prefix controls: 33 (fixed)")
 print(f"  Strategy: Sliding window over all piece positions")
 print(f"  Output format: space-separated tokens (one sequence per line)")
+print(f"  Aligned-stream cache: {STREAM_CACHE_DIR}")
 print()
 
 # Load metadata
@@ -110,6 +120,39 @@ with open(SPLIT_FILE, 'w') as f:
 print(f"Split file written: {SPLIT_FILE}\n")
 
 
+def _strip_control_offsets(control_triplet):
+    return [
+        control_triplet[0] - ATIME_OFFSET,
+        control_triplet[1] - ADUR_OFFSET,
+        control_triplet[2] - ANOTE_OFFSET,
+    ]
+
+
+def _build_suffix_min(values):
+    suffix_min = [0] * len(values)
+    current = None
+    for idx in range(len(values) - 1, -1, -1):
+        value = values[idx]
+        current = value if current is None else min(current, value)
+        suffix_min[idx] = current
+    return suffix_min
+
+
+def _build_real_score_suffix_min(score_triplets):
+    suffix_min = [0] * len(score_triplets)
+    has_real = [False] * len(score_triplets)
+    current = None
+    for idx in range(len(score_triplets) - 1, -1, -1):
+        score_triplet = score_triplets[idx]
+        if score_triplet is not None:
+            score_time_units = score_triplet[0] - TIME_OFFSET
+            current = score_time_units if current is None else min(current, score_time_units)
+        if current is not None:
+            suffix_min[idx] = current
+            has_real[idx] = True
+    return suffix_min, has_real
+
+
 def tokenize_sliding_windows(filegroup, prefix_controls=33):
     """
     Tokenize a single performance-score pair, extracting all possible packed sequences
@@ -141,151 +184,42 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
     piece_id = file1
     
     try:
-        # Align the performance and score
-        matched_tuples = align_tokens2(file1, file2, file3, file4, skip_Nones=True)
-        
-        if len(matched_tuples) < 20:  # Need at least 20 matched pairs
+        aligned_items = build_performance_anchored_stream(file1, file2, file3, file4)
+
+        if len(aligned_items) < 20:  # Need at least 20 performance notes
             return {
                 "piece_id": piece_id,
                 "sequences": [],
                 "count": 0,
                 "pickup_warning": None,
-                "failure_reason": f"only {len(matched_tuples)} matched pairs after alignment (need at least 20)",
+                "failure_reason": f"only {len(aligned_items)} performance notes after preprocessing (need at least 20)",
             }
-        
-        # Load score beat annotations to create time normalization mapping - DO THIS ONCE
-        score_annotations = load_annotation_file(file4)
-        score_beat_times = [anno[0] for anno in score_annotations]  # Original beat times in seconds
-        
-        # ENFORCE 0.5 second beat spacing for score normalization
-        # Map original beat times to enforced 0.5s intervals: beat[0]->0.0, beat[1]->0.5, beat[2]->1.0, etc.
-        TARGET_BEAT_INTERVAL = 0.5  # seconds
-        
-        # Pre-normalize ALL score triplets once using beat mapping
-        # This is much faster than normalizing per sliding window
-        normalized_matched_tuples = []
-        for match in matched_tuples:
-            perf_triplet = match[0]
-            score_triplet = match[2]
-            
-            if score_triplet[0] is not None:
-                # Convert from quantized units back to seconds
-                # Triplet format: [time, duration, pitch]
-                original_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
-                original_duration_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION  # triplet[1] is duration!
-                pitch = score_triplet[2]  # triplet[2] is pitch!
-                
-                # Normalize using beat mapping (ENFORCED 0.5 sec between beats)
-                # Map first beat to 0.0, each subsequent beat to 0.5 sec apart
-                normalized_time_sec = 0.0
-                time_scale_factor = 1.0  # Track how much we scaled time to apply to duration
-                
-                if score_beat_times and len(score_beat_times) >= 2:
-                    if original_time_sec < score_beat_times[0]:
-                        # Before first beat - scale relative to first beat
-                        beat_duration = score_beat_times[1] - score_beat_times[0]
-                        if beat_duration > 0:
-                            # How far before first beat as fraction of beat duration
-                            progress = (original_time_sec - score_beat_times[0]) / beat_duration  # negative
-                            time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration
-                        else:
-                            progress = 0
-                            time_scale_factor = 1.0
-                        normalized_time_sec = 0.0 + progress * TARGET_BEAT_INTERVAL  # Will be negative
-                    else:
-                        # Find which beats this falls between
-                        found = False
-                        for i in range(len(score_beat_times) - 1):
-                            if score_beat_times[i] <= original_time_sec <= score_beat_times[i + 1]:
-                                beat_duration = score_beat_times[i + 1] - score_beat_times[i]
-                                if beat_duration > 0:
-                                    progress = (original_time_sec - score_beat_times[i]) / beat_duration
-                                    time_scale_factor = TARGET_BEAT_INTERVAL / beat_duration  # ENFORCED 0.5 sec / original beat duration
-                                else:
-                                    progress = 0
-                                    time_scale_factor = 1.0
-                                # Beat index i (first beat) maps to 0.0, beat i+1 maps to TARGET_BEAT_INTERVAL, etc.
-                                normalized_time_sec = i * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
-                                found = True
-                                break
-                        
-                        if not found:
-                            # After last beat: extrapolate
-                            last_beat_idx = len(score_beat_times) - 1
-                            if len(score_beat_times) >= 2:
-                                last_beat_duration = score_beat_times[-1] - score_beat_times[-2]
-                            else:
-                                last_beat_duration = 1.0  # fallback
-                            
-                            if last_beat_duration > 0:
-                                progress = (original_time_sec - score_beat_times[-1]) / last_beat_duration
-                                time_scale_factor = TARGET_BEAT_INTERVAL / last_beat_duration
-                            else:
-                                progress = 0
-                                time_scale_factor = 1.0
-                            normalized_time_sec = last_beat_idx * TARGET_BEAT_INTERVAL + progress * TARGET_BEAT_INTERVAL
-                else:
-                    # Fallback if not enough beats - just shift to start at 0
-                    normalized_time_sec = original_time_sec - (score_beat_times[0] if score_beat_times else 0)
-                    time_scale_factor = 1.0
-                
-                # Scale duration by the same factor we scaled time (to maintain proportions)
-                normalized_duration_sec = original_duration_sec * time_scale_factor
-                
-                # Convert back to quantized units
-                # Triplet format: [time, duration, pitch]
-                normalized_time_units = round(normalized_time_sec * TIME_RESOLUTION)
-                normalized_duration_units = round(normalized_duration_sec * TIME_RESOLUTION)
-                # Keep negative pickup times for now; window-local shifting will make
-                # each emitted sequence non-negative while preserving relative order.
-                normalized_duration_units = max(0, normalized_duration_units)
-                normalized_score = [
-                    normalized_time_units + TIME_OFFSET,
-                    normalized_duration_units + DUR_OFFSET,  # index 1 is duration!
-                    pitch  # index 2 is pitch!
-                ]
-            else:
-                normalized_score = score_triplet
-            
-            normalized_matched_tuples.append([perf_triplet, match[1], normalized_score, match[3]])
-        
+
         sequences = []
-        k = min(prefix_controls, len(normalized_matched_tuples))
+        num_items = len(aligned_items)
+        k = min(prefix_controls, num_items)
         pickup_start_indices = []
         most_negative_score_time_units = None
         full_length_candidates = 0
         skipped_for_max_time = 0
+        raw_perf_triplets = [_strip_control_offsets(item["control"]) for item in aligned_items]
+        global_score_triplets = [item["score"] for item in aligned_items]
+        perf_suffix_min_times = _build_suffix_min([triplet[0] for triplet in raw_perf_triplets])
+        score_suffix_min_times, score_suffix_has_real = _build_real_score_suffix_min(global_score_triplets)
         
         # Try different starting positions
-        for start_idx in range(len(normalized_matched_tuples)):
+        for start_idx in range(num_items):
             # Build interleaved stream starting from start_idx (same logic as openings)
             interleaved_tokens = []
-            
-            # Get subset starting from start_idx
-            subset = normalized_matched_tuples[start_idx:]
-            
-            if len(subset) < k:
+
+            remaining = num_items - start_idx
+            if remaining < k:
                 break  # Not enough notes for even the prefix
-            
-            # Extract performance triplets from subset (remove offsets first)
-            perf_triplets = [[match[0][0] - ATIME_OFFSET, match[0][1] - ADUR_OFFSET, match[0][2] - ANOTE_OFFSET] for match in subset]
-            # Normalize performance to start at time 0
-            if perf_triplets:
-                perf_min_time = min(triplet[0] for triplet in perf_triplets)
-                perf_triplets = [
-                    [triplet[0] - perf_min_time, triplet[1], triplet[2]]
-                    for triplet in perf_triplets
-                ]
-            
-            # Shift score times into the local sliding-window frame.
-            score_triplets = [match[2] for match in subset]
-            score_time_units = [
-                triplet[0] - TIME_OFFSET
-                for triplet in score_triplets
-                if triplet[0] is not None
-            ]
-            if score_time_units:
-                min_score_time_units = min(score_time_units)
+
+            perf_min_time = perf_suffix_min_times[start_idx]
+            min_score_time_units = 0
+            if score_suffix_has_real[start_idx]:
+                min_score_time_units = score_suffix_min_times[start_idx]
                 if min_score_time_units < 0:
                     pickup_start_indices.append(start_idx)
                     if (
@@ -293,47 +227,44 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                         or min_score_time_units < most_negative_score_time_units
                     ):
                         most_negative_score_time_units = min_score_time_units
-                score_triplets = [
-                    [
-                        triplet[0] - min_score_time_units,
-                        triplet[1],
-                        triplet[2],
-                    ]
-                    if triplet[0] is not None
-                    else triplet
-                    for triplet in score_triplets
-                ]
-            
             # Prefix: control + rest pairs using first k notes from normalized subset
             for i in range(k):
-                perf_triplet = perf_triplets[i]
+                perf_triplet = raw_perf_triplets[start_idx + i]
+                local_perf_time = perf_triplet[0] - perf_min_time
                 
                 # Add control triplet (use correct offsets for each token type)
                 interleaved_tokens.extend([
-                    perf_triplet[0] + ATIME_OFFSET,   # time
+                    local_perf_time + ATIME_OFFSET,   # time
                     perf_triplet[1] + ADUR_OFFSET,    # duration
                     perf_triplet[2] + ANOTE_OFFSET    # pitch
                 ])
                 
                 # Add rest triplet
-                cc_time = max(0, perf_triplet[0])  # Clamp to non-negative
+                cc_time = max(0, local_perf_time)  # Clamp to non-negative
                 interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
             
             # Main body: alternate score/control
             # Uses notes [0:] for scores and notes [k:] for controls from subset
-            for i in range(len(subset)):
-                score_triplet = score_triplets[i]
-                
-                # Add score triplet if it exists
-                if score_triplet[0] is not None:
-                    interleaved_tokens.extend(score_triplet)
+            for i in range(remaining):
+                item_idx = start_idx + i
+                perf_triplet = raw_perf_triplets[item_idx]
+                local_perf_time = perf_triplet[0] - perf_min_time
+                score_triplet = global_score_triplets[item_idx]
+                if score_triplet is None:
+                    interleaved_tokens.extend([TIME_OFFSET + max(0, local_perf_time), DUR_OFFSET + 0, REST])
+                else:
+                    interleaved_tokens.extend([
+                        score_triplet[0] - min_score_time_units,
+                        score_triplet[1],
+                        score_triplet[2],
+                    ])
                 
                 # Add next control if available
                 ii = i + k
-                if ii < len(subset):
-                    perf_triplet = perf_triplets[ii]
+                if ii < remaining:
+                    perf_triplet = raw_perf_triplets[start_idx + ii]
                     interleaved_tokens.extend([
-                        perf_triplet[0] + ATIME_OFFSET,   # time
+                        (perf_triplet[0] - perf_min_time) + ATIME_OFFSET,   # time
                         perf_triplet[1] + ADUR_OFFSET,    # duration
                         perf_triplet[2] + ANOTE_OFFSET    # pitch
                     ])
@@ -497,30 +428,31 @@ if train_sequences_total > 0:
     print(f"First training sequence length: {len(first_seq)} tokens")
     print("No mode/bootstrap tokens are serialized")
     
-    # Count control vs score tokens in first 100 triplets
+    # Count control vs score tokens in the first 100 triplets
     control_count = 0
     score_count = 0
-    rest_count = 0
+    dummy_score_count = 0
+    prefix_rest_count = 0
     
     for i in range(min(100, len(first_seq) // 3)):
         pos = i * 3
         if pos + 2 >= len(first_seq):
             break
         
-        t0 = first_seq[pos]
-        t2 = first_seq[pos + 2]
-        
-        if t0 >= CONTROL_OFFSET:
+        if first_seq[pos] >= CONTROL_OFFSET:
             control_count += 1
-        elif t2 == REST:
-            rest_count += 1
-        elif t2 >= NOTE_OFFSET:
+        elif is_prefix_placeholder_triplet(first_seq, pos, ALTERNATING_START):
+            prefix_rest_count += 1
+        elif is_dummy_score_triplet(first_seq, pos, ALTERNATING_START):
+            dummy_score_count += 1
+        elif is_real_score_triplet(first_seq, pos, ALTERNATING_START):
             score_count += 1
     
     print(f"\nFirst 100 triplets breakdown:")
     print(f"  Control triplets: {control_count}")
     print(f"  Score triplets (notes): {score_count}")
-    print(f"  Score triplets (REST): {rest_count}")
+    print(f"  Score triplets (dummy REST): {dummy_score_count}")
+    print(f"  Prefix placeholders (REST): {prefix_rest_count}")
 else:
     print("No sequences generated!")
 

@@ -14,6 +14,8 @@ import traceback
 import matplotlib.pyplot as plt
 import warnings
 from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
+from anticipation.packed_sequence import is_real_score_triplet, iter_score_slot_positions
+from anticipation.score_constraints import constrain_score_token_logits
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -54,6 +56,16 @@ print(f"CUDA version: {torch.version.cuda}")
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 PREFIX_CONTROLS = 33
 ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
+MUSTER_METRIC_KEYS = (
+    "pitch_error_rate",
+    "missing_note_rate",
+    "extra_note_rate",
+    "onset_time_error_rate",
+    "offset_time_error_rate",
+    "mean_error_rate",
+    "voice_error_rate",
+    "mean_error_rate_with_voice",
+)
 
 class TokenizedDataset(Dataset):
     """Dataset that loads packed ASAP sequences and applies augmentation on-the-fly."""
@@ -328,27 +340,10 @@ class TokenizedDataset(Dataset):
         return augmented
 
     def _build_score_token_mask(self, tokens):
-        from anticipation.vocab import CONTROL_OFFSET, REST
-
         score_token_mask = torch.zeros_like(tokens, dtype=torch.bool)
-        i = 0
-        while i < len(tokens) - 2:
-            tok0 = tokens[i].item()
-            tok1 = tokens[i + 1].item()
-            tok2 = tokens[i + 2].item()
-
-            is_score_triplet = (
-                tok0 < CONTROL_OFFSET
-                and tok1 < CONTROL_OFFSET
-                and tok2 < CONTROL_OFFSET
-                and tok2 != REST
-            )
-
-            if is_score_triplet:
-                score_token_mask[i:i + 3] = True
-                i += 3
-            else:
-                i += 1
+        for pos in iter_score_slot_positions(len(tokens), ALTERNATING_START):
+            if is_real_score_triplet(tokens, pos, ALTERNATING_START):
+                score_token_mask[pos : pos + 3] = True
 
         return score_token_mask
 
@@ -668,8 +663,6 @@ def evaluate_model(
     correct_pitches = 0
     total_pitches = 0
 
-    from anticipation.vocab import CONTROL_OFFSET, REST
-
     accelerator.wait_for_everyone()
     teacher_dataloader = _build_random_eval_dataloader(
         dataset=dataset,
@@ -705,22 +698,16 @@ def evaluate_model(
                 seq_labels = labels[b]
                 seq_logits = logits[b]
 
-                i = 0
-                while i < len(seq_input) - 2:
-                    if (
-                        seq_input[i] < CONTROL_OFFSET
-                        and seq_input[i + 1] < CONTROL_OFFSET
-                        and seq_input[i + 2] < CONTROL_OFFSET
-                        and seq_input[i + 2] != REST
-                    ):
-                        note_pos = i + 2
-                        if seq_labels[note_pos] != -100:
-                            predicted_token = seq_logits[note_pos - 1].argmax().item()
-                            true_token = seq_labels[note_pos].item()
-                            if predicted_token == true_token:
-                                correct_pitches += 1
-                            total_pitches += 1
-                    i += 3
+                for pos in iter_score_slot_positions(len(seq_input), ALTERNATING_START):
+                    if not is_real_score_triplet(seq_input, pos, ALTERNATING_START):
+                        continue
+                    note_pos = pos + 2
+                    if seq_labels[note_pos] != -100:
+                        predicted_token = seq_logits[note_pos - 1].argmax().item()
+                        true_token = seq_labels[note_pos].item()
+                        if predicted_token == true_token:
+                            correct_pitches += 1
+                        total_pitches += 1
 
     teacher_stats = torch.tensor(
         [total_loss, total_samples, correct_pitches, total_pitches],
@@ -770,41 +757,41 @@ def evaluate_model(
                         continue
 
                     context = seq[:ALTERNATING_START].tolist()
-                    pos = ALTERNATING_START
-                    while pos + 5 < len(seq):
-                        if (
-                            seq[pos] < CONTROL_OFFSET
-                            and seq[pos + 1] < CONTROL_OFFSET
-                            and seq[pos + 2] < CONTROL_OFFSET
-                            and seq[pos + 2] != REST
-                        ):
-                            input_tensor = torch.tensor([context], device=accelerator.device)
-                            outputs = model(input_tensor)
-                            pred_time = outputs.logits[0, -1, :].argmax().item()
-                            context.append(pred_time)
+                    for pos in iter_score_slot_positions(len(seq), ALTERNATING_START):
+                        if pos + 5 >= len(seq):
+                            break
 
-                            input_tensor = torch.tensor([context], device=accelerator.device)
-                            outputs = model(input_tensor)
-                            pred_dur = outputs.logits[0, -1, :].argmax().item()
-                            context.append(pred_dur)
+                        input_tensor = torch.tensor([context], device=accelerator.device)
+                        outputs = model(input_tensor)
+                        pred_time = constrain_score_token_logits(outputs.logits[0, -1, :], 0).argmax().item()
+                        context.append(pred_time)
 
-                            input_tensor = torch.tensor([context], device=accelerator.device)
-                            outputs = model(input_tensor)
-                            pred_pitch = outputs.logits[0, -1, :].argmax().item()
-                            context.append(pred_pitch)
+                        input_tensor = torch.tensor([context], device=accelerator.device)
+                        outputs = model(input_tensor)
+                        pred_dur = constrain_score_token_logits(outputs.logits[0, -1, :], 1).argmax().item()
+                        context.append(pred_dur)
 
+                        input_tensor = torch.tensor([context], device=accelerator.device)
+                        outputs = model(input_tensor)
+                        pred_pitch = constrain_score_token_logits(outputs.logits[0, -1, :], 2).argmax().item()
+                        context.append(pred_pitch)
+
+                        if is_real_score_triplet(seq, pos, ALTERNATING_START):
                             true_pitch = seq[pos + 2].item()
                             if pred_pitch == true_pitch:
                                 autoregressive_correct += 1
                             autoregressive_total += 1
 
-                            pos += 3
-                            if pos + 2 < len(seq):
-                                context.extend([seq[pos].item(), seq[pos + 1].item(), seq[pos + 2].item()])
-                                pos += 3
-                        else:
-                            context.append(seq[pos].item())
-                            pos += 1
+                        control_pos = pos + 3
+                        if control_pos + 2 >= len(seq):
+                            break
+                        context.extend(
+                            [
+                                seq[control_pos].item(),
+                                seq[control_pos + 1].item(),
+                                seq[control_pos + 2].item(),
+                            ]
+                        )
 
     autoregressive_stats = torch.tensor(
         [autoregressive_correct, autoregressive_total],
@@ -819,25 +806,223 @@ def evaluate_model(
     accelerator.wait_for_everyone()
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
-def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, output_dir):
+def _load_muster_piece_pool(split_file):
+    from evaluate_muster_asap import load_asap_metadata, load_asap_test_perfs
+
+    try:
+        pieces = load_asap_metadata()
+    except SystemExit as exc:
+        raise RuntimeError("Could not load ASAP metadata for MUSTER subset evaluation.") from exc
+
+    test_perfs = load_asap_test_perfs(str(split_file)) if split_file else None
+    if test_perfs:
+        filtered = [piece for piece in pieces if piece["perf_path"] in test_perfs]
+        if filtered:
+            pieces = filtered
+
+    return pieces
+
+
+def _evaluate_muster_subset(
+    model,
+    accelerator,
+    output_dir,
+    piece_pool,
+    sample_size,
+    rng,
+    step,
+    temperature=0.0,
+):
+    from evaluate_muster_asap import (
+        preprocess_asap_piece,
+        autoregressive_generate_from_controls,
+        evaluate_triplet_slice_with_muster,
+        format_muster_summary,
+    )
+
+    if sample_size <= 0 or not piece_pool:
+        return None
+
+    accelerator.wait_for_everyone()
+    was_training = bool(getattr(model, "training", False))
+    model.eval()
+
+    target_count = min(sample_size, len(piece_pool))
+    sample_seed = _broadcast_int_from_main(accelerator, rng.randrange(1, 2**31))
+
+    metric_sums = {key: 0.0 for key in MUSTER_METRIC_KEYS}
+    metric_counts = {key: 0 for key in MUSTER_METRIC_KEYS}
+    assigned_count = 0
+    preprocessed_count = 0
+    scored_count = 0
+    local_error = None
+
+    try:
+        sampled_indices = list(range(len(piece_pool)))
+        random.Random(sample_seed).shuffle(sampled_indices)
+        sampled_indices = sampled_indices[:target_count]
+
+        local_piece_indices = [
+            piece_idx
+            for shard_idx, piece_idx in enumerate(sampled_indices)
+            if shard_idx % accelerator.num_processes == accelerator.process_index
+        ]
+        assigned_count = len(local_piece_indices)
+
+        eval_root = (
+            Path(output_dir)
+            / "muster_validation"
+            / f"step-{int(step)}"
+            / f"rank-{accelerator.process_index:03d}"
+        )
+        os.makedirs(eval_root, exist_ok=True)
+
+        for piece_idx in local_piece_indices:
+            processed = preprocess_asap_piece(piece_pool[piece_idx])
+            if processed.get("error"):
+                continue
+            if not processed.get("control_triplets") or not processed.get("gt_score_triplets"):
+                continue
+            preprocessed_count += 1
+
+            safe_name = (
+                processed["perf_path"]
+                .replace("/", "_")
+                .replace("\\", "_")
+                .replace(":", "_")
+            )
+            seq_dir = eval_root / safe_name
+            os.makedirs(seq_dir, exist_ok=True)
+
+            try:
+                pred_score_triplets, _ = autoregressive_generate_from_controls(
+                    model,
+                    processed["control_triplets"],
+                    accelerator.device,
+                    temperature=temperature,
+                )
+            except Exception:
+                continue
+
+            metrics = evaluate_triplet_slice_with_muster(
+                processed["gt_score_triplets"],
+                pred_score_triplets,
+                seq_dir,
+                safe_name,
+            )
+            if not metrics:
+                continue
+
+            scored_count += 1
+            for key in MUSTER_METRIC_KEYS:
+                if key in metrics:
+                    metric_sums[key] += float(metrics[key])
+                    metric_counts[key] += 1
+    except Exception as exc:
+        local_error = f"{type(exc).__name__}: {exc}"
+    finally:
+        if was_training:
+            model.train()
+
+    failed_processes = _count_flagged_processes(accelerator, local_error is not None)
+    if failed_processes > 0:
+        if accelerator.is_main_process:
+            print(
+                "WARNING: Distributed MUSTER subset evaluation failed on "
+                f"{failed_processes}/{accelerator.num_processes} rank(s); skipping MUSTER metrics "
+                f"for step {step}."
+            )
+            if local_error:
+                print(f"  Example rank-local error: {local_error}")
+        return None
+
+    count_tensor = torch.tensor(
+        [assigned_count, preprocessed_count, scored_count],
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    count_tensor = accelerator.reduce(count_tensor, reduction="sum")
+
+    metric_tensor_values = []
+    for key in MUSTER_METRIC_KEYS:
+        metric_tensor_values.extend([metric_sums[key], float(metric_counts[key])])
+    metric_tensor = torch.tensor(
+        metric_tensor_values,
+        device=accelerator.device,
+        dtype=torch.float64,
+    )
+    metric_tensor = accelerator.reduce(metric_tensor, reduction="sum")
+
+    if not accelerator.is_main_process:
+        return None
+
+    total_assigned = int(round(count_tensor[0].item()))
+    total_preprocessed = int(round(count_tensor[1].item()))
+    total_scored = int(round(count_tensor[2].item()))
+    if total_scored <= 0:
+        return None
+
+    aggregate = {
+        "num_pieces_target": target_count,
+        "num_pieces_assigned": total_assigned,
+        "num_pieces_preprocessed": total_preprocessed,
+        "num_pieces_scored": total_scored,
+        "sample_seed": sample_seed,
+        "world_size": accelerator.num_processes,
+    }
+    for key_idx, key in enumerate(MUSTER_METRIC_KEYS):
+        metric_sum = float(metric_tensor[key_idx * 2].item())
+        metric_count = int(round(metric_tensor[key_idx * 2 + 1].item()))
+        if metric_count > 0:
+            aggregate[key] = metric_sum / metric_count
+
+    if "mean_error_rate" in aggregate:
+        print(
+            "MUSTER subset summary "
+            f"(n={aggregate['num_pieces_scored']}/{aggregate['num_pieces_target']}): "
+            f"{format_muster_summary(aggregate)}"
+        )
+
+    accelerator.wait_for_everyone()
+    return aggregate
+
+
+def plot_losses(
+    train_losses,
+    train_loss_steps,
+    val_losses,
+    val_accuracies,
+    val_autoregressive_accuracies,
+    validation_steps,
+    output_dir,
+    val_muster_mean_errors=None,
+    val_muster_mean_errors_with_voice=None,
+):
     """
-    Plot training/validation losses and validation pitch accuracy, save figures
+    Plot training/validation losses and validation metrics, save figures.
     
     Args:
         train_losses (list): Training loss history
+        train_loss_steps (list): Global steps corresponding to each training loss sample
         val_losses (list): Validation loss history
         val_accuracies (list): Validation teacher-forced pitch accuracy history
         val_autoregressive_accuracies (list): Validation autoregressive pitch accuracy history
         validation_steps (list): Steps at which validation was performed
         output_dir (Path): Directory to save the plots
+        val_muster_mean_errors (list|None): Validation MUSTER MER history (%), aligned to validation_steps
+        val_muster_mean_errors_with_voice (list|None): Validation MUSTER MER+V history (%), aligned to validation_steps
     """
-    steps = list(range(1, len(train_losses) + 1))
-    
-    # Create figure with 4 subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    if train_loss_steps and len(train_loss_steps) == len(train_losses):
+        train_steps = train_loss_steps
+    else:
+        train_steps = list(range(1, len(train_losses) + 1))
+
+    # Create figure with 6 slots (5 used) so MUSTER can be plotted alongside existing metrics.
+    fig, axes = plt.subplots(3, 2, figsize=(16, 16))
+    ax1, ax2, ax3, ax4, ax5, ax6 = axes.flatten()
     
     # Plot 1: Linear loss plot
-    ax1.plot(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
+    ax1.plot(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     ax1.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
     ax1.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
     ax1.set_xlabel('Step')
@@ -847,7 +1032,7 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
     ax1.grid(True, alpha=0.3)
     
     # Plot 2: Log-log loss plot
-    ax2.loglog(steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
+    ax2.loglog(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     ax2.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
     ax2.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
     ax2.set_xlabel('Step (log scale)')
@@ -873,6 +1058,65 @@ def plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_acc
     ax4.set_ylim([0, 100])
     ax4.legend()
     ax4.grid(True, alpha=0.3)
+
+    # Plot 5: Validation MUSTER summary metrics
+    has_muster = (
+        val_muster_mean_errors is not None
+        and len(val_muster_mean_errors) == len(validation_steps)
+        and len(validation_steps) > 0
+    )
+    plotted_muster_curve = False
+    if has_muster:
+        muster_pairs = [
+            (step, value)
+            for step, value in zip(validation_steps, val_muster_mean_errors)
+            if np.isfinite(value)
+        ]
+        if muster_pairs:
+            muster_steps, muster_vals = zip(*muster_pairs)
+            ax5.plot(
+                muster_steps,
+                muster_vals,
+                label='MUSTER Mean Error Rate (MER)',
+                color='black',
+                marker='D',
+            )
+            plotted_muster_curve = True
+
+        if (
+            val_muster_mean_errors_with_voice is not None
+            and len(val_muster_mean_errors_with_voice) == len(validation_steps)
+        ):
+            muster_voice_pairs = [
+                (step, value)
+                for step, value in zip(validation_steps, val_muster_mean_errors_with_voice)
+                if np.isfinite(value)
+            ]
+            if muster_voice_pairs:
+                muster_voice_steps, muster_voice_vals = zip(*muster_voice_pairs)
+                ax5.plot(
+                    muster_voice_steps,
+                    muster_voice_vals,
+                    label='MUSTER Mean Error Rate + Voice (MER+V)',
+                    color='dimgray',
+                    marker='x',
+                    linestyle='--',
+                )
+                plotted_muster_curve = True
+
+    ax5.set_xlabel('Step')
+    ax5.set_ylabel('Error Rate (%)')
+    ax5.set_title('Validation MUSTER Error Rates')
+    ax5.grid(True, alpha=0.3)
+    if plotted_muster_curve:
+        ax5.legend()
+    elif has_muster:
+        ax5.text(0.5, 0.5, 'MUSTER run(s) failed', ha='center', va='center', transform=ax5.transAxes)
+    else:
+        ax5.text(0.5, 0.5, 'MUSTER disabled', ha='center', va='center', transform=ax5.transAxes)
+
+    # Unused panel reserved for future validation metrics.
+    ax6.axis('off')
     
     plt.tight_layout()
     plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
@@ -911,6 +1155,30 @@ def main():
         type=int,
         default=0,
         help='Dataloader workers used for sampled validation subsets.',
+    )
+    parser.add_argument(
+        '--eval_muster_samples',
+        type=int,
+        default=10,
+        help='Random ASAP pieces scored with MUSTER at each validation step. <= 0 disables MUSTER validation.',
+    )
+    parser.add_argument(
+        '--eval_muster_split_file',
+        type=Path,
+        default=Path('./data/normalized_split.txt'),
+        help='ASAP split file used to filter MUSTER validation pieces (test split by default).',
+    )
+    parser.add_argument(
+        '--eval_muster_temperature',
+        type=float,
+        default=0.0,
+        help='Sampling temperature used for MUSTER subset autoregressive generation.',
+    )
+    parser.add_argument(
+        '--eval_muster_seed',
+        type=int,
+        default=42,
+        help='Random seed for selecting MUSTER validation subsets.',
     )
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
@@ -962,6 +1230,10 @@ def main():
         raise ValueError("--original_weight_l2 must be non-negative.")
     if args.eval_num_workers < 0:
         raise ValueError("--eval_num_workers must be non-negative.")
+    if args.eval_muster_samples < 0:
+        raise ValueError("--eval_muster_samples must be non-negative.")
+    if args.eval_muster_temperature < 0:
+        raise ValueError("--eval_muster_temperature must be non-negative.")
     
     # Override device if requested
     global device
@@ -1069,6 +1341,39 @@ def main():
             "pin_memory": torch.cuda.is_available() and not args.force_cpu,
             "num_workers": args.eval_num_workers,
         }
+
+        run_muster_eval = args.eval_muster_samples > 0
+        muster_piece_pool = []
+        muster_rng = random.Random(args.eval_muster_seed)
+        muster_eval_ready = False
+        if run_muster_eval:
+            try:
+                muster_piece_pool = _load_muster_piece_pool(args.eval_muster_split_file)
+            except Exception as exc:
+                muster_piece_pool = []
+                if accelerator.is_main_process:
+                    print(f"WARNING: Failed to initialize MUSTER subset validation: {exc}. Metrics will be skipped.")
+
+            ready_processes = _count_flagged_processes(accelerator, bool(muster_piece_pool))
+            if ready_processes == accelerator.num_processes and len(muster_piece_pool) > 0:
+                muster_eval_ready = True
+                if accelerator.is_main_process:
+                    print(
+                        "MUSTER subset validation enabled (distributed): "
+                        f"sampling {args.eval_muster_samples} piece(s) from {len(muster_piece_pool)} ASAP items "
+                        f"across world_size={accelerator.num_processes} "
+                        f"(split file: {args.eval_muster_split_file})."
+                    )
+            elif ready_processes == 0:
+                if accelerator.is_main_process:
+                    print("WARNING: MUSTER subset validation requested, but no ASAP pieces were found. Metrics will be skipped.")
+            else:
+                raise RuntimeError(
+                    "Inconsistent MUSTER piece-pool availability across ranks. "
+                    "Ensure all processes have access to the ASAP metadata and split files."
+                )
+        elif accelerator.is_main_process:
+            print("MUSTER subset validation disabled.")
         
         # Load model with memory optimizations
         print(f"Loading model {args.model_name}...")
@@ -1190,18 +1495,86 @@ def main():
         print("Starting training...")
         model.train()
         completed_steps = 0
-        step = 0
         
         # Lists to track losses and metrics
         train_losses = []
+        train_loss_steps = []
         val_losses = []
         val_accuracies = []
         val_autoregressive_accuracies = []
+        val_muster_mean_errors = []
+        val_muster_mean_errors_with_voice = []
         validation_steps = []
         
         # Keep progress/logging on the main process so multi-GPU runs don't spam duplicate output.
         progress_bar = tqdm(total=args.max_steps, desc="Training", disable=not accelerator.is_main_process)
         training_failed = False
+
+        def run_validation(validation_label):
+            validation_step = int(completed_steps)
+            accelerator.wait_for_everyone()
+
+            if accelerator.is_main_process:
+                print(f"\nRunning validation at {validation_label}...")
+
+            val_loss, val_acc, val_auto_acc = evaluate_model(
+                model,
+                accelerator,
+                val_dataset,
+                **val_loader_kwargs,
+                max_samples=args.eval_max_samples,
+                autoregressive_samples=args.eval_autoregressive_samples,
+            )
+
+            muster_metrics = None
+            if run_muster_eval and muster_eval_ready:
+                muster_metrics = _evaluate_muster_subset(
+                    base_model,
+                    accelerator,
+                    args.output_dir,
+                    muster_piece_pool,
+                    args.eval_muster_samples,
+                    muster_rng,
+                    validation_step,
+                    temperature=args.eval_muster_temperature,
+                )
+
+            if accelerator.is_main_process:
+                validation_steps.append(validation_step)
+                val_losses.append(val_loss)
+                val_accuracies.append(val_acc * 100)
+                val_autoregressive_accuracies.append(val_auto_acc * 100)
+
+                muster_mer = float("nan")
+                muster_mer_with_voice = float("nan")
+                if run_muster_eval:
+                    if muster_metrics:
+                        muster_mer = float(muster_metrics.get("mean_error_rate", float("nan")))
+                        muster_mer_with_voice = float(
+                            muster_metrics.get("mean_error_rate_with_voice", float("nan"))
+                        )
+                    val_muster_mean_errors.append(muster_mer)
+                    val_muster_mean_errors_with_voice.append(muster_mer_with_voice)
+
+                message = (
+                    f"Validation Loss: {val_loss:.4f}, "
+                    f"Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                    f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
+                )
+                if run_muster_eval:
+                    if np.isfinite(muster_mer):
+                        message += f", MUSTER MER: {muster_mer:.2f}%"
+                        if np.isfinite(muster_mer_with_voice):
+                            message += f", MUSTER MER+V: {muster_mer_with_voice:.2f}%"
+                    else:
+                        message += ", MUSTER MER: n/a"
+                print(message)
+
+            accelerator.wait_for_everyone()
+            model.train()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
         
         try:
             while completed_steps < args.max_steps:
@@ -1279,6 +1652,7 @@ def main():
                                 if completed_steps % 10 == 0 and accelerator.is_main_process:
                                     # Store the training loss every 10 steps
                                     train_losses.append(reduced_loss)
+                                    train_loss_steps.append(completed_steps)
                                     
                                     # Print more precise learning rate
                                     l2_detail = ""
@@ -1303,53 +1677,12 @@ def main():
                                 # Run validation periodically (but skip if we're about to checkpoint, which also validates)
                                 is_checkpoint_step = (completed_steps % args.save_steps == 0)
                                 if completed_steps % args.eval_steps == 0 and not is_checkpoint_step:
-                                    if accelerator.is_main_process:
-                                        print(f"\nRunning validation at step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(
-                                        model,
-                                        accelerator,
-                                        val_dataset,
-                                        **val_loader_kwargs,
-                                        max_samples=args.eval_max_samples,
-                                        autoregressive_samples=args.eval_autoregressive_samples,
-                                    )
-                                    if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps)  # Store step number
-                                        val_losses.append(val_loss)
-                                        val_accuracies.append(val_acc * 100)  # Store as percentage
-                                        val_autoregressive_accuracies.append(val_auto_acc * 100)  # Store as percentage
-                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
-                                    
-                                    # Return to training mode
-                                    model.train()
-                                    
-                                    # Free up memory after validation
-                                    if torch.cuda.is_available():
-                                        torch.cuda.empty_cache()
-                                        gc.collect()
+                                    run_validation(f"step {completed_steps}")
                                 
                                 # Save checkpoint (with validation)
                                 if is_checkpoint_step:
                                     # Run validation before saving checkpoint
-                                    if accelerator.is_main_process:
-                                        print(f"\nRunning validation at checkpoint step {completed_steps}...")
-                                    val_loss, val_acc, val_auto_acc = evaluate_model(
-                                        model,
-                                        accelerator,
-                                        val_dataset,
-                                        **val_loader_kwargs,
-                                        max_samples=args.eval_max_samples,
-                                        autoregressive_samples=args.eval_autoregressive_samples,
-                                    )
-                                    if accelerator.is_main_process:
-                                        validation_steps.append(completed_steps)
-                                        val_losses.append(val_loss)
-                                        val_accuracies.append(val_acc * 100)
-                                        val_autoregressive_accuracies.append(val_auto_acc * 100)
-                                        print(f"Validation Loss: {val_loss:.4f}, Teacher-Forced Accuracy: {val_acc*100:.2f}%, Autoregressive Accuracy: {val_auto_acc*100:.2f}%")
-                                    
-                                    # Return to training mode
-                                    model.train()
+                                    run_validation(f"checkpoint step {completed_steps}")
                                     
                                     checkpoint_dir = args.output_dir / f"checkpoint-{completed_steps}"
                                     if accelerator.is_main_process:
@@ -1371,14 +1704,27 @@ def main():
                                         np.savez(
                                             checkpoint_dir / "losses.npz",
                                             train_losses=np.array(train_losses),
+                                            train_loss_steps=np.array(train_loss_steps),
                                             val_losses=np.array(val_losses),
                                             val_accuracies=np.array(val_accuracies),
                                             val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                                            val_muster_mean_errors=np.array(val_muster_mean_errors),
+                                            val_muster_mean_errors_with_voice=np.array(val_muster_mean_errors_with_voice),
                                             validation_steps=np.array(validation_steps)
                                         )
                                         
                                         # Create and save loss plot
-                                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, checkpoint_dir)
+                                        plot_losses(
+                                            train_losses,
+                                            train_loss_steps,
+                                            val_losses,
+                                            val_accuracies,
+                                            val_autoregressive_accuracies,
+                                            validation_steps,
+                                            checkpoint_dir,
+                                            val_muster_mean_errors=val_muster_mean_errors,
+                                            val_muster_mean_errors_with_voice=val_muster_mean_errors_with_voice,
+                                        )
                                     accelerator.wait_for_everyone()
                                     
                                     # Free up memory
@@ -1427,22 +1773,7 @@ def main():
             else:
                 try:
                     # Final validation run
-                    if accelerator.is_main_process:
-                        print("\nRunning final validation...")
-                    final_val_loss, final_val_acc, final_auto_acc = evaluate_model(
-                        model,
-                        accelerator,
-                        val_dataset,
-                        **val_loader_kwargs,
-                        max_samples=args.eval_max_samples,
-                        autoregressive_samples=args.eval_autoregressive_samples,
-                    )
-                    if accelerator.is_main_process:
-                        validation_steps.append(completed_steps)
-                        val_losses.append(final_val_loss)
-                        val_accuracies.append(final_val_acc * 100)
-                        val_autoregressive_accuracies.append(final_auto_acc * 100)
-                        print(f"Final validation Loss: {final_val_loss:.4f}, Teacher-Forced Accuracy: {final_val_acc*100:.2f}%, Autoregressive Accuracy: {final_auto_acc*100:.2f}%")
+                    run_validation(f"final step {completed_steps}")
                     
                     # Final save
                     final_dir = args.output_dir / "final"
@@ -1463,14 +1794,27 @@ def main():
                         np.savez(
                             final_dir / "losses.npz",
                             train_losses=np.array(train_losses),
+                            train_loss_steps=np.array(train_loss_steps),
                             val_losses=np.array(val_losses),
                             val_accuracies=np.array(val_accuracies),
                             val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
+                            val_muster_mean_errors=np.array(val_muster_mean_errors),
+                            val_muster_mean_errors_with_voice=np.array(val_muster_mean_errors_with_voice),
                             validation_steps=np.array(validation_steps)
                         )
                         
                         # Create and save final loss plot
-                        plot_losses(train_losses, val_losses, val_accuracies, val_autoregressive_accuracies, validation_steps, final_dir)
+                        plot_losses(
+                            train_losses,
+                            train_loss_steps,
+                            val_losses,
+                            val_accuracies,
+                            val_autoregressive_accuracies,
+                            validation_steps,
+                            final_dir,
+                            val_muster_mean_errors=val_muster_mean_errors,
+                            val_muster_mean_errors_with_voice=val_muster_mean_errors_with_voice,
+                        )
                     accelerator.wait_for_everyone()
                     
                 except Exception as save_error:

@@ -19,8 +19,11 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from anticipation.config import CONTEXT_SIZE, EVENT_SIZE, TIME_RESOLUTION
-from anticipation.convert import midi_to_events
+from anticipation.asap_aligned_stream import (
+    build_full_normalized_score_triplets as build_full_raw_score_triplets,
+    build_raw_performance_control_triplets,
+)
+from anticipation.config import CONTEXT_SIZE
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
@@ -31,7 +34,6 @@ from anticipation.vocab import (
     REST,
     TIME_OFFSET,
 )
-from alignment import load_annotation_file
 from evaluate_muster import (
     OUTPUT_BASE,
     check_muster_installation,
@@ -52,7 +54,7 @@ ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
 SPLIT_FILE = "data/normalized_split.txt"
 CACHE_DIR = Path("data") / "asap_muster_cache"
-PREPROCESS_VERSION = "fair_asap_muster_v2"
+PREPROCESS_VERSION = "fair_asap_muster_v4_fixed_beat_gt"
 DEFAULT_CHECKPOINT = "checkpoint-2000"
 DEFAULT_NUM_PIECES = 30
 RANDOM_SEED = 42
@@ -62,10 +64,6 @@ PREFIX_CONTROLS = 33
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 
 
-def event_tokens_to_triplets(events):
-    return [events[i : i + 3] for i in range(0, len(events), 3) if i + 2 < len(events)]
-
-
 def normalize_control_triplets(control_triplets):
     if not control_triplets:
         return []
@@ -73,92 +71,17 @@ def normalize_control_triplets(control_triplets):
     return [[t[0] - min_time, t[1], t[2]] for t in control_triplets]
 
 
-def normalize_score_triplets_to_fixed_beat(
-    raw_score_triplets,
-    score_beat_times,
-    target_beat_interval=TARGET_BEAT_INTERVAL,
-):
-    normalized = []
-
-    for score_triplet in raw_score_triplets:
-        orig_time_sec = (score_triplet[0] - TIME_OFFSET) / TIME_RESOLUTION
-        orig_dur_sec = (score_triplet[1] - DUR_OFFSET) / TIME_RESOLUTION
-        pitch = int(round(score_triplet[2]))
-
-        norm_time_sec = 0.0
-        time_scale = 1.0
-
-        if score_beat_times and len(score_beat_times) >= 2:
-            if orig_time_sec < score_beat_times[0]:
-                beat_dur = score_beat_times[1] - score_beat_times[0]
-                progress = (
-                    (orig_time_sec - score_beat_times[0]) / beat_dur if beat_dur > 0 else 0.0
-                )
-                time_scale = target_beat_interval / beat_dur if beat_dur > 0 else 1.0
-                norm_time_sec = progress * target_beat_interval
-            else:
-                found = False
-                for i in range(len(score_beat_times) - 1):
-                    if score_beat_times[i] <= orig_time_sec <= score_beat_times[i + 1]:
-                        beat_dur = score_beat_times[i + 1] - score_beat_times[i]
-                        progress = (
-                            (orig_time_sec - score_beat_times[i]) / beat_dur
-                            if beat_dur > 0
-                            else 0.0
-                        )
-                        time_scale = target_beat_interval / beat_dur if beat_dur > 0 else 1.0
-                        norm_time_sec = i * target_beat_interval + progress * target_beat_interval
-                        found = True
-                        break
-                if not found:
-                    last_dur = (
-                        score_beat_times[-1] - score_beat_times[-2]
-                        if len(score_beat_times) >= 2
-                        else 1.0
-                    )
-                    progress = (
-                        (orig_time_sec - score_beat_times[-1]) / last_dur if last_dur > 0 else 0.0
-                    )
-                    time_scale = target_beat_interval / last_dur if last_dur > 0 else 1.0
-                    norm_time_sec = (
-                        (len(score_beat_times) - 1) * target_beat_interval
-                        + progress * target_beat_interval
-                    )
-        else:
-            norm_time_sec = orig_time_sec - (score_beat_times[0] if score_beat_times else 0.0)
-
-        norm_time_units = max(0, round(norm_time_sec * TIME_RESOLUTION))
-        norm_dur_units = max(1, round(orig_dur_sec * time_scale * TIME_RESOLUTION))
-        normalized.append(
-            [norm_time_units + TIME_OFFSET, norm_dur_units + DUR_OFFSET, pitch]
-        )
-
-    normalized.sort(key=lambda t: (t[0], t[2], t[1]))
-    return normalize_triplet_times(normalized)
-
-
 def build_performance_control_triplets(perf_midi):
-    perf_events = event_tokens_to_triplets(midi_to_events(perf_midi, quantize=False))
-    controls = []
-    for time_tok, dur_tok, pitch_tok in perf_events:
-        time_units = max(0, round(time_tok - TIME_OFFSET))
-        dur_units = max(0, round(dur_tok - DUR_OFFSET))
-        pitch_units = int(round(pitch_tok - NOTE_OFFSET))
-        controls.append(
-            [
-                ATIME_OFFSET + time_units,
-                ADUR_OFFSET + dur_units,
-                ANOTE_OFFSET + pitch_units,
-            ]
-        )
-    return normalize_control_triplets(controls)
+    return normalize_control_triplets(build_raw_performance_control_triplets(perf_midi))
 
 
 def build_full_normalized_score_triplets(score_midi, score_beats):
-    raw_score_triplets = event_tokens_to_triplets(midi_to_events(score_midi, quantize=False))
-    score_annotations = load_annotation_file(score_beats)
-    score_beat_times = [annotation[0] for annotation in score_annotations]
-    return normalize_score_triplets_to_fixed_beat(raw_score_triplets, score_beat_times)
+    # Keep GT score tempo-normalized to the training convention: 1 beat = 0.5 seconds.
+    return build_full_raw_score_triplets(
+        score_midi,
+        score_beats,
+        target_beat_interval=TARGET_BEAT_INTERVAL,
+    )
 
 
 def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
@@ -348,7 +271,6 @@ def autoregressive_generate_from_controls(
             "prefix_controls_used": 0,
             "score_start_idx": 0,
             "window_mode": "reset",
-            "window_segments": [],
         }
 
     vocab_size = model.config.vocab_size
@@ -366,17 +288,6 @@ def autoregressive_generate_from_controls(
         "prefix_controls_used": prefix_count,
         "score_start_idx": score_start_idx,
         "window_mode": "reset",
-        "window_segments": [
-            {
-                "window_index": 0,
-                "control_start_idx": 0,
-                "control_end_idx": None,
-                "pred_start_idx": 0,
-                "pred_end_idx": None,
-                "prefix_controls_used": prefix_count,
-                "control_time_offset": control_time_offset,
-            }
-        ],
     }
 
     past = None
@@ -425,7 +336,7 @@ def autoregressive_generate_from_controls(
     while note_idx < len(control_triplets):
         time_tok = decode_slot(TIME_OFFSET, DUR_OFFSET)
         dur_tok = decode_slot(DUR_OFFSET, NOTE_OFFSET)
-        pitch_tok = decode_slot(NOTE_OFFSET, REST)
+        pitch_tok = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
         pred_score_triplets.append(
             [time_tok + score_time_offset, dur_tok, pitch_tok]
         )
@@ -442,8 +353,6 @@ def autoregressive_generate_from_controls(
             future_idx += 1
 
         if len(context) >= PACKED_SEQUENCE_LENGTH and note_idx < len(control_triplets):
-            stats["window_segments"][-1]["control_end_idx"] = note_idx
-            stats["window_segments"][-1]["pred_end_idx"] = len(pred_score_triplets)
             header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
                 control_triplets,
                 window_start_idx=note_idx,
@@ -457,20 +366,6 @@ def autoregressive_generate_from_controls(
             past = None
             next_logits = None
             stats["num_window_resets"] += 1
-            stats["window_segments"].append(
-                {
-                    "window_index": len(stats["window_segments"]),
-                    "control_start_idx": note_idx,
-                    "control_end_idx": None,
-                    "pred_start_idx": len(pred_score_triplets),
-                    "pred_end_idx": None,
-                    "prefix_controls_used": prefix_count,
-                    "control_time_offset": control_time_offset,
-                }
-            )
-
-    stats["window_segments"][-1]["control_end_idx"] = note_idx
-    stats["window_segments"][-1]["pred_end_idx"] = len(pred_score_triplets)
     return pred_score_triplets, stats
 
 
@@ -499,43 +394,19 @@ def print_piece_muster_metrics(piece_name, metrics, gen_stats):
     else:
         print(message, file=sys.stderr, flush=True)
 
-
-def print_window_muster_metrics(piece_name, window_metrics):
-    message = (
-        f"[MUSTER][window {window_metrics['window_index']:03d}] {piece_name}: "
-        f"controls={window_metrics['control_start_idx']}:{window_metrics['control_end_idx']}, "
-        f"gt_notes={window_metrics['num_gt_notes']}, "
-        f"pred_notes={window_metrics['num_pred_notes']}, "
-        f"{format_muster_summary(window_metrics)}"
-    )
-    if sys.stderr.isatty():
-        tqdm.write(message, file=sys.stderr)
-    else:
-        print(message, file=sys.stderr, flush=True)
-
-
-def print_window_muster_skip(piece_name, window_metrics, reason):
-    message = (
-        f"[MUSTER][window {window_metrics['window_index']:03d}] {piece_name}: "
-        f"controls={window_metrics['control_start_idx']}:{window_metrics['control_end_idx']}, "
-        f"gt_notes={window_metrics['num_gt_notes']}, "
-        f"pred_notes={window_metrics['num_pred_notes']}, "
-        f"skipped ({reason})"
-    )
-    if sys.stderr.isatty():
-        tqdm.write(message, file=sys.stderr)
-    else:
-        print(message, file=sys.stderr, flush=True)
-
-
 def evaluate_triplet_slice_with_muster(
     gt_triplets,
     pred_triplets,
     seq_dir,
     output_prefix,
 ):
-    gt_norm = normalize_triplet_times(gt_triplets)
-    pred_norm = normalize_triplet_times(pred_triplets)
+    gt_export = [triplet for triplet in gt_triplets if triplet[2] != REST]
+    pred_export = [triplet for triplet in pred_triplets if triplet[2] != REST]
+    if not gt_export or not pred_export:
+        return None
+
+    gt_norm = normalize_triplet_times(gt_export)
+    pred_norm = normalize_triplet_times(pred_export)
 
     save_midi(triplets_to_events(gt_norm), str(seq_dir / "ground_truth_score.mid"))
     save_midi(triplets_to_events(pred_norm), str(seq_dir / "output_score.mid"))
@@ -622,57 +493,13 @@ def evaluate_asap_muster(
             num_failed += 1
             continue
 
-        window_metrics = []
-        window_metrics_failed = 0
-        windows_dir = seq_dir / "windows"
-        for segment in gen_stats.get("window_segments", []):
-            gt_window = gt_score_triplets[
-                segment["control_start_idx"] : segment["control_end_idx"]
-            ]
-            pred_window = pred_score_triplets[
-                segment["pred_start_idx"] : segment["pred_end_idx"]
-            ]
-            window_record = {
-                "window_index": segment["window_index"],
-                "control_start_idx": segment["control_start_idx"],
-                "control_end_idx": segment["control_end_idx"],
-                "pred_start_idx": segment["pred_start_idx"],
-                "pred_end_idx": segment["pred_end_idx"],
-                "prefix_controls_used": segment["prefix_controls_used"],
-                "control_time_offset": segment["control_time_offset"],
-                "num_gt_notes": len(gt_window),
-                "num_pred_notes": len(pred_window),
-            }
-            if len(gt_window) < 3 or len(pred_window) < 3:
-                window_record["status"] = "skipped_too_short"
-                window_metrics.append(window_record)
-                print_window_muster_skip(piece_name, window_record, "too few notes")
-                continue
-
-            window_dir = windows_dir / f"window_{segment['window_index']:03d}"
-            os.makedirs(window_dir, exist_ok=True)
-            window_safe_name = f"{safe_name}_window_{segment['window_index']:03d}"
-            window_result = evaluate_triplet_slice_with_muster(
-                gt_window,
-                pred_window,
-                window_dir,
-                window_safe_name,
-            )
-            if not window_result:
-                window_record["status"] = "failed"
-                window_metrics_failed += 1
-                window_metrics.append(window_record)
-                print_window_muster_skip(piece_name, window_record, "muster failed")
-                continue
-
-            window_record.update(window_result)
-            window_record["status"] = "ok"
-            window_metrics.append(window_record)
-            print_window_muster_metrics(piece_name, window_record)
-
         metrics["piece"] = piece_name
         metrics["num_gt_notes"] = len(gt_score_triplets)
-        metrics["num_pred_notes"] = len(pred_score_triplets)
+        metrics["num_pred_notes"] = sum(1 for triplet in pred_score_triplets if triplet[2] != REST)
+        metrics["num_pred_score_slots"] = len(pred_score_triplets)
+        metrics["num_pred_dummy_slots"] = sum(
+            1 for triplet in pred_score_triplets if triplet[2] == REST
+        )
         metrics["total_performance_notes"] = len(control_triplets)
         metrics["num_controls_used"] = gen_stats["num_controls_used"]
         metrics["prefix_controls_used"] = gen_stats["prefix_controls_used"]
@@ -680,20 +507,12 @@ def evaluate_asap_muster(
         metrics["num_window_resets"] = gen_stats["num_window_resets"]
         metrics["cache_hit"] = piece_info["cache_hit"]
         metrics["cache_path"] = piece_info["cache_path"]
-        metrics["evaluation_protocol"] = "fair_control_driven"
+        metrics["evaluation_protocol"] = "raw_score_control_driven"
         metrics["all_performance_notes_used"] = (
             gen_stats["num_controls_used"] == len(control_triplets)
         )
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
         metrics["window_mode"] = gen_stats["window_mode"]
-        metrics["num_generation_windows"] = len(gen_stats.get("window_segments", []))
-        metrics["num_window_muster_successful"] = sum(
-            1 for window in window_metrics if window.get("status") == "ok"
-        )
-        metrics["num_window_muster_failed"] = window_metrics_failed
-        metrics["num_window_muster_skipped"] = sum(
-            1 for window in window_metrics if window.get("status") == "skipped_too_short"
-        )
         print_piece_muster_metrics(piece_name, metrics, gen_stats)
 
         per_sequence_metrics.append(metrics)
@@ -704,11 +523,9 @@ def evaluate_asap_muster(
         num_successful += 1
         with open(seq_dir / "muster_metrics.json", "w", encoding="utf-8") as handle:
             json.dump(metrics, handle, indent=2)
-        with open(seq_dir / "window_muster_metrics.json", "w", encoding="utf-8") as handle:
-            json.dump(window_metrics, handle, indent=2)
 
     final = {
-        "evaluation_protocol": "fair_control_driven",
+        "evaluation_protocol": "raw_score_control_driven",
         "gt_score_beat_interval_sec": TARGET_BEAT_INTERVAL,
         "all_performance_notes_used": True,
         "window_mode": "reset",
@@ -734,7 +551,7 @@ def evaluate_asap_muster(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate MUSTER on ASAP pieces with fair performance-only conditioning"
+        description="Evaluate MUSTER on ASAP pieces with raw-score full-piece conditioning from performance controls"
     )
     parser.add_argument("--checkpoint", default=guess_default_checkpoint())
     parser.add_argument(
@@ -836,7 +653,7 @@ def main():
             indent=2,
         )
 
-    print("Running fair ASAP model + MUSTER evaluation...")
+    print("Running ASAP model + raw-score MUSTER evaluation...")
     stats = evaluate_asap_muster(
         args.checkpoint,
         piece_infos,
