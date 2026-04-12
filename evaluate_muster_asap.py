@@ -69,7 +69,6 @@ def event_tokens_to_triplets(events):
 def normalize_control_triplets(control_triplets):
     if not control_triplets:
         return []
-    control_triplets = sorted(control_triplets, key=lambda t: (t[0], t[2], t[1]))
     min_time = min(t[0] - ATIME_OFFSET for t in control_triplets)
     return [[t[0] - min_time, t[1], t[2]] for t in control_triplets]
 
@@ -195,13 +194,10 @@ def initialize_generation_window(control_triplets, window_start_idx):
     return header, prefix_count, future_idx, time_offset
 
 
-def max_predicted_score_end_units(pred_score_triplets):
+def max_predicted_score_onset_units(pred_score_triplets):
     if not pred_score_triplets:
         return 0
-    return max(
-        max(0, triplet[0] - TIME_OFFSET) + max(1, triplet[1] - DUR_OFFSET)
-        for triplet in pred_score_triplets
-    )
+    return max(max(0, triplet[0] - TIME_OFFSET) for triplet in pred_score_triplets)
 
 
 def _file_fingerprint(path):
@@ -438,7 +434,10 @@ def autoregressive_generate_from_controls(
                 control_triplets,
                 window_start_idx=note_idx,
             )
-            score_time_offset = max_predicted_score_end_units(pred_score_triplets)
+            # Each training window uses a fresh local score timeline, so stitching new
+            # windows to the previous predicted note end is overly sensitive to duration
+            # errors. Re-anchor using the latest predicted onset instead.
+            score_time_offset = max_predicted_score_onset_units(pred_score_triplets)
             context = list(header)
             score_start_idx = len(header)
             past = None
