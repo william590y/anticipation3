@@ -348,6 +348,7 @@ def autoregressive_generate_from_controls(
             "prefix_controls_used": 0,
             "score_start_idx": 0,
             "window_mode": "reset",
+            "window_segments": [],
         }
 
     vocab_size = model.config.vocab_size
@@ -365,6 +366,17 @@ def autoregressive_generate_from_controls(
         "prefix_controls_used": prefix_count,
         "score_start_idx": score_start_idx,
         "window_mode": "reset",
+        "window_segments": [
+            {
+                "window_index": 0,
+                "control_start_idx": 0,
+                "control_end_idx": None,
+                "pred_start_idx": 0,
+                "pred_end_idx": None,
+                "prefix_controls_used": prefix_count,
+                "control_time_offset": control_time_offset,
+            }
+        ],
     }
 
     past = None
@@ -430,6 +442,8 @@ def autoregressive_generate_from_controls(
             future_idx += 1
 
         if len(context) >= PACKED_SEQUENCE_LENGTH and note_idx < len(control_triplets):
+            stats["window_segments"][-1]["control_end_idx"] = note_idx
+            stats["window_segments"][-1]["pred_end_idx"] = len(pred_score_triplets)
             header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
                 control_triplets,
                 window_start_idx=note_idx,
@@ -443,11 +457,24 @@ def autoregressive_generate_from_controls(
             past = None
             next_logits = None
             stats["num_window_resets"] += 1
+            stats["window_segments"].append(
+                {
+                    "window_index": len(stats["window_segments"]),
+                    "control_start_idx": note_idx,
+                    "control_end_idx": None,
+                    "pred_start_idx": len(pred_score_triplets),
+                    "pred_end_idx": None,
+                    "prefix_controls_used": prefix_count,
+                    "control_time_offset": control_time_offset,
+                }
+            )
 
+    stats["window_segments"][-1]["control_end_idx"] = note_idx
+    stats["window_segments"][-1]["pred_end_idx"] = len(pred_score_triplets)
     return pred_score_triplets, stats
 
 
-def print_piece_muster_metrics(piece_name, metrics, gen_stats):
+def format_muster_summary(metrics):
     summary = [
         f"MER={metrics['mean_error_rate']:.2f}%",
         f"PER={metrics['pitch_error_rate']:.2f}%",
@@ -460,12 +487,69 @@ def print_piece_muster_metrics(piece_name, metrics, gen_stats):
         summary.append(f"VER={metrics['voice_error_rate']:.2f}%")
     if "mean_error_rate_with_voice" in metrics:
         summary.append(f"MER+V={metrics['mean_error_rate_with_voice']:.2f}%")
+    return ", ".join(summary)
+
+
+def print_piece_muster_metrics(piece_name, metrics, gen_stats):
+    summary = [format_muster_summary(metrics)]
     summary.append(f"resets={gen_stats['num_window_resets']}")
     message = f"[MUSTER] {piece_name}: " + ", ".join(summary)
     if sys.stderr.isatty():
         tqdm.write(message, file=sys.stderr)
     else:
         print(message, file=sys.stderr, flush=True)
+
+
+def print_window_muster_metrics(piece_name, window_metrics):
+    message = (
+        f"[MUSTER][window {window_metrics['window_index']:03d}] {piece_name}: "
+        f"controls={window_metrics['control_start_idx']}:{window_metrics['control_end_idx']}, "
+        f"gt_notes={window_metrics['num_gt_notes']}, "
+        f"pred_notes={window_metrics['num_pred_notes']}, "
+        f"{format_muster_summary(window_metrics)}"
+    )
+    if sys.stderr.isatty():
+        tqdm.write(message, file=sys.stderr)
+    else:
+        print(message, file=sys.stderr, flush=True)
+
+
+def print_window_muster_skip(piece_name, window_metrics, reason):
+    message = (
+        f"[MUSTER][window {window_metrics['window_index']:03d}] {piece_name}: "
+        f"controls={window_metrics['control_start_idx']}:{window_metrics['control_end_idx']}, "
+        f"gt_notes={window_metrics['num_gt_notes']}, "
+        f"pred_notes={window_metrics['num_pred_notes']}, "
+        f"skipped ({reason})"
+    )
+    if sys.stderr.isatty():
+        tqdm.write(message, file=sys.stderr)
+    else:
+        print(message, file=sys.stderr, flush=True)
+
+
+def evaluate_triplet_slice_with_muster(
+    gt_triplets,
+    pred_triplets,
+    seq_dir,
+    output_prefix,
+):
+    gt_norm = normalize_triplet_times(gt_triplets)
+    pred_norm = normalize_triplet_times(pred_triplets)
+
+    save_midi(triplets_to_events(gt_norm), str(seq_dir / "ground_truth_score.mid"))
+    save_midi(triplets_to_events(pred_norm), str(seq_dir / "output_score.mid"))
+
+    gt_xml = seq_dir / "ground_truth_score.xml"
+    pred_xml = seq_dir / "output_score.xml"
+    if not triplets_to_musicxml(gt_norm, str(gt_xml), beat_seconds=TARGET_BEAT_INTERVAL):
+        return None
+    if not triplets_to_musicxml(pred_norm, str(pred_xml), beat_seconds=TARGET_BEAT_INTERVAL):
+        return None
+
+    work_dir = seq_dir / "muster_work"
+    os.makedirs(work_dir, exist_ok=True)
+    return run_muster_evaluation(gt_xml, pred_xml, output_prefix, work_dir)
 
 
 def evaluate_asap_muster(
@@ -528,27 +612,63 @@ def evaluate_asap_muster(
         seq_dir = Path(output_dir) / safe_name
         os.makedirs(seq_dir, exist_ok=True)
 
-        gt_norm = normalize_triplet_times(gt_score_triplets)
-        pred_norm = normalize_triplet_times(pred_score_triplets)
-
-        save_midi(triplets_to_events(gt_norm), str(seq_dir / "ground_truth_score.mid"))
-        save_midi(triplets_to_events(pred_norm), str(seq_dir / "output_score.mid"))
-
-        gt_xml = seq_dir / "ground_truth_score.xml"
-        pred_xml = seq_dir / "output_score.xml"
-        if not triplets_to_musicxml(gt_norm, str(gt_xml), beat_seconds=TARGET_BEAT_INTERVAL):
-            num_failed += 1
-            continue
-        if not triplets_to_musicxml(pred_norm, str(pred_xml), beat_seconds=TARGET_BEAT_INTERVAL):
-            num_failed += 1
-            continue
-
-        work_dir = seq_dir / "muster_work"
-        os.makedirs(work_dir, exist_ok=True)
-        metrics = run_muster_evaluation(gt_xml, pred_xml, safe_name, work_dir)
+        metrics = evaluate_triplet_slice_with_muster(
+            gt_score_triplets,
+            pred_score_triplets,
+            seq_dir,
+            safe_name,
+        )
         if not metrics:
             num_failed += 1
             continue
+
+        window_metrics = []
+        window_metrics_failed = 0
+        windows_dir = seq_dir / "windows"
+        for segment in gen_stats.get("window_segments", []):
+            gt_window = gt_score_triplets[
+                segment["control_start_idx"] : segment["control_end_idx"]
+            ]
+            pred_window = pred_score_triplets[
+                segment["pred_start_idx"] : segment["pred_end_idx"]
+            ]
+            window_record = {
+                "window_index": segment["window_index"],
+                "control_start_idx": segment["control_start_idx"],
+                "control_end_idx": segment["control_end_idx"],
+                "pred_start_idx": segment["pred_start_idx"],
+                "pred_end_idx": segment["pred_end_idx"],
+                "prefix_controls_used": segment["prefix_controls_used"],
+                "control_time_offset": segment["control_time_offset"],
+                "num_gt_notes": len(gt_window),
+                "num_pred_notes": len(pred_window),
+            }
+            if len(gt_window) < 3 or len(pred_window) < 3:
+                window_record["status"] = "skipped_too_short"
+                window_metrics.append(window_record)
+                print_window_muster_skip(piece_name, window_record, "too few notes")
+                continue
+
+            window_dir = windows_dir / f"window_{segment['window_index']:03d}"
+            os.makedirs(window_dir, exist_ok=True)
+            window_safe_name = f"{safe_name}_window_{segment['window_index']:03d}"
+            window_result = evaluate_triplet_slice_with_muster(
+                gt_window,
+                pred_window,
+                window_dir,
+                window_safe_name,
+            )
+            if not window_result:
+                window_record["status"] = "failed"
+                window_metrics_failed += 1
+                window_metrics.append(window_record)
+                print_window_muster_skip(piece_name, window_record, "muster failed")
+                continue
+
+            window_record.update(window_result)
+            window_record["status"] = "ok"
+            window_metrics.append(window_record)
+            print_window_muster_metrics(piece_name, window_record)
 
         metrics["piece"] = piece_name
         metrics["num_gt_notes"] = len(gt_score_triplets)
@@ -566,6 +686,14 @@ def evaluate_asap_muster(
         )
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
         metrics["window_mode"] = gen_stats["window_mode"]
+        metrics["num_generation_windows"] = len(gen_stats.get("window_segments", []))
+        metrics["num_window_muster_successful"] = sum(
+            1 for window in window_metrics if window.get("status") == "ok"
+        )
+        metrics["num_window_muster_failed"] = window_metrics_failed
+        metrics["num_window_muster_skipped"] = sum(
+            1 for window in window_metrics if window.get("status") == "skipped_too_short"
+        )
         print_piece_muster_metrics(piece_name, metrics, gen_stats)
 
         per_sequence_metrics.append(metrics)
@@ -576,6 +704,8 @@ def evaluate_asap_muster(
         num_successful += 1
         with open(seq_dir / "muster_metrics.json", "w", encoding="utf-8") as handle:
             json.dump(metrics, handle, indent=2)
+        with open(seq_dir / "window_muster_metrics.json", "w", encoding="utf-8") as handle:
+            json.dump(window_metrics, handle, indent=2)
 
     final = {
         "evaluation_protocol": "fair_control_driven",
