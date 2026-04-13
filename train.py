@@ -128,16 +128,6 @@ device = torch.device("cpu")
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 PREFIX_CONTROLS = 33
 ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
-MUSTER_METRIC_KEYS = (
-    "pitch_error_rate",
-    "missing_note_rate",
-    "extra_note_rate",
-    "onset_time_error_rate",
-    "offset_time_error_rate",
-    "mean_error_rate",
-    "voice_error_rate",
-    "mean_error_rate_with_voice",
-)
 
 class TokenizedDataset(Dataset):
     """Dataset that loads packed ASAP sequences and applies augmentation on-the-fly."""
@@ -878,197 +868,6 @@ def evaluate_model(
     accelerator.wait_for_everyone()
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
 
-def _load_muster_piece_pool(split_file):
-    from evaluate_muster_asap import load_asap_metadata, load_asap_test_perfs
-
-    try:
-        pieces = load_asap_metadata()
-    except SystemExit as exc:
-        raise RuntimeError("Could not load ASAP metadata for MUSTER subset evaluation.") from exc
-
-    test_perfs = load_asap_test_perfs(str(split_file)) if split_file else None
-    if test_perfs:
-        filtered = [piece for piece in pieces if piece["perf_path"] in test_perfs]
-        if filtered:
-            pieces = filtered
-
-    return pieces
-
-
-def _evaluate_muster_subset(
-    model,
-    accelerator,
-    output_dir,
-    piece_pool,
-    sample_size,
-    rng,
-    step,
-    temperature=0.0,
-):
-    from evaluate_muster_asap import (
-        preprocess_asap_piece,
-        autoregressive_generate_from_controls,
-        evaluate_triplet_slice_with_muster,
-        format_muster_summary,
-    )
-
-    if sample_size <= 0 or not piece_pool:
-        return None
-
-    accelerator.wait_for_everyone()
-    was_training = bool(getattr(model, "training", False))
-    model.eval()
-
-    target_count = min(sample_size, len(piece_pool))
-    sample_seed = _broadcast_int_from_main(accelerator, rng.randrange(1, 2**31))
-
-    metric_sums = {key: 0.0 for key in MUSTER_METRIC_KEYS}
-    metric_counts = {key: 0 for key in MUSTER_METRIC_KEYS}
-    assigned_count = 0
-    preprocessed_count = 0
-    scored_count = 0
-    local_error = None
-
-    try:
-        sampled_indices = list(range(len(piece_pool)))
-        random.Random(sample_seed).shuffle(sampled_indices)
-        sampled_indices = sampled_indices[:target_count]
-
-        local_piece_indices = [
-            piece_idx
-            for shard_idx, piece_idx in enumerate(sampled_indices)
-            if shard_idx % accelerator.num_processes == accelerator.process_index
-        ]
-        assigned_count = len(local_piece_indices)
-        print(
-            f"[rank {accelerator.process_index}] MUSTER step {step}: "
-            f"assigned {assigned_count} of {target_count} sampled piece(s)."
-        )
-
-        eval_root = (
-            Path(output_dir)
-            / "muster_validation"
-            / f"step-{int(step)}"
-            / f"rank-{accelerator.process_index:03d}"
-        )
-        os.makedirs(eval_root, exist_ok=True)
-
-        local_progress = tqdm(
-            local_piece_indices,
-            desc=f"MUSTER r{accelerator.process_index}",
-            leave=False,
-            position=accelerator.process_index,
-            disable=assigned_count == 0,
-        )
-        for piece_idx in local_progress:
-            processed = preprocess_asap_piece(piece_pool[piece_idx])
-            if processed.get("error"):
-                continue
-            if not processed.get("control_triplets") or not processed.get("gt_score_triplets"):
-                continue
-            preprocessed_count += 1
-
-            safe_name = (
-                processed["perf_path"]
-                .replace("/", "_")
-                .replace("\\", "_")
-                .replace(":", "_")
-            )
-            seq_dir = eval_root / safe_name
-            os.makedirs(seq_dir, exist_ok=True)
-
-            try:
-                pred_score_triplets, _ = autoregressive_generate_from_controls(
-                    model,
-                    processed["control_triplets"],
-                    accelerator.device,
-                    temperature=temperature,
-                )
-            except Exception:
-                continue
-
-            metrics = evaluate_triplet_slice_with_muster(
-                processed["gt_score_triplets"],
-                pred_score_triplets,
-                seq_dir,
-                safe_name,
-            )
-            if not metrics:
-                continue
-
-            scored_count += 1
-            for key in MUSTER_METRIC_KEYS:
-                if key in metrics:
-                    metric_sums[key] += float(metrics[key])
-                    metric_counts[key] += 1
-    except Exception as exc:
-        local_error = f"{type(exc).__name__}: {exc}"
-    finally:
-        if was_training:
-            model.train()
-
-    failed_processes = _count_flagged_processes(accelerator, local_error is not None)
-    if failed_processes > 0:
-        if accelerator.is_main_process:
-            print(
-                "WARNING: Distributed MUSTER subset evaluation failed on "
-                f"{failed_processes}/{accelerator.num_processes} rank(s); skipping MUSTER metrics "
-                f"for step {step}."
-            )
-            if local_error:
-                print(f"  Example rank-local error: {local_error}")
-        return None
-
-    count_tensor = torch.tensor(
-        [assigned_count, preprocessed_count, scored_count],
-        device=accelerator.device,
-        dtype=torch.float64,
-    )
-    count_tensor = accelerator.reduce(count_tensor, reduction="sum")
-
-    metric_tensor_values = []
-    for key in MUSTER_METRIC_KEYS:
-        metric_tensor_values.extend([metric_sums[key], float(metric_counts[key])])
-    metric_tensor = torch.tensor(
-        metric_tensor_values,
-        device=accelerator.device,
-        dtype=torch.float64,
-    )
-    metric_tensor = accelerator.reduce(metric_tensor, reduction="sum")
-
-    if not accelerator.is_main_process:
-        return None
-
-    total_assigned = int(round(count_tensor[0].item()))
-    total_preprocessed = int(round(count_tensor[1].item()))
-    total_scored = int(round(count_tensor[2].item()))
-    if total_scored <= 0:
-        return None
-
-    aggregate = {
-        "num_pieces_target": target_count,
-        "num_pieces_assigned": total_assigned,
-        "num_pieces_preprocessed": total_preprocessed,
-        "num_pieces_scored": total_scored,
-        "sample_seed": sample_seed,
-        "world_size": accelerator.num_processes,
-    }
-    for key_idx, key in enumerate(MUSTER_METRIC_KEYS):
-        metric_sum = float(metric_tensor[key_idx * 2].item())
-        metric_count = int(round(metric_tensor[key_idx * 2 + 1].item()))
-        if metric_count > 0:
-            aggregate[key] = metric_sum / metric_count
-
-    if "mean_error_rate" in aggregate:
-        print(
-            "MUSTER subset summary "
-            f"(n={aggregate['num_pieces_scored']}/{aggregate['num_pieces_target']}): "
-            f"{format_muster_summary(aggregate)}"
-        )
-
-    accelerator.wait_for_everyone()
-    return aggregate
-
 
 def plot_losses(
     train_losses,
@@ -1078,33 +877,16 @@ def plot_losses(
     val_autoregressive_accuracies,
     validation_steps,
     output_dir,
-    val_muster_mean_errors=None,
-    val_muster_mean_errors_with_voice=None,
 ):
-    """
-    Plot training/validation losses and validation metrics, save figures.
-    
-    Args:
-        train_losses (list): Training loss history
-        train_loss_steps (list): Global steps corresponding to each training loss sample
-        val_losses (list): Validation loss history
-        val_accuracies (list): Validation teacher-forced pitch accuracy history
-        val_autoregressive_accuracies (list): Validation autoregressive pitch accuracy history
-        validation_steps (list): Steps at which validation was performed
-        output_dir (Path): Directory to save the plots
-        val_muster_mean_errors (list|None): Validation MUSTER MER history (%), aligned to validation_steps
-        val_muster_mean_errors_with_voice (list|None): Validation MUSTER MER+V history (%), aligned to validation_steps
-    """
+    """Plot training/validation losses and validation metrics, save figures."""
     if train_loss_steps and len(train_loss_steps) == len(train_losses):
         train_steps = train_loss_steps
     else:
         train_steps = list(range(1, len(train_losses) + 1))
 
-    # Create figure with 6 slots (5 used) so MUSTER can be plotted alongside existing metrics.
-    fig, axes = plt.subplots(3, 2, figsize=(16, 16))
-    ax1, ax2, ax3, ax4, ax5, ax6 = axes.flatten()
-    
-    # Plot 1: Linear loss plot
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    ax1, ax2, ax3, ax4 = axes.flatten()
+
     ax1.plot(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     ax1.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
     ax1.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
@@ -1113,8 +895,7 @@ def plot_losses(
     ax1.set_title('Training and Validation Loss (Linear Scale)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Log-log loss plot
+
     ax2.loglog(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
     ax2.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
     ax2.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
@@ -1123,8 +904,7 @@ def plot_losses(
     ax2.set_title('Training and Validation Loss (Log-Log Scale)')
     ax2.legend()
     ax2.grid(True, alpha=0.3, which='both')
-    
-    # Plot 3: Validation teacher-forced pitch accuracy
+
     ax3.plot(validation_steps, val_accuracies, label='Teacher-Forced Pitch Accuracy', color='green', marker='o')
     ax3.set_xlabel('Step')
     ax3.set_ylabel('Pitch Accuracy (%)')
@@ -1132,8 +912,7 @@ def plot_losses(
     ax3.set_ylim([0, 100])
     ax3.legend()
     ax3.grid(True, alpha=0.3)
-    
-    # Plot 4: Validation autoregressive pitch accuracy
+
     ax4.plot(validation_steps, val_autoregressive_accuracies, label='Autoregressive Pitch Accuracy', color='purple', marker='s')
     ax4.set_xlabel('Step')
     ax4.set_ylabel('Pitch Accuracy (%)')
@@ -1142,69 +921,10 @@ def plot_losses(
     ax4.legend()
     ax4.grid(True, alpha=0.3)
 
-    # Plot 5: Validation MUSTER summary metrics
-    has_muster = (
-        val_muster_mean_errors is not None
-        and len(val_muster_mean_errors) == len(validation_steps)
-        and len(validation_steps) > 0
-    )
-    plotted_muster_curve = False
-    if has_muster:
-        muster_pairs = [
-            (step, value)
-            for step, value in zip(validation_steps, val_muster_mean_errors)
-            if np.isfinite(value)
-        ]
-        if muster_pairs:
-            muster_steps, muster_vals = zip(*muster_pairs)
-            ax5.plot(
-                muster_steps,
-                muster_vals,
-                label='MUSTER Mean Error Rate (MER)',
-                color='black',
-                marker='D',
-            )
-            plotted_muster_curve = True
-
-        if (
-            val_muster_mean_errors_with_voice is not None
-            and len(val_muster_mean_errors_with_voice) == len(validation_steps)
-        ):
-            muster_voice_pairs = [
-                (step, value)
-                for step, value in zip(validation_steps, val_muster_mean_errors_with_voice)
-                if np.isfinite(value)
-            ]
-            if muster_voice_pairs:
-                muster_voice_steps, muster_voice_vals = zip(*muster_voice_pairs)
-                ax5.plot(
-                    muster_voice_steps,
-                    muster_voice_vals,
-                    label='MUSTER Mean Error Rate + Voice (MER+V)',
-                    color='dimgray',
-                    marker='x',
-                    linestyle='--',
-                )
-                plotted_muster_curve = True
-
-    ax5.set_xlabel('Step')
-    ax5.set_ylabel('Error Rate (%)')
-    ax5.set_title('Validation MUSTER Error Rates')
-    ax5.grid(True, alpha=0.3)
-    if plotted_muster_curve:
-        ax5.legend()
-    elif has_muster:
-        ax5.text(0.5, 0.5, 'MUSTER run(s) failed', ha='center', va='center', transform=ax5.transAxes)
-    else:
-        ax5.text(0.5, 0.5, 'MUSTER disabled', ha='center', va='center', transform=ax5.transAxes)
-
-    # Unused panel reserved for future validation metrics.
-    ax6.axis('off')
-    
     plt.tight_layout()
     plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
     plt.close()
-    
+
     print(f"Training metrics plot saved to {output_dir / 'training_metrics.png'}")
 
 
@@ -1238,36 +958,6 @@ def main():
         type=int,
         default=0,
         help='Dataloader workers used for sampled validation subsets.',
-    )
-    parser.add_argument(
-        '--eval_muster_samples',
-        type=int,
-        default=5,
-        help='Random ASAP pieces scored with MUSTER whenever the MUSTER cadence triggers. <= 0 disables MUSTER validation.',
-    )
-    parser.add_argument(
-        '--eval_muster_steps',
-        type=int,
-        default=5000,
-        help='Run MUSTER subset validation every N training steps. <= 0 disables MUSTER validation.',
-    )
-    parser.add_argument(
-        '--eval_muster_split_file',
-        type=Path,
-        default=Path('./data/normalized_split.txt'),
-        help='ASAP split file used to filter MUSTER validation pieces (test split by default).',
-    )
-    parser.add_argument(
-        '--eval_muster_temperature',
-        type=float,
-        default=0.0,
-        help='Sampling temperature used for MUSTER subset autoregressive generation.',
-    )
-    parser.add_argument(
-        '--eval_muster_seed',
-        type=int,
-        default=42,
-        help='Random seed for selecting MUSTER validation subsets.',
     )
     parser.add_argument('--warmup_steps', type=int, default=0)  # No warmup
     parser.add_argument('--force_cpu', action='store_true', help='Force CPU usage even if GPU is available')
@@ -1319,12 +1009,6 @@ def main():
         raise ValueError("--original_weight_l2 must be non-negative.")
     if args.eval_num_workers < 0:
         raise ValueError("--eval_num_workers must be non-negative.")
-    if args.eval_muster_samples < 0:
-        raise ValueError("--eval_muster_samples must be non-negative.")
-    if args.eval_muster_steps < 0:
-        raise ValueError("--eval_muster_steps must be non-negative.")
-    if args.eval_muster_temperature < 0:
-        raise ValueError("--eval_muster_temperature must be non-negative.")
     
     global device
     validate_selected_cuda_device_or_raise(force_cpu=args.force_cpu)
@@ -1429,39 +1113,6 @@ def main():
             "pin_memory": torch.cuda.is_available() and not args.force_cpu,
             "num_workers": args.eval_num_workers,
         }
-
-        run_muster_eval = args.eval_muster_samples > 0 and args.eval_muster_steps > 0
-        muster_piece_pool = []
-        muster_rng = random.Random(args.eval_muster_seed)
-        muster_eval_ready = False
-        if run_muster_eval:
-            try:
-                muster_piece_pool = _load_muster_piece_pool(args.eval_muster_split_file)
-            except Exception as exc:
-                muster_piece_pool = []
-                if accelerator.is_main_process:
-                    print(f"WARNING: Failed to initialize MUSTER subset validation: {exc}. Metrics will be skipped.")
-
-            ready_processes = _count_flagged_processes(accelerator, bool(muster_piece_pool))
-            if ready_processes == accelerator.num_processes and len(muster_piece_pool) > 0:
-                muster_eval_ready = True
-                if accelerator.is_main_process:
-                    print(
-                        "MUSTER subset validation enabled (distributed): "
-                        f"sampling {args.eval_muster_samples} piece(s) from {len(muster_piece_pool)} ASAP items "
-                        f"across world_size={accelerator.num_processes} every {args.eval_muster_steps} step(s) "
-                        f"(split file: {args.eval_muster_split_file})."
-                    )
-            elif ready_processes == 0:
-                if accelerator.is_main_process:
-                    print("WARNING: MUSTER subset validation requested, but no ASAP pieces were found. Metrics will be skipped.")
-            else:
-                raise RuntimeError(
-                    "Inconsistent MUSTER piece-pool availability across ranks. "
-                    "Ensure all processes have access to the ASAP metadata and split files."
-                )
-        elif accelerator.is_main_process:
-            print("MUSTER subset validation disabled.")
         
         # Load model with memory optimizations
         print(f"Loading model {args.model_name}...")
@@ -1590,8 +1241,6 @@ def main():
         val_losses = []
         val_accuracies = []
         val_autoregressive_accuracies = []
-        val_muster_mean_errors = []
-        val_muster_mean_errors_with_voice = []
         validation_steps = []
         
         # Keep progress/logging on the main process so multi-GPU runs don't spam duplicate output.
@@ -1614,59 +1263,17 @@ def main():
                 autoregressive_samples=args.eval_autoregressive_samples,
             )
 
-            should_run_muster = (
-                run_muster_eval
-                and muster_eval_ready
-                and validation_step > 0
-                and validation_step % args.eval_muster_steps == 0
-            )
-            muster_metrics = None
-            if should_run_muster:
-                if accelerator.is_main_process:
-                    print(
-                        "Running MUSTER subset validation "
-                        f"at step {validation_step} across {accelerator.num_processes} rank(s)..."
-                    )
-                muster_metrics = _evaluate_muster_subset(
-                    base_model,
-                    accelerator,
-                    args.output_dir,
-                    muster_piece_pool,
-                    args.eval_muster_samples,
-                    muster_rng,
-                    validation_step,
-                    temperature=args.eval_muster_temperature,
-                )
-
             if accelerator.is_main_process:
                 validation_steps.append(validation_step)
                 val_losses.append(val_loss)
                 val_accuracies.append(val_acc * 100)
                 val_autoregressive_accuracies.append(val_auto_acc * 100)
 
-                muster_mer = float("nan")
-                muster_mer_with_voice = float("nan")
-                if run_muster_eval:
-                    if muster_metrics:
-                        muster_mer = float(muster_metrics.get("mean_error_rate", float("nan")))
-                        muster_mer_with_voice = float(
-                            muster_metrics.get("mean_error_rate_with_voice", float("nan"))
-                        )
-                    val_muster_mean_errors.append(muster_mer)
-                    val_muster_mean_errors_with_voice.append(muster_mer_with_voice)
-
                 message = (
                     f"Validation Loss: {val_loss:.4f}, "
                     f"Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
                     f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
                 )
-                if run_muster_eval:
-                    if should_run_muster and np.isfinite(muster_mer):
-                        message += f", MUSTER MER: {muster_mer:.2f}%"
-                        if np.isfinite(muster_mer_with_voice):
-                            message += f", MUSTER MER+V: {muster_mer_with_voice:.2f}%"
-                    elif should_run_muster:
-                        message += ", MUSTER MER: n/a"
                 print(message)
 
             accelerator.wait_for_everyone()
@@ -1807,8 +1414,6 @@ def main():
                                             val_losses=np.array(val_losses),
                                             val_accuracies=np.array(val_accuracies),
                                             val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                                            val_muster_mean_errors=np.array(val_muster_mean_errors),
-                                            val_muster_mean_errors_with_voice=np.array(val_muster_mean_errors_with_voice),
                                             validation_steps=np.array(validation_steps)
                                         )
                                         
@@ -1821,8 +1426,6 @@ def main():
                                             val_autoregressive_accuracies,
                                             validation_steps,
                                             checkpoint_dir,
-                                            val_muster_mean_errors=val_muster_mean_errors,
-                                            val_muster_mean_errors_with_voice=val_muster_mean_errors_with_voice,
                                         )
                                     accelerator.wait_for_everyone()
                                     
@@ -1897,8 +1500,6 @@ def main():
                             val_losses=np.array(val_losses),
                             val_accuracies=np.array(val_accuracies),
                             val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                            val_muster_mean_errors=np.array(val_muster_mean_errors),
-                            val_muster_mean_errors_with_voice=np.array(val_muster_mean_errors_with_voice),
                             validation_steps=np.array(validation_steps)
                         )
                         
@@ -1911,8 +1512,6 @@ def main():
                             val_autoregressive_accuracies,
                             validation_steps,
                             final_dir,
-                            val_muster_mean_errors=val_muster_mean_errors,
-                            val_muster_mean_errors_with_voice=val_muster_mean_errors_with_voice,
                         )
                     accelerator.wait_for_everyone()
                     
