@@ -5,6 +5,7 @@ Test file: data/test_normalized.txt
 Total sequences available: 574752
 Sampled sequences: 5
 Constrained score decoding: True
+MUSTER scoring enabled: True
 
 Aggregate metrics:
   Autoregressive accuracy (pitch): 97.93%
@@ -15,8 +16,23 @@ Aggregate metrics:
   Sequences failed: 0
   Mean per-sequence pitch accuracy: 97.89% (+-1.90)
 
+Aggregate MUSTER metrics:
+  Windows MUSTER-evaluated: 5
+  Windows MUSTER-failed: 0
+  MER: 13.37% (+-4.63)
+  PER: 1.19% (+-0.75)
+  MNR: 1.49% (+-0.47)
+  ENR: 1.63% (+-0.71)
+  OTER: 42.79% (+-14.16)
+  OFTER: 19.76% (+-10.14)
+  VER: 0.00% (+-0.00)
+
 Per-sequence outputs:
   input_performance.mid
   ground_truth_score.mid
   output_score.mid
   stats.json
+  ground_truth_score.xml
+  output_score.xml
+  muster_metrics.json
+  muster_work/

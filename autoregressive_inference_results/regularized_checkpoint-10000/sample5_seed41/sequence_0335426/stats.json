@@ -15,5 +15,19 @@
   "overall_accuracy": 35.03649635036496,
   "autoregressive_accuracy": 0.9635036496350365,
   "autoregressive_accuracy_pct": 96.35036496350365,
-  "original_index": 335426
+  "original_index": 335426,
+  "pitch_error_rate": 2.18978,
+  "missing_note_rate": 1.45985,
+  "extra_note_rate": 1.45985,
+  "onset_time_error_rate": 33.3333,
+  "offset_time_error_rate": 19.2593,
+  "mean_error_rate": 11.5404,
+  "voice_error_rate": 0.0,
+  "mean_error_rate_with_voice": 9.61701,
+  "voice_precision": 100.0,
+  "voice_recall": 100.0,
+  "voice_f_measure": 100.0,
+  "note_value_scale_error": 1.13316,
+  "hand_error_rate": 0.0,
+  "muster_status": "ok"
 }
