@@ -940,6 +940,10 @@ def _evaluate_muster_subset(
             if shard_idx % accelerator.num_processes == accelerator.process_index
         ]
         assigned_count = len(local_piece_indices)
+        print(
+            f"[rank {accelerator.process_index}] MUSTER step {step}: "
+            f"assigned {assigned_count} of {target_count} sampled piece(s)."
+        )
 
         eval_root = (
             Path(output_dir)
@@ -949,7 +953,14 @@ def _evaluate_muster_subset(
         )
         os.makedirs(eval_root, exist_ok=True)
 
-        for piece_idx in local_piece_indices:
+        local_progress = tqdm(
+            local_piece_indices,
+            desc=f"MUSTER r{accelerator.process_index}",
+            leave=False,
+            position=accelerator.process_index,
+            disable=assigned_count == 0,
+        )
+        for piece_idx in local_progress:
             processed = preprocess_asap_piece(piece_pool[piece_idx])
             if processed.get("error"):
                 continue
@@ -1232,7 +1243,13 @@ def main():
         '--eval_muster_samples',
         type=int,
         default=5,
-        help='Random ASAP pieces scored with MUSTER at each validation step. <= 0 disables MUSTER validation.',
+        help='Random ASAP pieces scored with MUSTER whenever the MUSTER cadence triggers. <= 0 disables MUSTER validation.',
+    )
+    parser.add_argument(
+        '--eval_muster_steps',
+        type=int,
+        default=5000,
+        help='Run MUSTER subset validation every N training steps. <= 0 disables MUSTER validation.',
     )
     parser.add_argument(
         '--eval_muster_split_file',
@@ -1304,6 +1321,8 @@ def main():
         raise ValueError("--eval_num_workers must be non-negative.")
     if args.eval_muster_samples < 0:
         raise ValueError("--eval_muster_samples must be non-negative.")
+    if args.eval_muster_steps < 0:
+        raise ValueError("--eval_muster_steps must be non-negative.")
     if args.eval_muster_temperature < 0:
         raise ValueError("--eval_muster_temperature must be non-negative.")
     
@@ -1411,7 +1430,7 @@ def main():
             "num_workers": args.eval_num_workers,
         }
 
-        run_muster_eval = args.eval_muster_samples > 0
+        run_muster_eval = args.eval_muster_samples > 0 and args.eval_muster_steps > 0
         muster_piece_pool = []
         muster_rng = random.Random(args.eval_muster_seed)
         muster_eval_ready = False
@@ -1430,7 +1449,7 @@ def main():
                     print(
                         "MUSTER subset validation enabled (distributed): "
                         f"sampling {args.eval_muster_samples} piece(s) from {len(muster_piece_pool)} ASAP items "
-                        f"across world_size={accelerator.num_processes} "
+                        f"across world_size={accelerator.num_processes} every {args.eval_muster_steps} step(s) "
                         f"(split file: {args.eval_muster_split_file})."
                     )
             elif ready_processes == 0:
@@ -1595,8 +1614,19 @@ def main():
                 autoregressive_samples=args.eval_autoregressive_samples,
             )
 
+            should_run_muster = (
+                run_muster_eval
+                and muster_eval_ready
+                and validation_step > 0
+                and validation_step % args.eval_muster_steps == 0
+            )
             muster_metrics = None
-            if run_muster_eval and muster_eval_ready:
+            if should_run_muster:
+                if accelerator.is_main_process:
+                    print(
+                        "Running MUSTER subset validation "
+                        f"at step {validation_step} across {accelerator.num_processes} rank(s)..."
+                    )
                 muster_metrics = _evaluate_muster_subset(
                     base_model,
                     accelerator,
@@ -1631,11 +1661,11 @@ def main():
                     f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
                 )
                 if run_muster_eval:
-                    if np.isfinite(muster_mer):
+                    if should_run_muster and np.isfinite(muster_mer):
                         message += f", MUSTER MER: {muster_mer:.2f}%"
                         if np.isfinite(muster_mer_with_voice):
                             message += f", MUSTER MER+V: {muster_mer_with_voice:.2f}%"
-                    else:
+                    elif should_run_muster:
                         message += ", MUSTER MER: n/a"
                 print(message)
 
