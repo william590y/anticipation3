@@ -1209,7 +1209,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=100)
+    parser.add_argument('--eval_steps', type=int, default=1000)
     parser.add_argument(
         '--eval_max_samples',
         type=int,
