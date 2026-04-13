@@ -940,7 +940,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=1000)
+    parser.add_argument('--eval_steps', type=int, default=500)
     parser.add_argument(
         '--eval_max_samples',
         type=int,
@@ -1000,7 +1000,7 @@ def main():
     parser.add_argument(
         '--original_weight_l2',
         type=float,
-        default=3e4,
+        default=1e5,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     args = parser.parse_args()
