@@ -58,6 +58,11 @@ def _format_sm_arch(capability):
     major, minor = capability
     return f"sm_{major}{minor}"
 
+def _is_cubin_compatible_with_device(selected_capability, compiled_capability):
+    selected_major, selected_minor = selected_capability
+    compiled_major, compiled_minor = compiled_capability
+    return compiled_major == selected_major and compiled_minor <= selected_minor
+
 def validate_selected_cuda_device_or_raise(force_cpu=False):
     if force_cpu or not torch.cuda.is_available():
         return
@@ -74,7 +79,10 @@ def validate_selected_cuda_device_or_raise(force_cpu=False):
     device_index = local_rank if 0 <= local_rank < torch.cuda.device_count() else 0
     props = torch.cuda.get_device_properties(device_index)
     selected_capability = (props.major, props.minor)
-    if selected_capability in supported_arches:
+    if any(
+        _is_cubin_compatible_with_device(selected_capability, compiled_capability)
+        for compiled_capability in supported_arches
+    ):
         return
 
     supported_text = " ".join(
