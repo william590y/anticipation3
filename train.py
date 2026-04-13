@@ -33,25 +33,89 @@ def check_model_for_nans(model):
             return True
     return False
 
-# Force CUDA if available
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    device_count = torch.cuda.device_count()
-    print(f"[ok] CUDA is available with {device_count} device(s)")
-    for i in range(device_count):
-        device_name = torch.cuda.get_device_name(i)
-        print(f"  Device {i}: {device_name}")
-        props = torch.cuda.get_device_properties(i)
-        print(f"    - Total memory: {props.total_memory / 1024**3:.2f} GB")
-        print(f"    - CUDA capability: {props.major}.{props.minor}")
-else:
-    device = torch.device("cpu")
-    print("[warn] CUDA is not available! Training will be much slower on CPU.")
+def _parse_sm_arch(arch_name):
+    if not arch_name.startswith("sm_"):
+        return None
+    digits = "".join(ch for ch in arch_name if ch.isdigit())
+    if len(digits) < 2:
+        return None
+    return int(digits[:-1]), int(digits[-1])
 
-# Explicitly print which device we're using
-print(f"Using device: {device}")
-print(f"PyTorch version: {torch.__version__}")
-print(f"CUDA version: {torch.version.cuda}")
+def _get_supported_sm_arches():
+    try:
+        arch_list = torch.cuda.get_arch_list()
+    except Exception:
+        return set()
+
+    supported = set()
+    for arch_name in arch_list:
+        parsed = _parse_sm_arch(arch_name)
+        if parsed is not None:
+            supported.add(parsed)
+    return supported
+
+def _format_sm_arch(capability):
+    major, minor = capability
+    return f"sm_{major}{minor}"
+
+def validate_selected_cuda_device_or_raise(force_cpu=False):
+    if force_cpu or not torch.cuda.is_available():
+        return
+
+    supported_arches = _get_supported_sm_arches()
+    if not supported_arches:
+        return
+
+    try:
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    except ValueError:
+        local_rank = 0
+
+    device_index = local_rank if 0 <= local_rank < torch.cuda.device_count() else 0
+    props = torch.cuda.get_device_properties(device_index)
+    selected_capability = (props.major, props.minor)
+    if selected_capability in supported_arches:
+        return
+
+    supported_text = " ".join(
+        _format_sm_arch(capability) for capability in sorted(supported_arches)
+    )
+    raise RuntimeError(
+        "Selected CUDA device is not supported by the installed PyTorch build. "
+        f"Device {device_index}: {props.name} ({_format_sm_arch(selected_capability)}). "
+        f"Supported CUDA capabilities in this PyTorch build: {supported_text}. "
+        "Install a newer PyTorch CUDA build that includes this GPU architecture "
+        "(PyTorch currently points B200/sm_100 users to CUDA 12.8 or 12.9 builds), "
+        "or rerun with --force_cpu."
+    )
+
+def report_runtime_device(force_cpu=False):
+    global device
+
+    if force_cpu:
+        device = torch.device("cpu")
+        print("Forcing CPU usage as requested")
+        print("[warn] CUDA probing skipped because --force_cpu was set.")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        device_count = torch.cuda.device_count()
+        print(f"[ok] CUDA is available with {device_count} device(s)")
+        for i in range(device_count):
+            device_name = torch.cuda.get_device_name(i)
+            print(f"  Device {i}: {device_name}")
+            props = torch.cuda.get_device_properties(i)
+            print(f"    - Total memory: {props.total_memory / 1024**3:.2f} GB")
+            print(f"    - CUDA capability: {props.major}.{props.minor}")
+    else:
+        device = torch.device("cpu")
+        print("[warn] CUDA is not available! Training will be much slower on CPU.")
+
+    # Explicitly print which device we're using
+    print(f"Using device: {device}")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA version: {torch.version.cuda}")
+
+device = torch.device("cpu")
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 PREFIX_CONTROLS = 33
@@ -1235,12 +1299,9 @@ def main():
     if args.eval_muster_temperature < 0:
         raise ValueError("--eval_muster_temperature must be non-negative.")
     
-    # Override device if requested
     global device
-    if args.force_cpu:
-        device = torch.device("cpu")
-        print("Forcing CPU usage as requested")
-    
+    validate_selected_cuda_device_or_raise(force_cpu=args.force_cpu)
+    report_runtime_device(force_cpu=args.force_cpu)
     print(f"Per-rank effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"Final device confirmation: {device}")
     
