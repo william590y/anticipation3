@@ -1,0 +1,21 @@
+{
+  "time_correct": 0,
+  "time_total": 0,
+  "dur_correct": 0,
+  "dur_total": 0,
+  "pitch_correct": 0,
+  "pitch_total": 0,
+  "overall_correct": 0,
+  "overall_total": 0,
+  "num_sequences_evaluated": 0,
+  "num_sequences_failed": 3,
+  "muster_enabled": false,
+  "num_sequences_muster_evaluated": 0,
+  "num_sequences_muster_failed": 0,
+  "time_accuracy": 0.0,
+  "dur_accuracy": 0.0,
+  "pitch_accuracy": 0.0,
+  "overall_accuracy": 0.0,
+  "autoregressive_accuracy": 0.0,
+  "autoregressive_accuracy_pct": 0.0
+}
