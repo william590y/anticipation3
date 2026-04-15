@@ -46,6 +46,12 @@ MAX_DUR = TIME_RESOLUTION*MAX_DURATION_IN_SECONDS
 
 MAX_INTERARRIVAL = TIME_RESOLUTION*MAX_INTERARRIVAL_IN_SECONDS
 
+# packed ASAP format
+#
+# When True, dummy score REST placeholders in the packed format always use
+# time=0 instead of mirroring the paired control time.
+DUMMY_REST_TIME_ZERO = True
+
 
 if __name__ == '__main__':
     print('Model constants:')

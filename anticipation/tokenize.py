@@ -8,6 +8,7 @@ import numpy as np
 
 from anticipation import ops
 from anticipation.config import *
+from anticipation.packed_sequence import dummy_rest_triplet
 from anticipation.vocab import *
 from anticipation.convert import compound_to_events, midi_to_interarrival, midi_to_compound
 from alignment import *
@@ -429,9 +430,9 @@ def tokenize4(datafiles, output, idx=0, debug=False, skip_Nones=True, prefix_con
             for t in matched_tuples[:k]:
                 cc = t[0]  # control triple (ATIME/ADUR/ANOTE with CONTROL offsets)
                 interleaved_tokens.extend(cc)
-                # Create a REST event at the same absolute time as control (duration=0)
+                # Create the packed dummy REST placeholder for this control.
                 cc_time = cc[0] - CONTROL_OFFSET
-                interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+                interleaved_tokens.extend(dummy_rest_triplet(cc_time))
 
             prefix_len = k
 

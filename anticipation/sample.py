@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from anticipation import ops
 from anticipation.config import *
+from anticipation.packed_sequence import dummy_rest_triplet
 from anticipation.vocab import *
 
 
@@ -167,15 +168,13 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
     
     tokens = []
     
-    # Step 1: Build prefix with k control+rest pairs (matching training format exactly)
-    # Each control is followed by a rest at the same time: [ctrl_time, ctrl_dur, ctrl_note, rest_time, 0, REST]
+    # Step 1: Build prefix with k control+REST placeholder pairs.
     k = min(prefix_controls, len(controls) // 3)
     for i in range(k):
         ctrl = controls_shifted[i*3:i*3+3]
         tokens.extend(ctrl)
-        # Add rest triplet: time (without CONTROL_OFFSET), duration 0, REST token
         cc_time = ctrl[0] - CONTROL_OFFSET
-        tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+        tokens.extend(dummy_rest_triplet(cc_time))
     
     # Step 2: Generate performance for all controls
     # Training adds: score_i, then (if i+k < N) ctrl_(i+k)
@@ -245,7 +244,7 @@ def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_con
         ctrl = controls_shifted[i*3:i*3+3]
         tokens.extend(ctrl)
         cc_time = ctrl[0] - CONTROL_OFFSET
-        tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+        tokens.extend(dummy_rest_triplet(cc_time))
     
     # Step 2: Generate performance with rejection sampling for correct pitch
     num_controls = len(controls) // 3

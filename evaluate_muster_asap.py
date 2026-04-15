@@ -24,6 +24,7 @@ from anticipation.asap_aligned_stream import (
     build_raw_performance_control_triplets,
 )
 from anticipation.config import CONTEXT_SIZE
+from anticipation.packed_sequence import dummy_rest_triplet
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
@@ -90,7 +91,7 @@ def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
     for control_triplet in control_triplets[:k]:
         header.extend(control_triplet)
         ctrl_time = max(0, control_triplet[0] - ATIME_OFFSET)
-        header.extend([TIME_OFFSET + ctrl_time, DUR_OFFSET + 0, REST])
+        header.extend(dummy_rest_triplet(ctrl_time))
     return header, k
 
 

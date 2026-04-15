@@ -26,6 +26,7 @@ from anticipation.asap_aligned_stream import (
 )
 from anticipation.packed_sequence import (
     ALTERNATING_START,
+    dummy_rest_triplet,
     is_dummy_score_triplet,
     is_prefix_placeholder_triplet,
     is_real_score_triplet,
@@ -239,9 +240,8 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                     perf_triplet[2] + ANOTE_OFFSET    # pitch
                 ])
                 
-                # Add rest triplet
-                cc_time = max(0, local_perf_time)  # Clamp to non-negative
-                interleaved_tokens.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+                # Add dummy REST score triplet
+                interleaved_tokens.extend(dummy_rest_triplet(local_perf_time))
             
             # Main body: alternate score/control
             # Uses notes [0:] for scores and notes [k:] for controls from subset
@@ -251,7 +251,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 local_perf_time = perf_triplet[0] - perf_min_time
                 score_triplet = global_score_triplets[item_idx]
                 if score_triplet is None:
-                    interleaved_tokens.extend([TIME_OFFSET + max(0, local_perf_time), DUR_OFFSET + 0, REST])
+                    interleaved_tokens.extend(dummy_rest_triplet(local_perf_time))
                 else:
                     interleaved_tokens.extend([
                         score_triplet[0] - min_score_time_units,

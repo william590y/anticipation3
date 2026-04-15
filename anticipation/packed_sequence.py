@@ -1,15 +1,17 @@
-"""Helpers for reading and traversing packed ASAP training sequences."""
+"""Helpers for reading, emitting, and traversing packed ASAP training sequences."""
 
 from __future__ import annotations
 
-from anticipation.config import EVENT_SIZE
+from anticipation.config import DUMMY_REST_TIME_ZERO, EVENT_SIZE
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
     ATIME_OFFSET,
     CONTROL_OFFSET,
+    DUR_OFFSET,
     REST,
     SEPARATOR,
+    TIME_OFFSET,
 )
 
 
@@ -84,6 +86,16 @@ def control_triplet_to_raw(triplet: list[int] | tuple[int, int, int]) -> list[in
         _to_int(triplet[1]) - ADUR_OFFSET,
         _to_int(triplet[2]) - ANOTE_OFFSET,
     ]
+
+
+def dummy_rest_time_token(local_time_units: int) -> int:
+    if DUMMY_REST_TIME_ZERO:
+        return TIME_OFFSET
+    return TIME_OFFSET + max(0, int(local_time_units))
+
+
+def dummy_rest_triplet(local_time_units: int) -> list[int]:
+    return [dummy_rest_time_token(local_time_units), DUR_OFFSET + 0, REST]
 
 
 def extract_packed_components(
