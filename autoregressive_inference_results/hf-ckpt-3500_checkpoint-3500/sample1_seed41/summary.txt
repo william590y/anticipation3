@@ -5,7 +5,8 @@ Test file: tmp_first_test_window.txt
 Total sequences available: 1
 Sampled sequences: 1
 Constrained score decoding: True
-MUSTER scoring enabled: True
+Ground-truth score tokens fed: 1
+MUSTER scoring enabled: False
 
 Aggregate metrics:
   Autoregressive accuracy (pitch): 15.44%
@@ -16,16 +17,8 @@ Aggregate metrics:
   Sequences failed: 0
   Mean per-sequence pitch accuracy: 15.44% (+-0.00)
 
-Aggregate MUSTER metrics:
-  Windows MUSTER-evaluated: 0
-  Windows MUSTER-failed: 1
-
 Per-sequence outputs (for successful sequences):
   input_performance.mid
   ground_truth_score.mid
   output_score.mid
   stats.json
-  ground_truth_score.xml
-  output_score.xml
-  muster_metrics.json
-  muster_work/

@@ -195,8 +195,13 @@ def autoregressive_generate_score(
     score_start_idx: int,
     device: str,
     constrain_score_tokens: bool = True,
-) -> list[int]:
+    ground_truth_score_tokens_to_feed: int = 0,
+) -> tuple[list[int], int]:
+    if ground_truth_score_tokens_to_feed < 0:
+        raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
+
     context = list(tokens[:score_start_idx])
+    fed_score_tokens = 0
 
     with torch.inference_mode():
         primed = model(
@@ -220,12 +225,16 @@ def autoregressive_generate_score(
         while pos + 5 < len(tokens):
             if is_score_triplet(tokens, pos):
                 for slot in range(3):
-                    logits = next_logits
-                    if constrain_score_tokens:
-                        logits = constrain_score_token_logits(logits, slot)
-                    predicted = int(logits.argmax().item())
-                    context.append(predicted)
-                    feed_token(predicted)
+                    if fed_score_tokens < ground_truth_score_tokens_to_feed:
+                        token = int(tokens[pos + slot])
+                        fed_score_tokens += 1
+                    else:
+                        logits = next_logits
+                        if constrain_score_tokens:
+                            logits = constrain_score_token_logits(logits, slot)
+                        token = int(logits.argmax().item())
+                    context.append(token)
+                    feed_token(token)
 
                 pos += 3
 
@@ -240,7 +249,7 @@ def autoregressive_generate_score(
                 feed_token(token)
                 pos += 1
 
-    return context
+    return context, fed_score_tokens
 
 
 def triplets_to_events(triplets: Iterable[list[int]]) -> list[int]:
@@ -376,6 +385,7 @@ def evaluate_checkpoint(
     output_dir: Path,
     constrain_score_tokens: bool,
     compute_muster: bool,
+    ground_truth_score_tokens_to_feed: int,
 ) -> dict[str, float | int]:
     model, device = load_model(checkpoint_path, config_source)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -394,6 +404,7 @@ def evaluate_checkpoint(
         "muster_enabled": compute_muster,
         "num_sequences_muster_evaluated": 0,
         "num_sequences_muster_failed": 0,
+        "ground_truth_score_tokens_to_feed": ground_truth_score_tokens_to_feed,
     }
     muster_aggregate = {key: [] for key in MUSTER_METRIC_KEYS}
     per_sequence = []
@@ -412,12 +423,13 @@ def evaluate_checkpoint(
             if not gt_score:
                 raise ValueError("No ground-truth score triplets found")
 
-            predicted_tokens = autoregressive_generate_score(
+            predicted_tokens, fed_score_tokens = autoregressive_generate_score(
                 model,
                 tokens,
                 ALTERNATING_START,
                 device,
                 constrain_score_tokens=constrain_score_tokens,
+                ground_truth_score_tokens_to_feed=ground_truth_score_tokens_to_feed,
             )
             _, pred_score = extract_components(predicted_tokens, ALTERNATING_START)
             if not pred_score:
@@ -431,6 +443,7 @@ def evaluate_checkpoint(
             metrics["num_gt_notes"] = len(gt_score)
             metrics["num_pred_notes"] = len(pred_score)
             metrics["original_index"] = original_index
+            metrics["ground_truth_score_tokens_fed"] = fed_score_tokens
 
             seq_dir = output_dir / f"sequence_{original_index:07d}"
             seq_dir.mkdir(parents=True, exist_ok=True)
@@ -576,6 +589,7 @@ def write_summary(
         f"Total sequences available: {total_available}",
         f"Sampled sequences: {len(sampled_lines)}",
         f"Constrained score decoding: {constrain_score_tokens}",
+        f"Ground-truth score tokens fed: {aggregate.get('ground_truth_score_tokens_to_feed', 0)}",
         f"MUSTER scoring enabled: {aggregate.get('muster_enabled', False)}",
         "",
         "Aggregate metrics:",
@@ -715,10 +729,21 @@ def main():
         action="store_true",
         help="Also compute MUSTER scores for predicted vs ground-truth score windows",
     )
+    parser.add_argument(
+        "--ground-truth-score-tokens-to-feed",
+        type=int,
+        default=1,
+        help=(
+            "Number of leading score tokens to copy from ground truth before "
+            "autoregressive decoding (default: 1, set 0 for the old behavior)"
+        ),
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.test_file):
         raise FileNotFoundError(f"Test file not found: {args.test_file}")
+    if args.ground_truth_score_tokens_to_feed < 0:
+        raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
     if args.compute_muster:
         check_muster_installation()
 
@@ -756,6 +781,7 @@ def main():
         output_dir=output_dir,
         constrain_score_tokens=not args.no_slot_constraints,
         compute_muster=args.compute_muster,
+        ground_truth_score_tokens_to_feed=args.ground_truth_score_tokens_to_feed,
     )
 
     write_summary(
@@ -774,6 +800,10 @@ def main():
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Sequences evaluated: {aggregate['num_sequences_evaluated']}")
     print(f"Sequences failed: {aggregate['num_sequences_failed']}")
+    print(
+        f"Ground-truth score tokens fed: "
+        f"{aggregate['ground_truth_score_tokens_to_feed']}"
+    )
     print(
         f"Autoregressive accuracy (pitch): "
         f"{aggregate['autoregressive_accuracy_pct']:.2f}%"

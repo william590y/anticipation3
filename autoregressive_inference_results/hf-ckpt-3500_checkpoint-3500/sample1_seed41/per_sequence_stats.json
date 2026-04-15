@@ -17,7 +17,6 @@
     "autoregressive_accuracy_pct": 15.441176470588236,
     "num_pred_notes": 134,
     "original_index": 0,
-    "muster_status": "failed",
-    "muster_error": "MUSTER evaluation failed"
+    "ground_truth_score_tokens_fed": 1
   }
 ]
