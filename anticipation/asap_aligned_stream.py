@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
 import hashlib
 import json
 import os
@@ -24,6 +25,20 @@ def _path_str(pathlike) -> str:
 
 def event_tokens_to_triplets(events):
     return [events[i : i + 3] for i in range(0, len(events), 3) if i + 2 < len(events)]
+
+
+def _bins_per_quarter(target_beat_interval):
+    bins_per_quarter = target_beat_interval * TIME_RESOLUTION
+    rounded = round(bins_per_quarter)
+    if abs(bins_per_quarter - rounded) > 1e-9:
+        raise ValueError(
+            "target_beat_interval does not map to an integer number of bins per quarter note"
+        )
+    return int(rounded)
+
+
+def _quarter_length_to_bins(value, bins_per_quarter):
+    return Fraction(value).limit_denominator() * bins_per_quarter
 
 
 def build_raw_performance_control_triplets(perf_midi):
@@ -127,6 +142,52 @@ def build_full_normalized_score_triplets(
         score_beat_times,
         target_beat_interval=target_beat_interval,
     )
+
+
+def build_full_normalized_score_triplets_from_xml(
+    score_xml,
+    target_beat_interval=TARGET_BEAT_INTERVAL,
+    require_exact_grid=False,
+):
+    """
+    Convert ASAP MusicXML notes to the fixed-beat score grid.
+
+    When ``require_exact_grid`` is True, this raises if any note onset/duration cannot
+    be represented exactly on the current token grid.
+    """
+    from music21 import chord, converter
+
+    bins_per_quarter = _bins_per_quarter(target_beat_interval)
+    score = converter.parse(_path_str(score_xml))
+    triplets = []
+
+    for element in score.flatten().notes:
+        if getattr(element.duration, "isGrace", False):
+            continue
+
+        onset_bins = _quarter_length_to_bins(element.offset, bins_per_quarter)
+        dur_bins = _quarter_length_to_bins(element.quarterLength, bins_per_quarter)
+
+        if require_exact_grid and (
+            onset_bins.denominator != 1 or dur_bins.denominator != 1
+        ):
+            raise ValueError(
+                f"MusicXML note grid is not exactly representable at {bins_per_quarter} bins/quarter"
+            )
+
+        onset_units = int(round(float(onset_bins)))
+        dur_units = max(0, int(round(float(dur_bins))))
+        if dur_units <= 0:
+            continue
+
+        pitches = element.pitches if isinstance(element, chord.Chord) else [element.pitch]
+        for pitch in pitches:
+            triplets.append(
+                [TIME_OFFSET + onset_units, DUR_OFFSET + dur_units, NOTE_OFFSET + int(pitch.midi)]
+            )
+
+    triplets.sort(key=lambda triplet: (triplet[0], triplet[2], triplet[1]))
+    return triplets
 
 
 def _file_fingerprint(path):

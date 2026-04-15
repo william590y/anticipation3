@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from anticipation.asap_aligned_stream import (
     build_full_normalized_score_triplets as build_full_raw_score_triplets,
+    build_full_normalized_score_triplets_from_xml as build_full_xml_score_triplets,
     build_raw_performance_control_triplets,
 )
 from anticipation.config import CONTEXT_SIZE
@@ -55,7 +56,7 @@ ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
 SPLIT_FILE = "data/normalized_split.txt"
 CACHE_DIR = Path("data") / "asap_muster_cache"
-PREPROCESS_VERSION = "fair_asap_muster_v4_fixed_beat_gt"
+PREPROCESS_VERSION = "fair_asap_muster_v6_xml_score_fixed_beat_gt"
 DEFAULT_CHECKPOINT = "checkpoint-2000"
 DEFAULT_NUM_PIECES = 30
 RANDOM_SEED = 42
@@ -76,13 +77,28 @@ def build_performance_control_triplets(perf_midi):
     return normalize_control_triplets(build_raw_performance_control_triplets(perf_midi))
 
 
-def build_full_normalized_score_triplets(score_midi, score_beats):
-    # Keep GT score tempo-normalized to the training convention: 1 beat = 0.5 seconds.
+def build_full_normalized_score_triplets(score_midi, score_beats, score_xml=None):
+    # Prefer ASAP's MusicXML score when available so the GT notation comes from the
+    # score source MUSTER is designed for. We still project it onto the fixed quarter-
+    # note grid used by this repo (quarter=0.5s).
+    if score_xml and os.path.exists(score_xml):
+        try:
+            return build_full_xml_score_triplets(
+                score_xml,
+                target_beat_interval=TARGET_BEAT_INTERVAL,
+                require_exact_grid=True,
+            ), "xml_score_exact"
+        except ValueError:
+            return build_full_xml_score_triplets(
+                score_xml,
+                target_beat_interval=TARGET_BEAT_INTERVAL,
+            ), "xml_score_rounded_to_grid"
+
     return build_full_raw_score_triplets(
         score_midi,
         score_beats,
         target_beat_interval=TARGET_BEAT_INTERVAL,
-    )
+    ), "midi_score_annotations"
 
 
 def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
@@ -134,7 +150,7 @@ def _file_fingerprint(path):
 
 
 def build_piece_fingerprint(piece_info):
-    return {
+    fingerprint = {
         "version": PREPROCESS_VERSION,
         "target_beat_interval": TARGET_BEAT_INTERVAL,
         "prefix_controls": PREFIX_CONTROLS,
@@ -142,6 +158,9 @@ def build_piece_fingerprint(piece_info):
         "score_midi": _file_fingerprint(piece_info["score_midi"]),
         "score_beats": _file_fingerprint(piece_info["score_beats"]),
     }
+    if piece_info.get("score_xml") and os.path.exists(piece_info["score_xml"]):
+        fingerprint["score_xml"] = _file_fingerprint(piece_info["score_xml"])
+    return fingerprint
 
 
 def cache_path_for_piece(piece_info):
@@ -175,15 +194,17 @@ def preprocess_asap_piece(piece_info):
             **piece_info,
             "control_triplets": cached.get("control_triplets", []),
             "gt_score_triplets": cached.get("gt_score_triplets", []),
+            "gt_score_source": cached.get("gt_score_source", "unknown"),
             "cache_hit": True,
             "cache_path": str(cache_path),
         }
 
     try:
         control_triplets = build_performance_control_triplets(piece_info["perf_midi"])
-        gt_score_triplets = build_full_normalized_score_triplets(
+        gt_score_triplets, gt_score_source = build_full_normalized_score_triplets(
             piece_info["score_midi"],
             piece_info["score_beats"],
+            score_xml=piece_info.get("score_xml"),
         )
         if not control_triplets:
             raise ValueError("no performance control triplets found")
@@ -196,6 +217,7 @@ def preprocess_asap_piece(piece_info):
                 "fingerprint": fingerprint,
                 "control_triplets": control_triplets,
                 "gt_score_triplets": gt_score_triplets,
+                "gt_score_source": gt_score_source,
             },
         )
 
@@ -203,6 +225,7 @@ def preprocess_asap_piece(piece_info):
             **piece_info,
             "control_triplets": control_triplets,
             "gt_score_triplets": gt_score_triplets,
+            "gt_score_source": gt_score_source,
             "cache_hit": False,
             "cache_path": str(cache_path),
         }
@@ -226,6 +249,9 @@ def load_asap_metadata():
         perf_midi = os.path.join(ASAP_PATH, row["midi_performance"])
         score_midi = os.path.join(ASAP_PATH, row["midi_score"])
         score_beats = os.path.join(ASAP_PATH, row["midi_score_annotations"])
+        score_xml = None
+        if "xml_score" in row.index and isinstance(row["xml_score"], str) and row["xml_score"]:
+            score_xml = os.path.join(ASAP_PATH, row["xml_score"])
         if all(os.path.exists(path) for path in [perf_midi, score_midi, score_beats]):
             pieces.append(
                 {
@@ -233,6 +259,7 @@ def load_asap_metadata():
                     "perf_midi": perf_midi,
                     "score_midi": score_midi,
                     "score_beats": score_beats,
+                    "score_xml": score_xml if score_xml and os.path.exists(score_xml) else None,
                 }
             )
     return pieces
@@ -513,6 +540,7 @@ def evaluate_asap_muster(
             gen_stats["num_controls_used"] == len(control_triplets)
         )
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
+        metrics["gt_score_source"] = piece_info.get("gt_score_source", "unknown")
         metrics["window_mode"] = gen_stats["window_mode"]
         print_piece_muster_metrics(piece_name, metrics, gen_stats)
 

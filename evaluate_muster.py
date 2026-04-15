@@ -11,6 +11,7 @@ This module provides:
 
 from __future__ import annotations
 
+from collections import defaultdict
 import json
 import os
 import shutil
@@ -214,17 +215,20 @@ def normalize_triplet_times(triplets):
 
 def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
     """
-    Convert score triplets directly to single-part MusicXML using raw ElementTree.
+    Convert score triplets directly to single-part MusicXML on the exact token grid.
+
+    This preserves onset/duration bins exactly with respect to the current triplet
+    representation instead of snapping note values to a small symbolic palette.
     """
     try:
         from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
 
-        bins_per_second = TIME_RESOLUTION
-        bins_per_quarter = max(1, round(bins_per_second * beat_seconds))
-        divisions = bins_per_quarter
+        bins_per_quarter = round(TIME_RESOLUTION * beat_seconds)
+        if bins_per_quarter <= 0:
+            raise ValueError("beat_seconds produced a non-positive quarter-note grid")
         bins_per_measure = bins_per_quarter * 4
 
-        notes = []
+        grouped_notes = defaultdict(list)
         for triplet in triplets:
             onset = triplet[0] - TIME_OFFSET
             dur = triplet[1] - DUR_OFFSET
@@ -233,14 +237,10 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                 continue
             if dur <= 0:
                 dur = 1
-            notes.append((onset, dur, pitch))
+            grouped_notes[(int(onset), int(dur))].append(int(pitch))
 
-        if not notes:
+        if not grouped_notes:
             return False
-
-        notes.sort(key=lambda item: item[0])
-        total_bins = max(onset + dur for onset, dur, _ in notes)
-        num_measures = max(1, (total_bins + bins_per_measure - 1) // bins_per_measure)
 
         def midi_to_pitch_elements(parent, midi_pitch):
             pitch_el = SubElement(parent, "pitch")
@@ -253,31 +253,67 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                 SubElement(pitch_el, "alter").text = "1"
             SubElement(pitch_el, "octave").text = str(octave)
 
-        def dur_to_type(dur_bins):
-            quarter = divisions
-            mapping = [
-                (quarter * 8, "breve"),
-                (quarter * 4, "whole"),
-                (quarter * 2, "half"),
-                (quarter, "quarter"),
-                (quarter // 2, "eighth"),
-                (quarter // 4, "16th"),
-                (quarter // 8, "32nd"),
-            ]
-            best_type, best_dur = "quarter", quarter
-            best_dist = abs(dur_bins - quarter)
-            for mapped_dur, note_type in mapping:
-                if mapped_dur > 0 and abs(dur_bins - mapped_dur) < best_dist:
-                    best_dist = abs(dur_bins - mapped_dur)
-                    best_type = note_type
-                    best_dur = mapped_dur
-            return best_type, best_dur
+        def emit_note(parent, pitch, dur, voice, chord_member=False):
+            note_el = SubElement(parent, "note")
+            if chord_member:
+                SubElement(note_el, "chord")
+            midi_to_pitch_elements(note_el, pitch)
+            SubElement(note_el, "duration").text = str(dur)
+            SubElement(note_el, "voice").text = str(voice)
+            SubElement(note_el, "staff").text = "1"
 
-        def emit_forward(parent, duration_bins):
+        def emit_rest(parent, dur, voice=1):
+            note_el = SubElement(parent, "note")
+            SubElement(note_el, "rest")
+            SubElement(note_el, "duration").text = str(dur)
+            SubElement(note_el, "voice").text = str(voice)
+            SubElement(note_el, "staff").text = "1"
+
+        def emit_shift(parent, tag_name, duration_bins):
             if duration_bins <= 0:
                 return
-            forward_el = SubElement(parent, "forward")
-            SubElement(forward_el, "duration").text = str(duration_bins)
+            shift_el = SubElement(parent, tag_name)
+            SubElement(shift_el, "duration").text = str(duration_bins)
+
+        chord_events = [
+            {
+                "onset": onset,
+                "dur": dur,
+                "pitches": sorted(pitches),
+            }
+            for (onset, dur), pitches in grouped_notes.items()
+        ]
+        chord_events.sort(key=lambda event: (event["onset"], event["dur"], event["pitches"]))
+
+        voices = []
+        voice_end_times = []
+        for event in chord_events:
+            assigned_voice = None
+            for voice_idx, end_time in enumerate(voice_end_times):
+                if end_time <= event["onset"]:
+                    assigned_voice = voice_idx
+                    break
+            if assigned_voice is None:
+                assigned_voice = len(voices)
+                voices.append([])
+                voice_end_times.append(0)
+            voices[assigned_voice].append(event)
+            voice_end_times[assigned_voice] = event["onset"] + event["dur"]
+
+        total_bins = max(event["onset"] + event["dur"] for event in chord_events)
+        num_measures = max(1, (total_bins + bins_per_measure - 1) // bins_per_measure)
+        voice_measure_events = [[[] for _ in range(num_measures)] for _ in voices]
+        for voice_idx, voice_events in enumerate(voices):
+            for event in voice_events:
+                measure_idx = min(event["onset"] // bins_per_measure, num_measures - 1)
+                measure_start = measure_idx * bins_per_measure
+                voice_measure_events[voice_idx][measure_idx].append(
+                    {
+                        "onset": event["onset"] - measure_start,
+                        "dur": event["dur"],
+                        "pitches": event["pitches"],
+                    }
+                )
 
         root = Element("score-partwise", version="3.0")
         part_list = SubElement(root, "part-list")
@@ -286,13 +322,10 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
         part_el = SubElement(root, "part", id="P1")
 
         for measure_idx in range(num_measures):
-            measure_start = measure_idx * bins_per_measure
-            measure_end = measure_start + bins_per_measure
             measure_el = SubElement(part_el, "measure", number=str(measure_idx + 1))
-
             if measure_idx == 0:
                 attrs = SubElement(measure_el, "attributes")
-                SubElement(attrs, "divisions").text = str(divisions)
+                SubElement(attrs, "divisions").text = str(bins_per_quarter)
                 key_el = SubElement(attrs, "key")
                 SubElement(key_el, "fifths").text = "0"
                 time_el = SubElement(attrs, "time")
@@ -302,43 +335,41 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                 SubElement(clef_el, "sign").text = "G"
                 SubElement(clef_el, "line").text = "2"
 
-            measure_notes = [
-                (onset - measure_start, dur, pitch)
-                for onset, dur, pitch in notes
-                if measure_start <= onset < measure_end
+            active_voices = [
+                voice_idx
+                for voice_idx, measure_events in enumerate(voice_measure_events)
+                if measure_events[measure_idx]
             ]
+            if not active_voices:
+                emit_rest(measure_el, bins_per_measure)
+                continue
 
-            cursor = 0
-            note_pos = 0
-            while note_pos < len(measure_notes):
-                onset = measure_notes[note_pos][0]
-                if onset > cursor:
-                    emit_forward(measure_el, onset - cursor)
-                    cursor = onset
+            for active_idx, voice_idx in enumerate(active_voices):
+                cursor = 0
+                events = sorted(
+                    voice_measure_events[voice_idx][measure_idx],
+                    key=lambda event: (event["onset"], event["dur"], event["pitches"]),
+                )
+                for event in events:
+                    onset = event["onset"]
+                    dur = event["dur"]
+                    pitches = event["pitches"]
+                    if onset > cursor:
+                        emit_shift(measure_el, "forward", onset - cursor)
+                        cursor = onset
 
-                chord_notes = []
-                while note_pos < len(measure_notes) and measure_notes[note_pos][0] == onset:
-                    chord_notes.append(measure_notes[note_pos])
-                    note_pos += 1
+                    for chord_idx, pitch in enumerate(pitches):
+                        emit_note(
+                            measure_el,
+                            pitch,
+                            dur,
+                            voice=voice_idx + 1,
+                            chord_member=chord_idx > 0,
+                        )
+                    cursor = max(cursor, onset + dur)
 
-                group_advance = 0
-                for chord_idx, (_, dur, pitch) in enumerate(chord_notes):
-                    note_el = SubElement(measure_el, "note")
-                    if chord_idx > 0:
-                        SubElement(note_el, "chord")
-                    midi_to_pitch_elements(note_el, pitch)
-                    note_type, clamped_dur = dur_to_type(dur)
-                    SubElement(note_el, "duration").text = str(clamped_dur)
-                    SubElement(note_el, "type").text = note_type
-                    group_advance = max(group_advance, clamped_dur)
-
-                cursor = max(cursor, onset + group_advance)
-
-            if not measure_notes:
-                rest_el = SubElement(measure_el, "note")
-                SubElement(rest_el, "rest")
-                SubElement(rest_el, "duration").text = str(divisions * 4)
-                SubElement(rest_el, "type").text = "whole"
+                if active_idx < len(active_voices) - 1:
+                    emit_shift(measure_el, "backup", cursor)
 
         tree = ElementTree(root)
         try:
