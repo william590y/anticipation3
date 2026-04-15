@@ -1,0 +1,17 @@
+[
+  {
+    "piece": "Liszt/Concert_Etude_S145/2/Lo02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/be11c90a559baec58b26.json"
+  },
+  {
+    "piece": "Beethoven/Piano_Sonatas/16-1/LeeSH02M.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/11f94f33fbf17edd3bd3.json"
+  },
+  {
+    "piece": "Bach/Fugue/bwv_883/Herbert02.mid",
+    "cache_hit": true,
+    "cache_path": "data/asap_muster_cache/1dd6457f9f3738198548.json"
+  }
+]
