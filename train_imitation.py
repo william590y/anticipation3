@@ -86,6 +86,7 @@ def build_imitation_batch(
     batch,
     teacher_prob,
     max_rollin_score_slots,
+    rollin_start_mode,
     sequence_fraction,
     constrain_score_tokens,
     rollin_temperature,
@@ -146,7 +147,26 @@ def build_imitation_batch(
                 if seq_len <= ALTERNATING_START:
                     continue
 
-                prefix = expert_seq[:ALTERNATING_START].tolist()
+                score_positions = [
+                    pos
+                    for pos in iter_score_slot_positions(seq_len, ALTERNATING_START)
+                    if pos + 5 < seq_len
+                ]
+                if not score_positions:
+                    continue
+
+                if rollin_start_mode == "random":
+                    start_slot_index = random.randrange(len(score_positions))
+                else:
+                    start_slot_index = 0
+
+                rollout_positions = score_positions[start_slot_index:]
+                if max_rollin_score_slots > 0:
+                    rollout_positions = rollout_positions[:max_rollin_score_slots]
+                if not rollout_positions:
+                    continue
+
+                prefix = expert_seq[:rollout_positions[0]].tolist()
                 prefix_tensor = torch.tensor([prefix], device=input_ids.device, dtype=torch.long)
                 primed = policy_model(prefix_tensor, use_cache=True)
                 past = primed.past_key_values
@@ -161,14 +181,7 @@ def build_imitation_batch(
                     return output.past_key_values, output.logits[0, -1, :]
 
                 rolled_any_slot = False
-                slot_count = 0
-
-                for pos in iter_score_slot_positions(seq_len, ALTERNATING_START):
-                    if pos + 5 >= seq_len:
-                        break
-                    if max_rollin_score_slots > 0 and slot_count >= max_rollin_score_slots:
-                        break
-
+                for pos in rollout_positions:
                     trial_past = past
                     trial_next_logits = next_logits
                     predicted_triplet = []
@@ -201,7 +214,6 @@ def build_imitation_batch(
                         past, next_logits = feed_token(past, token)
 
                     rolled_any_slot = True
-                    slot_count += 1
 
                 if rolled_any_slot:
                     rolled_sequences += 1
@@ -313,6 +325,13 @@ def main():
         help="Maximum score slots per selected sequence to roll in with the current policy. <= 0 means full sequence.",
     )
     parser.add_argument(
+        "--il_rollin_start_mode",
+        type=str,
+        default="random",
+        choices=("random", "prefix"),
+        help="Where the rollout window starts. 'random' samples a score-slot start uniformly; 'prefix' always starts at the first score slot.",
+    )
+    parser.add_argument(
         "--il_sequence_fraction",
         type=float,
         default=1.0,
@@ -397,6 +416,7 @@ def main():
                 "Imitation learning config: "
                 f"rollin_interval={args.il_rollin_interval}, "
                 f"rollin_score_slots={args.il_rollin_score_slots}, "
+                f"rollin_start_mode={args.il_rollin_start_mode}, "
                 f"sequence_fraction={args.il_sequence_fraction:.2f}, "
                 f"teacher_prob_start={args.il_teacher_prob_start:.2f}, "
                 f"teacher_prob_end={args.il_teacher_prob_end:.2f}"
@@ -630,6 +650,7 @@ def main():
                                     batch=batch,
                                     teacher_prob=teacher_prob,
                                     max_rollin_score_slots=effective_rollin_slots,
+                                    rollin_start_mode=args.il_rollin_start_mode,
                                     sequence_fraction=args.il_sequence_fraction,
                                     constrain_score_tokens=not args.il_no_constrain_score_tokens,
                                     rollin_temperature=args.il_rollin_temperature,

@@ -43,6 +43,7 @@ from anticipation.vocab import (
     ANOTE_OFFSET,
     ATIME_OFFSET,
     DUR_OFFSET,
+    NOTE_OFFSET,
     TIME_OFFSET,
 )
 from evaluate_muster import (
@@ -396,6 +397,7 @@ def evaluate_checkpoint(
     }
     muster_aggregate = {key: [] for key in MUSTER_METRIC_KEYS}
     per_sequence = []
+    failed_sequences = []
 
     for original_index, line in tqdm(
         sampled_lines,
@@ -500,6 +502,13 @@ def evaluate_checkpoint(
         except Exception as exc:
             print(f"  Sequence {original_index}: failed - {exc}")
             aggregate["num_sequences_failed"] += 1
+            failed_sequences.append(
+                {
+                    "original_index": original_index,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
 
     if aggregate["time_total"] > 0:
         aggregate["time_accuracy"] = 100.0 * aggregate["time_correct"] / aggregate["time_total"]
@@ -537,9 +546,13 @@ def evaluate_checkpoint(
         aggregate["per_sequence_pitch_accuracy_std"] = float(
             np.std([item["pitch_accuracy"] for item in per_sequence])
         )
+    if failed_sequences:
+        aggregate["failed_sequences"] = failed_sequences
 
     with open(output_dir / "per_sequence_stats.json", "w", encoding="utf-8") as handle:
         json.dump(per_sequence, handle, indent=2)
+    with open(output_dir / "failed_sequences.json", "w", encoding="utf-8") as handle:
+        json.dump(failed_sequences, handle, indent=2)
     with open(output_dir / "aggregate_stats.json", "w", encoding="utf-8") as handle:
         json.dump(aggregate, handle, indent=2)
 
@@ -613,23 +626,33 @@ def write_summary(
                     f"(+-{aggregate['voice_error_rate_std']:.2f})"
                 )
 
-    summary_lines.extend(
-        [
-            "",
-            "Per-sequence outputs:",
-            "  input_performance.mid",
-            "  ground_truth_score.mid",
-            "  output_score.mid",
-            "  stats.json",
-        ]
-    )
-    if aggregate.get("muster_enabled"):
+    if aggregate["num_sequences_evaluated"] > 0:
         summary_lines.extend(
             [
-                "  ground_truth_score.xml",
-                "  output_score.xml",
-                "  muster_metrics.json",
-                "  muster_work/",
+                "",
+                "Per-sequence outputs (for successful sequences):",
+                "  input_performance.mid",
+                "  ground_truth_score.mid",
+                "  output_score.mid",
+                "  stats.json",
+            ]
+        )
+        if aggregate.get("muster_enabled"):
+            summary_lines.extend(
+                [
+                    "  ground_truth_score.xml",
+                    "  output_score.xml",
+                    "  muster_metrics.json",
+                    "  muster_work/",
+                ]
+            )
+    else:
+        summary_lines.extend(
+            [
+                "",
+                "Per-sequence outputs:",
+                "  No per-sequence outputs were created because all sampled sequences failed.",
+                "  See failed_sequences.json for the recorded exceptions.",
             ]
         )
 
