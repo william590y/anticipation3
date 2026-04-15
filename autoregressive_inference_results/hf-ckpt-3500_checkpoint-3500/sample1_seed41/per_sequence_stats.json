@@ -1,0 +1,23 @@
+[
+  {
+    "time_correct": 1,
+    "time_total": 136,
+    "dur_correct": 1,
+    "dur_total": 136,
+    "pitch_correct": 21,
+    "pitch_total": 136,
+    "overall_correct": 0,
+    "overall_total": 136,
+    "num_gt_notes": 136,
+    "time_accuracy": 0.7352941176470589,
+    "dur_accuracy": 0.7352941176470589,
+    "pitch_accuracy": 15.441176470588236,
+    "overall_accuracy": 0.0,
+    "autoregressive_accuracy": 0.15441176470588236,
+    "autoregressive_accuracy_pct": 15.441176470588236,
+    "num_pred_notes": 134,
+    "original_index": 0,
+    "muster_status": "failed",
+    "muster_error": "MUSTER evaluation failed"
+  }
+]

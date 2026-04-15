@@ -35,6 +35,18 @@ IS_WINDOWS = sys.platform.startswith("win")
 EXE_EXT = ".exe" if IS_WINDOWS else ""
 
 
+def resolve_muster_program_path(name: str) -> Path:
+    candidates = [MUSTER_PROGRAMS / f"{name}{EXE_EXT}"]
+    if EXE_EXT:
+        candidates.append(MUSTER_PROGRAMS / name)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
+
+
 def guess_default_checkpoint() -> str:
     candidates = []
     for candidate in (
@@ -57,7 +69,7 @@ def guess_default_checkpoint() -> str:
 
 
 def get_muster_exe(name: str) -> str:
-    return str(MUSTER_PROGRAMS / f"{name}{EXE_EXT}")
+    return str(resolve_muster_program_path(name))
 
 
 def compile_muster_linux() -> bool:
@@ -112,7 +124,7 @@ def check_muster_installation() -> bool:
 
     missing = []
     for prog in required_programs:
-        exe_path = MUSTER_PROGRAMS / f"{prog}{EXE_EXT}"
+        exe_path = resolve_muster_program_path(prog)
         if not exe_path.exists():
             missing.append(prog)
 
@@ -132,7 +144,7 @@ def check_muster_installation() -> bool:
     still_missing = [
         prog
         for prog in required_programs
-        if not (MUSTER_PROGRAMS / f"{prog}{EXE_EXT}").exists()
+        if not resolve_muster_program_path(prog).exists()
     ]
     if still_missing:
         print(f"ERROR: Still missing after compilation: {still_missing}")
