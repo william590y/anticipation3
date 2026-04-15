@@ -1,0 +1,19 @@
+{
+  "time_correct": 3,
+  "time_total": 122,
+  "dur_correct": 8,
+  "dur_total": 122,
+  "pitch_correct": 122,
+  "pitch_total": 122,
+  "overall_correct": 0,
+  "overall_total": 122,
+  "num_gt_notes": 122,
+  "time_accuracy": 2.459016393442623,
+  "dur_accuracy": 6.557377049180328,
+  "pitch_accuracy": 100.0,
+  "overall_accuracy": 0.0,
+  "autoregressive_accuracy": 1.0,
+  "autoregressive_accuracy_pct": 100.0,
+  "num_pred_notes": 136,
+  "original_index": 335426
+}

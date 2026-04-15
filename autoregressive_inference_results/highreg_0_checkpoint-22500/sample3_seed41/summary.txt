@@ -8,14 +8,15 @@ Constrained score decoding: True
 MUSTER scoring enabled: False
 
 Aggregate metrics:
-  Autoregressive accuracy (pitch): 0.00%
-  Time accuracy: 0.00%
-  Duration accuracy: 0.00%
-  Exact triplet accuracy: 0.00%
-  Sequences evaluated: 0
-  Sequences failed: 3
+  Autoregressive accuracy (pitch): 100.00%
+  Time accuracy: 33.42%
+  Duration accuracy: 35.19%
+  Exact triplet accuracy: 29.62%
+  Sequences evaluated: 3
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 100.00% (+-0.00)
 
-Per-sequence outputs:
+Per-sequence outputs (for successful sequences):
   input_performance.mid
   ground_truth_score.mid
   output_score.mid
