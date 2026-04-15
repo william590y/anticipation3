@@ -195,7 +195,7 @@ def autoregressive_generate_score(
     score_start_idx: int,
     device: str,
     constrain_score_tokens: bool = True,
-    ground_truth_score_tokens_to_feed: int = 0,
+    ground_truth_score_tokens_to_feed: int = 1,
 ) -> tuple[list[int], int]:
     if ground_truth_score_tokens_to_feed < 0:
         raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
@@ -589,7 +589,7 @@ def write_summary(
         f"Total sequences available: {total_available}",
         f"Sampled sequences: {len(sampled_lines)}",
         f"Constrained score decoding: {constrain_score_tokens}",
-        f"Ground-truth score tokens fed: {aggregate.get('ground_truth_score_tokens_to_feed', 0)}",
+        f"Ground-truth score tokens fed: {aggregate.get('ground_truth_score_tokens_to_feed', 1)}",
         f"MUSTER scoring enabled: {aggregate.get('muster_enabled', False)}",
         "",
         "Aggregate metrics:",

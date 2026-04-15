@@ -288,8 +288,10 @@ def load_asap_test_perfs(split_file):
 def autoregressive_generate_from_controls(
     model,
     control_triplets,
+    gt_score_triplets,
     device,
     temperature=0.0,
+    ground_truth_score_notes_to_feed=0,
 ):
     if not control_triplets:
         return [], {
@@ -298,8 +300,11 @@ def autoregressive_generate_from_controls(
             "total_performance_notes": 0,
             "prefix_controls_used": 0,
             "score_start_idx": 0,
+            "ground_truth_score_notes_fed": 0,
             "window_mode": "reset",
         }
+    if ground_truth_score_notes_to_feed < 0:
+        raise ValueError("--ground-truth-score-notes-to-feed must be non-negative")
 
     vocab_size = model.config.vocab_size
     header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
@@ -315,6 +320,7 @@ def autoregressive_generate_from_controls(
         "total_performance_notes": len(control_triplets),
         "prefix_controls_used": prefix_count,
         "score_start_idx": score_start_idx,
+        "ground_truth_score_notes_fed": 0,
         "window_mode": "reset",
     }
 
@@ -362,9 +368,26 @@ def autoregressive_generate_from_controls(
         return token
 
     while note_idx < len(control_triplets):
-        time_tok = decode_slot(TIME_OFFSET, DUR_OFFSET)
-        dur_tok = decode_slot(DUR_OFFSET, NOTE_OFFSET)
-        pitch_tok = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
+        use_ground_truth_note = (
+            note_idx < ground_truth_score_notes_to_feed
+            and note_idx < len(gt_score_triplets)
+            and stats["num_window_resets"] == 0
+        )
+        if use_ground_truth_note:
+            gt_triplet = gt_score_triplets[note_idx]
+            local_time_tok = int(gt_triplet[0] - score_time_offset)
+            time_tok = min(max(local_time_tok, TIME_OFFSET), DUR_OFFSET - 1)
+            dur_tok = min(max(int(gt_triplet[1]), DUR_OFFSET), NOTE_OFFSET - 1)
+            pitch_tok = min(max(int(gt_triplet[2]), NOTE_OFFSET), CONTROL_OFFSET - 1)
+
+            context.extend([time_tok, dur_tok, pitch_tok])
+            ensure_primed()
+            feed([time_tok, dur_tok, pitch_tok])
+            stats["ground_truth_score_notes_fed"] += 1
+        else:
+            time_tok = decode_slot(TIME_OFFSET, DUR_OFFSET)
+            dur_tok = decode_slot(DUR_OFFSET, NOTE_OFFSET)
+            pitch_tok = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
         pred_score_triplets.append(
             [time_tok + score_time_offset, dur_tok, pitch_tok]
         )
@@ -457,6 +480,7 @@ def evaluate_asap_muster(
     output_dir,
     config_source,
     temperature=0.0,
+    ground_truth_score_notes_to_feed=0,
 ):
     model, device = load_model(checkpoint_path, config_source=config_source)
     os.makedirs(output_dir, exist_ok=True)
@@ -495,8 +519,10 @@ def evaluate_asap_muster(
             pred_score_triplets, gen_stats = autoregressive_generate_from_controls(
                 model,
                 control_triplets,
+                gt_score_triplets,
                 device,
                 temperature=temperature,
+                ground_truth_score_notes_to_feed=ground_truth_score_notes_to_feed,
             )
         except Exception as exc:
             print(f"  {piece_name}: generation failed - {exc}")
@@ -533,6 +559,7 @@ def evaluate_asap_muster(
         metrics["prefix_controls_used"] = gen_stats["prefix_controls_used"]
         metrics["score_start_idx"] = gen_stats["score_start_idx"]
         metrics["num_window_resets"] = gen_stats["num_window_resets"]
+        metrics["ground_truth_score_notes_fed"] = gen_stats["ground_truth_score_notes_fed"]
         metrics["cache_hit"] = piece_info["cache_hit"]
         metrics["cache_path"] = piece_info["cache_path"]
         metrics["evaluation_protocol"] = "raw_score_control_driven"
@@ -558,6 +585,7 @@ def evaluate_asap_muster(
         "gt_score_beat_interval_sec": TARGET_BEAT_INTERVAL,
         "all_performance_notes_used": True,
         "window_mode": "reset",
+        "ground_truth_score_notes_to_feed": ground_truth_score_notes_to_feed,
         "num_sequences_evaluated": num_successful,
         "num_sequences_failed": num_failed,
         "num_cache_hits": num_cache_hits,
@@ -611,7 +639,15 @@ def main():
         help=f"Preprocessing worker count (default: {NUM_WORKERS})",
     )
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--ground-truth-score-notes-to-feed",
+        type=int,
+        default=1,
+        help="Teacher-force this many initial GT score notes in the first window only (default: 0)",
+    )
     args = parser.parse_args()
+    if args.ground_truth_score_notes_to_feed < 0:
+        raise ValueError("--ground-truth-score-notes-to-feed must be non-negative")
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     check_muster_installation()
@@ -664,7 +700,12 @@ def main():
         sys.exit(1)
 
     temp_suffix = f"_temp{args.temperature}" if args.temperature > 0 else ""
-    subdir = f"{Path(args.checkpoint).name}_asap_fair{temp_suffix}"
+    gt_suffix = (
+        f"_gt{args.ground_truth_score_notes_to_feed}"
+        if args.ground_truth_score_notes_to_feed > 0
+        else ""
+    )
+    subdir = f"{Path(args.checkpoint).name}_asap_fair{temp_suffix}{gt_suffix}"
     output_dir = str(Path(OUTPUT_BASE) / subdir)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -689,6 +730,7 @@ def main():
         output_dir,
         config_source=args.config_source,
         temperature=args.temperature,
+        ground_truth_score_notes_to_feed=args.ground_truth_score_notes_to_feed,
     )
 
     print_muster_summary(args.checkpoint, stats)
