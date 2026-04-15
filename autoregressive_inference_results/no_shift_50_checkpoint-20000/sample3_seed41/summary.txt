@@ -1,0 +1,38 @@
+Packed ASAP Autoregressive Inference
+============================================================
+Checkpoint: no_shift_50/checkpoint-20000
+Test file: data/test_normalized.txt
+Total sequences available: 675642
+Sampled sequences: 3
+Constrained score decoding: True
+MUSTER scoring enabled: True
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 100.00%
+  Time accuracy: 33.16%
+  Duration accuracy: 34.94%
+  Exact triplet accuracy: 29.87%
+  Sequences evaluated: 3
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 100.00% (+-0.00)
+
+Aggregate MUSTER metrics:
+  Windows MUSTER-evaluated: 3
+  Windows MUSTER-failed: 0
+  MER: 12.52% (+-7.51)
+  PER: 0.82% (+-1.16)
+  MNR: 0.55% (+-0.77)
+  ENR: 4.38% (+-5.69)
+  OTER: 44.39% (+-26.97)
+  OFTER: 12.47% (+-9.44)
+  VER: 0.00% (+-0.00)
+
+Per-sequence outputs (for successful sequences):
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json
+  ground_truth_score.xml
+  output_score.xml
+  muster_metrics.json
+  muster_work/
