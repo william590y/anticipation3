@@ -625,6 +625,11 @@ def write_summary(
                     f"  VER: {aggregate['voice_error_rate_mean']:.2f}% "
                     f"(+-{aggregate['voice_error_rate_std']:.2f})"
                 )
+            if "mean_error_rate_with_voice_mean" in aggregate:
+                summary_lines.append(
+                    f"  MER+V: {aggregate['mean_error_rate_with_voice_mean']:.2f}% "
+                    f"(+-{aggregate['mean_error_rate_with_voice_std']:.2f})"
+                )
 
     if aggregate["num_sequences_evaluated"] > 0:
         summary_lines.extend(
@@ -782,6 +787,17 @@ def main():
         if "mean_error_rate_mean" in aggregate:
             print(f"MUSTER MER: {aggregate['mean_error_rate_mean']:.2f}%")
             print(f"MUSTER PER: {aggregate['pitch_error_rate_mean']:.2f}%")
+            print(f"MUSTER MNR: {aggregate['missing_note_rate_mean']:.2f}%")
+            print(f"MUSTER ENR: {aggregate['extra_note_rate_mean']:.2f}%")
+            print(f"MUSTER OTER: {aggregate['onset_time_error_rate_mean']:.2f}%")
+            print(f"MUSTER OFTER: {aggregate['offset_time_error_rate_mean']:.2f}%")
+            if "voice_error_rate_mean" in aggregate:
+                print(f"MUSTER VER: {aggregate['voice_error_rate_mean']:.2f}%")
+            if "mean_error_rate_with_voice_mean" in aggregate:
+                print(
+                    f"MUSTER MER+V: "
+                    f"{aggregate['mean_error_rate_with_voice_mean']:.2f}%"
+                )
     print(f"Outputs saved to: {output_dir}")
 
 
