@@ -25,5 +25,9 @@
   "evaluation_protocol": "fair_control_driven",
   "all_performance_notes_used": true,
   "gt_score_beat_interval_sec": 0.5,
-  "window_mode": "reset"
+  "window_mode": "reset",
+  "num_generation_windows": 11,
+  "num_window_muster_successful": 11,
+  "num_window_muster_failed": 0,
+  "num_window_muster_skipped": 0
 }
