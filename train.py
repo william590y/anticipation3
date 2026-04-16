@@ -276,14 +276,65 @@ class TokenizedDataset(Dataset):
             "dur_factors": dur_factors,
         }
 
+    def _sample_score_timing_plan(self, tokens):
+        from anticipation.vocab import CONTROL_OFFSET, TIME_OFFSET
+
+        score_positions = []
+        raw_times = []
+
+        i = 0
+        while i < len(tokens) - 2:
+            tok0 = tokens[i].item()
+            tok1 = tokens[i + 1].item()
+            tok2 = tokens[i + 2].item()
+
+            is_event_triplet = (
+                tok0 < CONTROL_OFFSET
+                and tok1 < CONTROL_OFFSET
+                and tok2 < CONTROL_OFFSET
+            )
+
+            if is_event_triplet:
+                score_positions.append(i)
+                raw_times.append(tok0 - TIME_OFFSET)
+                i += 3
+            else:
+                i += 1
+
+        new_score_times = None
+        if self.onset_jitter_std > 0 and len(raw_times) >= 2:
+            new_time = float(raw_times[0])
+            jittered = [new_time]
+            for k in range(1, len(raw_times)):
+                ioi = raw_times[k] - raw_times[k - 1]
+                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                new_time = new_time + ioi * scale
+                jittered.append(new_time)
+            new_score_times = jittered
+
+        dur_factors = None
+        if self.dur_jitter_range > 0 and score_positions:
+            dur_factors = [
+                1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                for _ in score_positions
+            ]
+
+        return {
+            "num_scores": len(score_positions),
+            "new_score_times": new_score_times,
+            "dur_factors": dur_factors,
+        }
+
     def _augment_sequence(
         self,
         tokens,
         transpose_shift=0,
         tempo_factor=1.0,
         apply_timing_augmentation=True,
+        apply_score_timing_augmentation=False,
         apply_tempo_scaling_to_controls=True,
         control_timing_plan=None,
+        score_timing_plan=None,
     ):
         from anticipation.vocab import (
             CONTROL_OFFSET,
@@ -325,6 +376,7 @@ class TokenizedDataset(Dataset):
             scaled = int(round((raw_tok - dur_base) * tempo_factor))
             return dur_base + max(0, min(MAX_DUR - 1, scaled))
 
+        event_positions = []
         ctrl_positions = []
         ctrl_index = 0
 
@@ -343,17 +395,55 @@ class TokenizedDataset(Dataset):
             )
 
             if is_event_triplet:
-                if transpose_shift != 0 and tok2 != REST:
-                    tok2 = _transpose_note(tok2, NOTE_OFFSET)
-                augmented[i] = tok0
-                augmented[i + 1] = tok1
-                augmented[i + 2] = tok2
+                event_positions.append((i, tok0, tok1, tok2))
                 i += 3
             elif is_control_triplet:
                 ctrl_positions.append((i, tok0, tok1, tok2))
                 i += 3
             else:
                 i += 1
+
+        new_score_times = None
+        if apply_score_timing_augmentation:
+            if score_timing_plan is not None:
+                planned_times = score_timing_plan.get("new_score_times")
+                if planned_times is not None:
+                    new_score_times = [
+                        max(0, min(MAX_TIME - 1, int(round(t))))
+                        for t in planned_times
+                    ]
+            elif self.onset_jitter_std > 0 and len(event_positions) >= 2:
+                raw_times = [pos[1] - TIME_OFFSET for pos in event_positions]
+                new_time = float(raw_times[0])
+                jittered = [new_time]
+                for k in range(1, len(raw_times)):
+                    ioi = raw_times[k] - raw_times[k - 1]
+                    scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
+                    new_time = new_time + ioi * scale
+                    jittered.append(new_time)
+                new_score_times = [
+                    max(0, min(MAX_TIME - 1, int(round(t))))
+                    for t in jittered
+                ]
+
+        for k, (pos_i, tok0, tok1, tok2) in enumerate(event_positions):
+            if new_score_times is not None:
+                tok0 = TIME_OFFSET + new_score_times[k]
+
+            if apply_score_timing_augmentation and self.dur_jitter_range > 0:
+                if score_timing_plan is not None and score_timing_plan.get("dur_factors") is not None:
+                    dur_factor = score_timing_plan["dur_factors"][k]
+                else:
+                    dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+                base_dur = tok1 - DUR_OFFSET
+                tok1 = DUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * dur_factor))))
+
+            if transpose_shift != 0 and tok2 != REST:
+                tok2 = _transpose_note(tok2, NOTE_OFFSET)
+
+            augmented[pos_i] = tok0
+            augmented[pos_i + 1] = tok1
+            augmented[pos_i + 2] = tok2
 
         new_ctrl_times = None
         if apply_timing_augmentation:
@@ -512,19 +602,23 @@ class TokenizedDataset(Dataset):
         else:
             transpose_shift, tempo_factor = self._sample_augmentation_params()
             control_timing_plan = self._sample_control_timing_plan(tokens)
+            score_timing_plan = self._sample_score_timing_plan(tokens)
             augmented_tokens = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=True,
+                apply_score_timing_augmentation=True,
                 apply_tempo_scaling_to_controls=True,
                 control_timing_plan=control_timing_plan,
+                score_timing_plan=score_timing_plan,
             )
             labels = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=False,
+                apply_score_timing_augmentation=False,
                 apply_tempo_scaling_to_controls=not self.loss_mask_performance_tokens,
             )
 
@@ -965,14 +1059,14 @@ def main():
     parser.add_argument(
         '--onset_jitter_std',
         type=float,
-        default=0.05,
-        help='Std of N(1, std^2) multiplier applied to each inter-onset interval of control tokens (training only)',
+        default=0.1,
+        help='Std of N(1, std^2) multiplier applied to each inter-onset interval of control triplets and score-side context triplets; labels are unchanged (training only)',
     )
     parser.add_argument(
         '--dur_jitter_range',
         type=float,
-        default=0.05,
-        help='Half-range of U(1-r, 1+r) duration rescaling per control note (training only)',
+        default=0.1,
+        help='Half-range of U(1-r, 1+r) duration rescaling per control triplet and score-side context triplet; labels are unchanged (training only)',
     )
     parser.add_argument(
         '--mask_prob',
