@@ -14,9 +14,11 @@ import warnings
 from multiprocessing import Pool
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from anticipation.asap_aligned_stream import (
@@ -24,7 +26,7 @@ from anticipation.asap_aligned_stream import (
     build_full_normalized_score_triplets_from_xml as build_full_xml_score_triplets,
     build_raw_performance_control_triplets,
 )
-from anticipation.config import CONTEXT_SIZE
+from anticipation.config import CONTEXT_SIZE, TIME_RESOLUTION
 from anticipation.packed_sequence import dummy_rest_triplet
 from anticipation.vocab import (
     ADUR_OFFSET,
@@ -64,6 +66,14 @@ NUM_WORKERS = os.cpu_count() or 1
 TARGET_BEAT_INTERVAL = 0.5
 PREFIX_CONTROLS = 33
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
+SCORE_TOKEN_TYPES = ("time", "dur", "pitch")
+SCORE_TOKEN_PLOT_COLORS = {
+    "time": "tab:blue",
+    "dur": "tab:orange",
+    "pitch": "tab:green",
+}
+SCORE_TOKEN_PERPLEXITY_PLOT = "generated_score_token_perplexity.png"
+SCORE_TOKEN_PERPLEXITY_TRACE = "generated_score_token_perplexity.json"
 
 
 def normalize_control_triplets(control_triplets):
@@ -138,6 +148,71 @@ def max_predicted_score_onset_units(pred_score_triplets):
     if not pred_score_triplets:
         return 0
     return max(max(0, triplet[0] - TIME_OFFSET) for triplet in pred_score_triplets)
+
+
+def empty_score_token_perplexity_trace():
+    return {
+        "note_index": [],
+        "onset_bins": [],
+        "onset_seconds": [],
+        "time": [],
+        "dur": [],
+        "pitch": [],
+    }
+
+
+def summarize_score_token_perplexity_trace(trace):
+    summary = {"num_generated_notes": len(trace.get("time", []))}
+    for token_type in SCORE_TOKEN_TYPES:
+        values = trace.get(token_type, [])
+        if not values:
+            continue
+        summary[f"{token_type}_mean"] = float(np.mean(values))
+        summary[f"{token_type}_std"] = float(np.std(values))
+        summary[f"{token_type}_min"] = float(np.min(values))
+        summary[f"{token_type}_max"] = float(np.max(values))
+    return summary
+
+
+def save_score_token_perplexity_artifacts(seq_dir, piece_name, trace):
+    if not trace.get("time"):
+        return None
+
+    summary = summarize_score_token_perplexity_trace(trace)
+    payload = {
+        "piece": piece_name,
+        "summary": summary,
+        "trace": trace,
+    }
+    with open(seq_dir / SCORE_TOKEN_PERPLEXITY_TRACE, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+    use_onset_axis = len(set(trace["onset_seconds"])) > 1
+    x_values = trace["onset_seconds"] if use_onset_axis else trace["note_index"]
+    x_label = "Predicted score onset (s)" if use_onset_axis else "Generated score note index"
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    for token_type in SCORE_TOKEN_TYPES:
+        ax.plot(
+            x_values,
+            trace[token_type],
+            marker="o",
+            markersize=2.5,
+            linewidth=1.4,
+            alpha=0.9,
+            label=token_type,
+            color=SCORE_TOKEN_PLOT_COLORS[token_type],
+        )
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Perplexity")
+    ax.set_title(f"Generated score-token perplexity: {Path(piece_name).name}")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(seq_dir / SCORE_TOKEN_PERPLEXITY_PLOT, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return summary
 
 
 def _file_fingerprint(path):
@@ -301,6 +376,9 @@ def autoregressive_generate_from_controls(
             "prefix_controls_used": 0,
             "score_start_idx": 0,
             "ground_truth_score_notes_fed": 0,
+            "generated_score_note_count": 0,
+            "score_token_perplexity_trace": empty_score_token_perplexity_trace(),
+            "score_token_perplexity_summary": {"num_generated_notes": 0},
             "window_mode": "reset",
         }
     if ground_truth_score_notes_to_feed < 0:
@@ -321,6 +399,9 @@ def autoregressive_generate_from_controls(
         "prefix_controls_used": prefix_count,
         "score_start_idx": score_start_idx,
         "ground_truth_score_notes_fed": 0,
+        "generated_score_note_count": 0,
+        "score_token_perplexity_trace": empty_score_token_perplexity_trace(),
+        "score_token_perplexity_summary": {},
         "window_mode": "reset",
     }
 
@@ -359,13 +440,16 @@ def autoregressive_generate_from_controls(
         logits = next_logits[start:end]
         if temperature > 0:
             logits = logits / temperature
-            rel_token = torch.multinomial(torch.softmax(logits, dim=-1), 1).item()
+        log_probs = F.log_softmax(logits, dim=-1)
+        if temperature > 0:
+            rel_token = torch.multinomial(log_probs.exp(), 1).item()
         else:
             rel_token = logits.argmax().item()
+        log_prob = log_probs[rel_token].item()
         token = start + rel_token
         context.append(token)
         feed([token])
-        return token
+        return token, log_prob
 
     while note_idx < len(control_triplets):
         use_ground_truth_note = (
@@ -385,9 +469,19 @@ def autoregressive_generate_from_controls(
             feed([time_tok, dur_tok, pitch_tok])
             stats["ground_truth_score_notes_fed"] += 1
         else:
-            time_tok = decode_slot(TIME_OFFSET, DUR_OFFSET)
-            dur_tok = decode_slot(DUR_OFFSET, NOTE_OFFSET)
-            pitch_tok = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
+            time_tok, time_log_prob = decode_slot(TIME_OFFSET, DUR_OFFSET)
+            dur_tok, dur_log_prob = decode_slot(DUR_OFFSET, NOTE_OFFSET)
+            pitch_tok, pitch_log_prob = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
+
+            onset_bins = max(0, int(time_tok + score_time_offset - TIME_OFFSET))
+            trace = stats["score_token_perplexity_trace"]
+            trace["note_index"].append(int(note_idx))
+            trace["onset_bins"].append(onset_bins)
+            trace["onset_seconds"].append(float(onset_bins / TIME_RESOLUTION))
+            trace["time"].append(float(np.exp(-time_log_prob)))
+            trace["dur"].append(float(np.exp(-dur_log_prob)))
+            trace["pitch"].append(float(np.exp(-pitch_log_prob)))
+            stats["generated_score_note_count"] += 1
         pred_score_triplets.append(
             [time_tok + score_time_offset, dur_tok, pitch_tok]
         )
@@ -417,6 +511,9 @@ def autoregressive_generate_from_controls(
             past = None
             next_logits = None
             stats["num_window_resets"] += 1
+    stats["score_token_perplexity_summary"] = summarize_score_token_perplexity_trace(
+        stats["score_token_perplexity_trace"]
+    )
     return pred_score_triplets, stats
 
 
@@ -560,6 +657,10 @@ def evaluate_asap_muster(
         metrics["score_start_idx"] = gen_stats["score_start_idx"]
         metrics["num_window_resets"] = gen_stats["num_window_resets"]
         metrics["ground_truth_score_notes_fed"] = gen_stats["ground_truth_score_notes_fed"]
+        metrics["generated_score_note_count"] = gen_stats["generated_score_note_count"]
+        metrics["generated_score_token_perplexity_summary"] = gen_stats[
+            "score_token_perplexity_summary"
+        ]
         metrics["cache_hit"] = piece_info["cache_hit"]
         metrics["cache_path"] = piece_info["cache_path"]
         metrics["evaluation_protocol"] = "raw_score_control_driven"
@@ -569,6 +670,13 @@ def evaluate_asap_muster(
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
         metrics["gt_score_source"] = piece_info.get("gt_score_source", "unknown")
         metrics["window_mode"] = gen_stats["window_mode"]
+        if save_score_token_perplexity_artifacts(
+            seq_dir,
+            piece_name,
+            gen_stats["score_token_perplexity_trace"],
+        ):
+            metrics["score_token_perplexity_plot"] = SCORE_TOKEN_PERPLEXITY_PLOT
+            metrics["score_token_perplexity_trace"] = SCORE_TOKEN_PERPLEXITY_TRACE
         print_piece_muster_metrics(piece_name, metrics, gen_stats)
 
         per_sequence_metrics.append(metrics)
