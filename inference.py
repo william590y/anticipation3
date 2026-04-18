@@ -202,6 +202,7 @@ def autoregressive_generate_score(
         raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
 
     context = list(tokens[:score_start_idx])
+    # tokens = [tok for tok in tokens if tok >= CONTROL_OFFSET]
     fed_score_tokens = 0
 
     with torch.inference_mode():
@@ -237,7 +238,7 @@ def autoregressive_generate_score(
                     context.append(token)
                     feed_token(token)
                     print(token, end=',')
-                print(context[-33*3*2-1]-CONTROL_OFFSET, end='\n')
+                print(context[-33*3*2-4]-CONTROL_OFFSET, end='\n')
 
                 pos += 3
 
