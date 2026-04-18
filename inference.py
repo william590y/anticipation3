@@ -235,6 +235,8 @@ def autoregressive_generate_score(
                         token = int(logits.argmax().item())
                     context.append(token)
                     feed_token(token)
+                    print(token, end=',')
+                print('', end='\n')
 
                 pos += 3
 
