@@ -5,6 +5,7 @@ Fair MUSTER evaluation on ASAP pieces using performance-only conditioning.
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import hashlib
 import json
 import os
@@ -58,7 +59,7 @@ ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
 SPLIT_FILE = "data/normalized_split.txt"
 CACHE_DIR = Path("data") / "asap_muster_cache"
-PREPROCESS_VERSION = "fair_asap_muster_v6_xml_score_fixed_beat_gt"
+PREPROCESS_VERSION = "fair_asap_muster_v7_midi_default_gt_source"
 DEFAULT_CHECKPOINT = "checkpoint-2000"
 DEFAULT_NUM_PIECES = 30
 RANDOM_SEED = 42
@@ -86,29 +87,48 @@ def normalize_control_triplets(control_triplets):
 def build_performance_control_triplets(perf_midi):
     return normalize_control_triplets(build_raw_performance_control_triplets(perf_midi))
 
+def build_full_xml_gt_score_triplets(score_xml):
+    try:
+        return build_full_xml_score_triplets(
+            score_xml,
+            target_beat_interval=TARGET_BEAT_INTERVAL,
+            require_exact_grid=True,
+        ), "xml_score_exact"
+    except ValueError:
+        return build_full_xml_score_triplets(
+            score_xml,
+            target_beat_interval=TARGET_BEAT_INTERVAL,
+        ), "xml_score_rounded_to_grid"
 
-def build_full_normalized_score_triplets(score_midi, score_beats, score_xml=None):
-    # Prefer ASAP's MusicXML score when available so the GT notation comes from the
-    # score source MUSTER is designed for. We still project it onto the fixed quarter-
-    # note grid used by this repo (quarter=0.5s).
-    if score_xml and os.path.exists(score_xml):
-        try:
-            return build_full_xml_score_triplets(
-                score_xml,
-                target_beat_interval=TARGET_BEAT_INTERVAL,
-                require_exact_grid=True,
-            ), "xml_score_exact"
-        except ValueError:
-            return build_full_xml_score_triplets(
-                score_xml,
-                target_beat_interval=TARGET_BEAT_INTERVAL,
-            ), "xml_score_rounded_to_grid"
 
-    return build_full_raw_score_triplets(
-        score_midi,
-        score_beats,
-        target_beat_interval=TARGET_BEAT_INTERVAL,
-    ), "midi_score_annotations"
+def build_full_normalized_score_triplets(
+    score_midi,
+    score_beats,
+    score_xml=None,
+    score_source="midi",
+):
+    if score_source == "midi":
+        return build_full_raw_score_triplets(
+            score_midi,
+            score_beats,
+            target_beat_interval=TARGET_BEAT_INTERVAL,
+        ), "midi_score_annotations"
+
+    if score_source == "xml":
+        if not score_xml or not os.path.exists(score_xml):
+            raise FileNotFoundError("requested XML GT score source, but xml_score.musicxml is missing")
+        return build_full_xml_gt_score_triplets(score_xml)
+
+    if score_source == "auto":
+        if score_xml and os.path.exists(score_xml):
+            return build_full_xml_gt_score_triplets(score_xml)
+        return build_full_raw_score_triplets(
+            score_midi,
+            score_beats,
+            target_beat_interval=TARGET_BEAT_INTERVAL,
+        ), "midi_score_annotations"
+
+    raise ValueError(f"unknown GT score source: {score_source}")
 
 
 def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
@@ -188,16 +208,36 @@ def save_score_token_perplexity_artifacts(seq_dir, piece_name, trace):
         json.dump(payload, handle, indent=2)
 
     use_onset_axis = len(set(trace["onset_seconds"])) > 1
-    x_values = trace["onset_seconds"] if use_onset_axis else trace["note_index"]
+    x_values = np.asarray(
+        trace["onset_seconds"] if use_onset_axis else trace["note_index"],
+        dtype=float,
+    )
     x_label = "Predicted score onset (s)" if use_onset_axis else "Generated score note index"
+    if use_onset_axis:
+        x_order = np.argsort(x_values, kind="stable")
+        x_plot = x_values[x_order]
+    else:
+        x_order = None
+        x_plot = x_values
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
     for token_type in SCORE_TOKEN_TYPES:
+        y_values = np.asarray(trace[token_type], dtype=float)
+        if x_order is not None:
+            y_plot = y_values[x_order]
+        else:
+            y_plot = y_values
+
+        ax.scatter(
+            x_plot,
+            y_plot,
+            s=10,
+            alpha=0.2,
+            color=SCORE_TOKEN_PLOT_COLORS[token_type],
+        )
         ax.plot(
-            x_values,
-            trace[token_type],
-            marker="o",
-            markersize=2.5,
+            x_plot,
+            y_plot,
             linewidth=1.4,
             alpha=0.9,
             label=token_type,
@@ -224,16 +264,21 @@ def _file_fingerprint(path):
     }
 
 
-def build_piece_fingerprint(piece_info):
+def build_piece_fingerprint(piece_info, gt_score_source):
     fingerprint = {
         "version": PREPROCESS_VERSION,
+        "requested_gt_score_source": gt_score_source,
         "target_beat_interval": TARGET_BEAT_INTERVAL,
         "prefix_controls": PREFIX_CONTROLS,
         "perf_midi": _file_fingerprint(piece_info["perf_midi"]),
         "score_midi": _file_fingerprint(piece_info["score_midi"]),
         "score_beats": _file_fingerprint(piece_info["score_beats"]),
     }
-    if piece_info.get("score_xml") and os.path.exists(piece_info["score_xml"]):
+    if (
+        gt_score_source in {"xml", "auto"}
+        and piece_info.get("score_xml")
+        and os.path.exists(piece_info["score_xml"])
+    ):
         fingerprint["score_xml"] = _file_fingerprint(piece_info["score_xml"])
     return fingerprint
 
@@ -259,9 +304,9 @@ def write_piece_cache(cache_path, payload):
     os.replace(tmp_path, cache_path)
 
 
-def preprocess_asap_piece(piece_info):
+def preprocess_asap_piece(piece_info, gt_score_source="midi"):
     cache_path = cache_path_for_piece(piece_info)
-    fingerprint = build_piece_fingerprint(piece_info)
+    fingerprint = build_piece_fingerprint(piece_info, gt_score_source)
     cached = load_piece_cache(cache_path)
 
     if cached and cached.get("fingerprint") == fingerprint:
@@ -270,6 +315,7 @@ def preprocess_asap_piece(piece_info):
             "control_triplets": cached.get("control_triplets", []),
             "gt_score_triplets": cached.get("gt_score_triplets", []),
             "gt_score_source": cached.get("gt_score_source", "unknown"),
+            "requested_gt_score_source": gt_score_source,
             "cache_hit": True,
             "cache_path": str(cache_path),
         }
@@ -280,6 +326,7 @@ def preprocess_asap_piece(piece_info):
             piece_info["score_midi"],
             piece_info["score_beats"],
             score_xml=piece_info.get("score_xml"),
+            score_source=gt_score_source,
         )
         if not control_triplets:
             raise ValueError("no performance control triplets found")
@@ -301,12 +348,14 @@ def preprocess_asap_piece(piece_info):
             "control_triplets": control_triplets,
             "gt_score_triplets": gt_score_triplets,
             "gt_score_source": gt_score_source,
+            "requested_gt_score_source": gt_score_source,
             "cache_hit": False,
             "cache_path": str(cache_path),
         }
     except Exception as exc:
         return {
             **piece_info,
+            "requested_gt_score_source": gt_score_source,
             "cache_hit": False,
             "cache_path": str(cache_path),
             "error": str(exc),
@@ -561,6 +610,8 @@ def evaluate_triplet_slice_with_muster(
 
     gt_xml = seq_dir / "ground_truth_score.xml"
     pred_xml = seq_dir / "output_score.xml"
+    # Export directly from the normalized triplet grid so MUSTER sees the same
+    # onset/duration bins we evaluated, without an extra MIDI round-trip.
     if not triplets_to_musicxml(gt_norm, str(gt_xml), beat_seconds=TARGET_BEAT_INTERVAL):
         return None
     if not triplets_to_musicxml(pred_norm, str(pred_xml), beat_seconds=TARGET_BEAT_INTERVAL):
@@ -578,6 +629,7 @@ def evaluate_asap_muster(
     config_source,
     temperature=0.0,
     ground_truth_score_notes_to_feed=0,
+    requested_gt_score_source="midi",
 ):
     model, device = load_model(checkpoint_path, config_source=config_source)
     os.makedirs(output_dir, exist_ok=True)
@@ -669,6 +721,10 @@ def evaluate_asap_muster(
         )
         metrics["gt_score_beat_interval_sec"] = TARGET_BEAT_INTERVAL
         metrics["gt_score_source"] = piece_info.get("gt_score_source", "unknown")
+        metrics["requested_gt_score_source"] = piece_info.get(
+            "requested_gt_score_source",
+            requested_gt_score_source,
+        )
         metrics["window_mode"] = gen_stats["window_mode"]
         if save_score_token_perplexity_artifacts(
             seq_dir,
@@ -691,6 +747,7 @@ def evaluate_asap_muster(
     final = {
         "evaluation_protocol": "raw_score_control_driven",
         "gt_score_beat_interval_sec": TARGET_BEAT_INTERVAL,
+        "requested_gt_score_source": requested_gt_score_source,
         "all_performance_notes_used": True,
         "window_mode": "reset",
         "ground_truth_score_notes_to_feed": ground_truth_score_notes_to_feed,
@@ -748,10 +805,16 @@ def main():
     )
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
+        "--gt-score-source",
+        choices=("midi", "xml", "auto"),
+        default="midi",
+        help="GT score source before MusicXML export for MUSTER (default: midi)",
+    )
+    parser.add_argument(
         "--ground-truth-score-notes-to-feed",
         type=int,
         default=1,
-        help="Teacher-force this many initial GT score notes in the first window only (default: 0)",
+        help="Teacher-force this many initial GT score notes in the first window only (default: 1)",
     )
     args = parser.parse_args()
     if args.ground_truth_score_notes_to_feed < 0:
@@ -782,10 +845,11 @@ def main():
     print(f"  Sampled {len(sampled)} pieces\n")
 
     print(f"Preprocessing with {args.workers} workers (cache at {CACHE_DIR})...")
+    preprocess_fn = partial(preprocess_asap_piece, gt_score_source=args.gt_score_source)
     with Pool(processes=args.workers) as pool:
         results = list(
             tqdm(
-                pool.imap(preprocess_asap_piece, sampled),
+                pool.imap(preprocess_fn, sampled),
                 total=len(sampled),
                 desc="Preprocessing",
             )
@@ -813,7 +877,8 @@ def main():
         if args.ground_truth_score_notes_to_feed > 0
         else ""
     )
-    subdir = f"{Path(args.checkpoint).name}_asap_fair{temp_suffix}{gt_suffix}"
+    score_source_suffix = f"_score-{args.gt_score_source}"
+    subdir = f"{Path(args.checkpoint).name}_asap_fair{score_source_suffix}{temp_suffix}{gt_suffix}"
     output_dir = str(Path(OUTPUT_BASE) / subdir)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -824,6 +889,11 @@ def main():
                     "piece": piece["perf_path"],
                     "cache_hit": piece["cache_hit"],
                     "cache_path": piece["cache_path"],
+                    "gt_score_source": piece.get("gt_score_source", "unknown"),
+                    "requested_gt_score_source": piece.get(
+                        "requested_gt_score_source",
+                        args.gt_score_source,
+                    ),
                 }
                 for piece in piece_infos
             ],
@@ -839,6 +909,7 @@ def main():
         config_source=args.config_source,
         temperature=args.temperature,
         ground_truth_score_notes_to_feed=args.ground_truth_score_notes_to_feed,
+        requested_gt_score_source=args.gt_score_source,
     )
 
     print_muster_summary(args.checkpoint, stats)

@@ -219,6 +219,8 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
 
     This preserves onset/duration bins exactly with respect to the current triplet
     representation instead of snapping note values to a small symbolic palette.
+    Notes that cross barlines are split into tied segments so the original duration
+    survives the XML export exactly on the token grid.
     """
     try:
         from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
@@ -253,14 +255,32 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                 SubElement(pitch_el, "alter").text = "1"
             SubElement(pitch_el, "octave").text = str(octave)
 
-        def emit_note(parent, pitch, dur, voice, chord_member=False):
+        def emit_note(
+            parent,
+            pitch,
+            dur,
+            voice,
+            chord_member=False,
+            tie_start=False,
+            tie_stop=False,
+        ):
             note_el = SubElement(parent, "note")
             if chord_member:
                 SubElement(note_el, "chord")
             midi_to_pitch_elements(note_el, pitch)
+            if tie_stop:
+                SubElement(note_el, "tie", type="stop")
+            if tie_start:
+                SubElement(note_el, "tie", type="start")
             SubElement(note_el, "duration").text = str(dur)
             SubElement(note_el, "voice").text = str(voice)
             SubElement(note_el, "staff").text = "1"
+            if tie_start or tie_stop:
+                notations_el = SubElement(note_el, "notations")
+                if tie_stop:
+                    SubElement(notations_el, "tied", type="stop")
+                if tie_start:
+                    SubElement(notations_el, "tied", type="start")
 
         def emit_rest(parent, dur, voice=1):
             note_el = SubElement(parent, "note")
@@ -305,15 +325,28 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
         voice_measure_events = [[[] for _ in range(num_measures)] for _ in voices]
         for voice_idx, voice_events in enumerate(voices):
             for event in voice_events:
-                measure_idx = min(event["onset"] // bins_per_measure, num_measures - 1)
-                measure_start = measure_idx * bins_per_measure
-                voice_measure_events[voice_idx][measure_idx].append(
-                    {
-                        "onset": event["onset"] - measure_start,
-                        "dur": event["dur"],
-                        "pitches": event["pitches"],
-                    }
-                )
+                segment_onset = event["onset"]
+                remaining_dur = event["dur"]
+                first_segment = True
+                while remaining_dur > 0:
+                    measure_idx = min(segment_onset // bins_per_measure, num_measures - 1)
+                    measure_start = measure_idx * bins_per_measure
+                    local_onset = segment_onset - measure_start
+                    available_in_measure = bins_per_measure - local_onset
+                    segment_dur = min(remaining_dur, available_in_measure)
+                    has_more_segments = remaining_dur > segment_dur
+                    voice_measure_events[voice_idx][measure_idx].append(
+                        {
+                            "onset": local_onset,
+                            "dur": segment_dur,
+                            "pitches": event["pitches"],
+                            "tie_start": has_more_segments,
+                            "tie_stop": not first_segment,
+                        }
+                    )
+                    segment_onset += segment_dur
+                    remaining_dur -= segment_dur
+                    first_segment = False
 
         root = Element("score-partwise", version="3.0")
         part_list = SubElement(root, "part-list")
@@ -354,6 +387,8 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                     onset = event["onset"]
                     dur = event["dur"]
                     pitches = event["pitches"]
+                    tie_start = event.get("tie_start", False)
+                    tie_stop = event.get("tie_stop", False)
                     if onset > cursor:
                         emit_shift(measure_el, "forward", onset - cursor)
                         cursor = onset
@@ -365,6 +400,8 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
                             dur,
                             voice=voice_idx + 1,
                             chord_member=chord_idx > 0,
+                            tie_start=tie_start,
+                            tie_stop=tie_stop,
                         )
                     cursor = max(cursor, onset + dur)
 
