@@ -236,7 +236,6 @@ def autoregressive_generate_score(
                         token = int(logits.argmax().item())
                     context.append(token)
                     feed_token(token)
-                    out = out if slot != 1 else out - DUR_OFFSET
                     print(token, end=',')
                 print(context[-33*3*2-1]-CONTROL_OFFSET, end='\n')
 
