@@ -15,7 +15,7 @@ from anticipation.vocab import (
 )
 
 
-PREFIX_CONTROLS = 33
+PREFIX_CONTROLS = 32
 ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
 
 

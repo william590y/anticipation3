@@ -1,0 +1,24 @@
+Packed ASAP Autoregressive Inference
+============================================================
+Checkpoint: C:\Users\willi\Desktop\anticipation3\checkpoint-20000
+Test file: C:\Users\willi\Desktop\anticipation3\data\single_opening_window_for_inference.txt
+Total sequences available: 1
+Sampled sequences: 1
+Constrained score decoding: True
+Ground-truth score tokens fed: 0
+MUSTER scoring enabled: False
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 100.00%
+  Time accuracy: 2.22%
+  Duration accuracy: 88.15%
+  Exact triplet accuracy: 1.48%
+  Sequences evaluated: 1
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 100.00% (+-0.00)
+
+Per-sequence outputs (for successful sequences):
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json

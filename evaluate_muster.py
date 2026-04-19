@@ -208,8 +208,16 @@ def triplets_to_events(triplets) -> list[int]:
 def normalize_triplet_times(triplets):
     if not triplets:
         return []
+    real_onsets = [
+        t[0] - TIME_OFFSET
+        for t in triplets
+        if len(t) >= 3 and int(t[2]) != REST
+    ]
+    if real_onsets:
+        min_time = min(real_onsets)
+    else:
+        min_time = min(t[0] - TIME_OFFSET for t in triplets)
     triplets = sorted(triplets, key=lambda t: t[0])
-    min_time = min(t[0] - TIME_OFFSET for t in triplets)
     return [[t[0] - min_time, t[1], t[2]] for t in triplets]
 
 

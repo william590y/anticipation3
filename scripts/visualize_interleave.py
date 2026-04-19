@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from anticipation.convert import midi_to_events
-from anticipation.vocab import *
 from anticipation.config import *
+from anticipation.packed_sequence import PREFIX_CONTROLS, dummy_rest_triplet
+from anticipation.vocab import *
 from alignment import align_tokens2
 
 
@@ -45,7 +46,12 @@ def main():
     parser.add_argument("--skip-nones", action="store_true")
     parser.add_argument("--out", default="./data/interleave_vis.png")
     parser.add_argument("--method", choices=["t3", "t4"], default="t4", help="Interleaving style: t3 (time prefix) or t4 (fixed-count control+pad prefix)")
-    parser.add_argument("--prefix-controls", type=int, default=33, help="For t4: number of initial control tokens to prefix (each followed by a pad)")
+    parser.add_argument(
+        "--prefix-controls",
+        type=int,
+        default=PREFIX_CONTROLS,
+        help="For t4: number of initial control tokens to prefix (each followed by a pad)",
+    )
     args = parser.parse_args()
 
     meta = os.path.join(args.asap_root, "metadata.csv")
@@ -94,9 +100,7 @@ def main():
             cc = m[0]
             interleaved.extend(cc)
             order_indices.append((len(interleaved) // 3 - 1, "control"))
-            # add REST pad at same time
-            cc_time = cc[0] - CONTROL_OFFSET
-            interleaved.extend([TIME_OFFSET + cc_time, DUR_OFFSET + 0, REST])
+            interleaved.extend(dummy_rest_triplet(0))
             order_indices.append((len(interleaved) // 3 - 1, "pad"))
         # main alternation
         for i, m in enumerate(matched):

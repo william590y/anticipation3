@@ -28,7 +28,7 @@ from anticipation.asap_aligned_stream import (
     build_raw_performance_control_triplets,
 )
 from anticipation.config import CONTEXT_SIZE, TIME_RESOLUTION
-from anticipation.packed_sequence import dummy_rest_triplet
+from anticipation.packed_sequence import PREFIX_CONTROLS, dummy_rest_triplet
 from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
@@ -59,13 +59,12 @@ ASAP_PATH = "asap-dataset-master"
 ASAP_META_CSV = os.path.join(ASAP_PATH, "metadata.csv")
 SPLIT_FILE = "data/normalized_split.txt"
 CACHE_DIR = Path("data") / "asap_muster_cache"
-PREPROCESS_VERSION = "fair_asap_muster_v7_midi_default_gt_source"
+PREPROCESS_VERSION = "fair_asap_muster_v8_prefix32_window_zero"
 DEFAULT_CHECKPOINT = "checkpoint-2000"
 DEFAULT_NUM_PIECES = 30
 RANDOM_SEED = 42
 NUM_WORKERS = os.cpu_count() or 1
 TARGET_BEAT_INTERVAL = 0.5
-PREFIX_CONTROLS = 33
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 SCORE_TOKEN_TYPES = ("time", "dur", "pitch")
 SCORE_TOKEN_PLOT_COLORS = {
@@ -136,8 +135,7 @@ def build_prefix_header(control_triplets, prefix_controls=PREFIX_CONTROLS):
     header = []
     for control_triplet in control_triplets[:k]:
         header.extend(control_triplet)
-        ctrl_time = max(0, control_triplet[0] - ATIME_OFFSET)
-        header.extend(dummy_rest_triplet(ctrl_time))
+        header.extend(dummy_rest_triplet(0))
     return header, k
 
 
@@ -434,6 +432,8 @@ def autoregressive_generate_from_controls(
     device,
     temperature=0.0,
     ground_truth_score_notes_to_feed=0,
+    rollout_trace: list | None = None,
+    max_notes: int | None = None,
 ):
     if not control_triplets:
         return [], {
@@ -487,6 +487,10 @@ def autoregressive_generate_from_controls(
             out = model(torch.tensor([clamp_tokens(context)], device=device), use_cache=True)
         past = out.past_key_values
         next_logits = out.logits[0, -1, :]
+        if rollout_trace is not None:
+            rollout_trace.append(
+                {"source": "asap_controls", "event": "after_prime", "n": len(context)}
+            )
 
     def feed(new_tokens):
         nonlocal past, next_logits
@@ -498,6 +502,17 @@ def autoregressive_generate_from_controls(
             )
         past = out.past_key_values
         next_logits = out.logits[0, -1, :]
+        if rollout_trace is not None:
+            base_n = len(context) - len(new_tokens)
+            for i, tok in enumerate(new_tokens):
+                rollout_trace.append(
+                    {
+                        "source": "asap_controls",
+                        "event": "feed",
+                        "token": int(tok),
+                        "n": base_n + i + 1,
+                    }
+                )
 
     def ensure_primed():
         if past is None:
@@ -520,6 +535,8 @@ def autoregressive_generate_from_controls(
         return token, log_prob
 
     while note_idx < len(control_triplets):
+        if max_notes is not None and note_idx >= max_notes:
+            break
         use_ground_truth_note = (
             note_idx < ground_truth_score_notes_to_feed
             and note_idx < len(gt_score_triplets)

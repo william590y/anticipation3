@@ -14,8 +14,12 @@ import traceback
 import matplotlib.pyplot as plt
 import warnings
 from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
-from anticipation.packed_sequence import is_real_score_triplet, iter_score_slot_positions
-from anticipation.score_constraints import constrain_score_token_logits
+from anticipation.packed_sequence import (
+    ALTERNATING_START,
+    is_real_score_triplet,
+    iter_score_slot_positions,
+)
+from inference import autoregressive_generate_score
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -126,8 +130,6 @@ def report_runtime_device(force_cpu=False):
 device = torch.device("cpu")
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
-PREFIX_CONTROLS = 33
-ALTERNATING_START = PREFIX_CONTROLS * 2 * EVENT_SIZE
 
 class TokenizedDataset(Dataset):
     """Dataset that loads packed ASAP sequences and applies augmentation on-the-fly."""
@@ -911,43 +913,27 @@ def evaluate_model(
                     seq = seq.detach().cpu()
                     if len(seq) <= ALTERNATING_START:
                         continue
-
-                    context = seq[:ALTERNATING_START].tolist()
-                    for pos in iter_score_slot_positions(len(seq), ALTERNATING_START):
-                        if pos + 5 >= len(seq):
+                    seq_list = [int(t) for t in seq]
+                    # Same decoding as inference.autoregressive_generate_score: KV cache,
+                    # one forward per fed token, teacher-forced GT controls after each score triplet.
+                    pred_ctx, _ = autoregressive_generate_score(
+                        model,
+                        seq_list,
+                        ALTERNATING_START,
+                        str(accelerator.device),
+                        constrain_score_tokens=True,
+                        ground_truth_score_tokens_to_feed=0,
+                    )
+                    for pos in iter_score_slot_positions(len(seq_list), ALTERNATING_START):
+                        if pos + 2 >= len(pred_ctx):
                             break
-
-                        input_tensor = torch.tensor([context], device=accelerator.device)
-                        outputs = model(input_tensor)
-                        pred_time = constrain_score_token_logits(outputs.logits[0, -1, :], 0).argmax().item()
-                        context.append(pred_time)
-
-                        input_tensor = torch.tensor([context], device=accelerator.device)
-                        outputs = model(input_tensor)
-                        pred_dur = constrain_score_token_logits(outputs.logits[0, -1, :], 1).argmax().item()
-                        context.append(pred_dur)
-
-                        input_tensor = torch.tensor([context], device=accelerator.device)
-                        outputs = model(input_tensor)
-                        pred_pitch = constrain_score_token_logits(outputs.logits[0, -1, :], 2).argmax().item()
-                        context.append(pred_pitch)
-
-                        if is_real_score_triplet(seq, pos, ALTERNATING_START):
-                            true_pitch = seq[pos + 2].item()
-                            if pred_pitch == true_pitch:
-                                autoregressive_correct += 1
-                            autoregressive_total += 1
-
-                        control_pos = pos + 3
-                        if control_pos + 2 >= len(seq):
-                            break
-                        context.extend(
-                            [
-                                seq[control_pos].item(),
-                                seq[control_pos + 1].item(),
-                                seq[control_pos + 2].item(),
-                            ]
-                        )
+                        if not is_real_score_triplet(seq_list, pos, ALTERNATING_START):
+                            continue
+                        true_pitch = seq_list[pos + 2]
+                        pred_pitch = pred_ctx[pos + 2]
+                        if pred_pitch == true_pitch:
+                            autoregressive_correct += 1
+                        autoregressive_total += 1
 
     autoregressive_stats = torch.tensor(
         [autoregressive_correct, autoregressive_total],
@@ -1034,7 +1020,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=500)
+    parser.add_argument('--eval_steps', type=int, default=1000)
     parser.add_argument(
         '--eval_max_samples',
         type=int,

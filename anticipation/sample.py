@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from anticipation import ops
 from anticipation.config import *
-from anticipation.packed_sequence import dummy_rest_triplet
+from anticipation.packed_sequence import PREFIX_CONTROLS, dummy_rest_triplet
 from anticipation.vocab import *
 
 
@@ -139,12 +139,12 @@ def add_token(model, z, tokens, top_p, current_time, debug=False, force_pitch=No
     return new_token
 
 
-def generate4(model, controls, top_p=1.0, prefix_controls=33):
+def generate4(model, controls, top_p=1.0, prefix_controls=PREFIX_CONTROLS):
     """
     Generate performance given controls that match tokenize-asap format.
     
     This function mirrors the exact training format from _interleave_tokenize4_single:
-    1. Prefix: first k=33 controls, each followed by a rest triplet
+    1. Prefix: first k PREFIX_CONTROLS controls, each followed by a rest triplet
     2. Body: alternating [generated_performance, future_control] pattern
     
     Args:
@@ -152,7 +152,7 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
         controls: Performance tokens WITH CONTROL_OFFSET already applied
                   These should be extracted from test sequences via extract_controls_from_sequence
         top_p: Nucleus sampling parameter (default 1.0)
-        prefix_controls: Number of controls to use in prefix with rests (default 33)
+        prefix_controls: Number of controls to use in prefix with rests (default PREFIX_CONTROLS)
     
     Returns:
         events: Generated performance tokens (without CONTROL_OFFSET, TIME_OFFSET, etc.)
@@ -173,13 +173,12 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
     for i in range(k):
         ctrl = controls_shifted[i*3:i*3+3]
         tokens.extend(ctrl)
-        cc_time = ctrl[0] - CONTROL_OFFSET
-        tokens.extend(dummy_rest_triplet(cc_time))
+        tokens.extend(dummy_rest_triplet(0))
     
     # Step 2: Generate performance for all controls
     # Training adds: score_i, then (if i+k < N) ctrl_(i+k)
     # So we generate in this order: score_0, score_1, ..., score_{N-1}
-    # And interleave with: ctrl_33, ctrl_34, ..., ctrl_{N-1}
+    # And interleave with: ctrl_k, ctrl_{k+1}, ..., ctrl_{N-1}
     
     num_controls = len(controls) // 3
     k = min(prefix_controls, num_controls)
@@ -209,7 +208,7 @@ def generate4(model, controls, top_p=1.0, prefix_controls=33):
     return events, tokens
 
 
-def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_controls=33, max_attempts=100):
+def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_controls=PREFIX_CONTROLS, max_attempts=100):
     """
     Generate performance with REJECTION SAMPLING for pitch matching.
     Keeps regenerating each triplet until the note matches ground truth.
@@ -221,7 +220,7 @@ def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_con
         controls: Performance tokens WITH CONTROL_OFFSET already applied
         ground_truth_scores: Ground truth score tokens [time+TIME, dur+DUR, note+NOTE]
         top_p: Nucleus sampling parameter (default 1.0)
-        prefix_controls: Number of controls to use in prefix with rests (default 33)
+        prefix_controls: Number of controls to use in prefix with rests (default PREFIX_CONTROLS)
         max_attempts: Maximum regeneration attempts per triplet (default 100)
     
     Returns:
@@ -243,8 +242,7 @@ def generate4_forced(model, controls, ground_truth_scores, top_p=1.0, prefix_con
     for i in range(k):
         ctrl = controls_shifted[i*3:i*3+3]
         tokens.extend(ctrl)
-        cc_time = ctrl[0] - CONTROL_OFFSET
-        tokens.extend(dummy_rest_triplet(cc_time))
+        tokens.extend(dummy_rest_triplet(0))
     
     # Step 2: Generate performance with rejection sampling for correct pitch
     num_controls = len(controls) // 3

@@ -1,0 +1,12 @@
+{
+  "evaluation_protocol": "raw_score_control_driven",
+  "gt_score_beat_interval_sec": 0.5,
+  "requested_gt_score_source": "midi",
+  "all_performance_notes_used": true,
+  "window_mode": "reset",
+  "ground_truth_score_notes_to_feed": 0,
+  "num_sequences_evaluated": 0,
+  "num_sequences_failed": 1,
+  "num_cache_hits": 1,
+  "num_cache_misses": 0
+}

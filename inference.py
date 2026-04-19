@@ -30,7 +30,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from anticipation.config import EVENT_SIZE
 from anticipation.convert import events_to_midi
 from anticipation.packed_sequence import (
-    ALTERNATING_START as PACKED_ALTERNATING_START,
+    ALTERNATING_START,
     extract_packed_components,
     is_real_score_triplet,
     is_score_triplet as packed_is_score_triplet,
@@ -42,10 +42,11 @@ from anticipation.vocab import (
     ADUR_OFFSET,
     ANOTE_OFFSET,
     ATIME_OFFSET,
+    CONTROL_OFFSET,
     DUR_OFFSET,
     NOTE_OFFSET,
+    REST,
     TIME_OFFSET,
-    CONTROL_OFFSET
 )
 from evaluate_muster import (
     check_muster_installation,
@@ -59,8 +60,6 @@ OUTPUT_BASE = "autoregressive_inference_results"
 DEFAULT_NUM_EXAMPLES = 25
 DEFAULT_RANDOM_SEED = 41
 DEFAULT_CONFIG_SOURCE = "checkpoint-2000"
-K_PREFIX = 33
-ALTERNATING_START = K_PREFIX * 2 * EVENT_SIZE
 TARGET_BEAT_INTERVAL = 0.5
 MUSTER_METRIC_KEYS = (
     "pitch_error_rate",
@@ -72,9 +71,6 @@ MUSTER_METRIC_KEYS = (
     "voice_error_rate",
     "mean_error_rate_with_voice",
 )
-
-assert ALTERNATING_START == PACKED_ALTERNATING_START
-
 
 def guess_default_checkpoint() -> str:
     candidates = []
@@ -197,6 +193,7 @@ def autoregressive_generate_score(
     device: str,
     constrain_score_tokens: bool = True,
     ground_truth_score_tokens_to_feed: int = 1,
+    rollout_trace: list | None = None,
 ) -> tuple[list[int], int]:
     if ground_truth_score_tokens_to_feed < 0:
         raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
@@ -212,6 +209,10 @@ def autoregressive_generate_score(
         )
         past = primed.past_key_values
         next_logits = primed.logits[0, -1, :]
+        if rollout_trace is not None:
+            rollout_trace.append(
+                {"source": "inference_packed", "event": "after_prime", "n": len(context)}
+            )
 
         def feed_token(token: int):
             nonlocal past, next_logits
@@ -224,10 +225,8 @@ def autoregressive_generate_score(
             next_logits = out.logits[0, -1, :]
 
         pos = score_start_idx
-        counter = 0
         while pos + 5 < len(tokens):
             if is_score_triplet(tokens, pos):
-                print(counter, end=':')
                 for slot in range(3):
                     if fed_score_tokens < ground_truth_score_tokens_to_feed:
                         token = int(tokens[pos + slot])
@@ -239,29 +238,45 @@ def autoregressive_generate_score(
                         token = int(logits.argmax().item())
                     context.append(token)
                     feed_token(token)
-                    print(token, end=',')
-<<<<<<< Updated upstream
-                print(context[-33*3*2]-CONTROL_OFFSET, end='\n')
-=======
-                print(context[-33*3*2-3+2]-CONTROL_OFFSET, end='\n')
->>>>>>> Stashed changes
+                    if rollout_trace is not None:
+                        rollout_trace.append(
+                            {
+                                "source": "inference_packed",
+                                "event": "feed",
+                                "token": int(token),
+                                "n": len(context),
+                            }
+                        )
 
                 pos += 3
 
                 if pos + 2 < len(tokens):
-                    print('>', end='')
                     for control_token in tokens[pos : pos + 3]:
                         context.append(control_token)
                         feed_token(control_token)
-                        #print(control_token, end=',')
-                    #print('', end='\n')
+                        if rollout_trace is not None:
+                            rollout_trace.append(
+                                {
+                                    "source": "inference_packed",
+                                    "event": "feed",
+                                    "token": int(control_token),
+                                    "n": len(context),
+                                }
+                            )
                     pos += 3
-
-                counter += 1
             else:
                 token = tokens[pos]
                 context.append(token)
                 feed_token(token)
+                if rollout_trace is not None:
+                    rollout_trace.append(
+                        {
+                            "source": "inference_packed",
+                            "event": "feed",
+                            "token": int(token),
+                            "n": len(context),
+                        }
+                    )
                 pos += 1
 
     return context, fed_score_tokens
@@ -277,8 +292,18 @@ def triplets_to_events(triplets: Iterable[list[int]]) -> list[int]:
 def normalize_triplet_times(triplets: list[list[int]]) -> list[list[int]]:
     if not triplets:
         return []
+    # Anchor to earliest *real* score onset; REST rows are dummy score slots and
+    # can sit at arbitrary placeholder times that would skew the shift used for MIDI.
+    real_onsets = [
+        triplet[0] - TIME_OFFSET
+        for triplet in triplets
+        if len(triplet) >= 3 and int(triplet[2]) != REST
+    ]
+    if real_onsets:
+        min_time = min(real_onsets)
+    else:
+        min_time = min(triplet[0] - TIME_OFFSET for triplet in triplets)
     triplets = sorted(triplets, key=lambda triplet: triplet[0])
-    min_time = min(triplet[0] - TIME_OFFSET for triplet in triplets)
     return [[triplet[0] - min_time, triplet[1], triplet[2]] for triplet in triplets]
 
 

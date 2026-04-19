@@ -48,8 +48,16 @@ MAX_INTERARRIVAL = TIME_RESOLUTION*MAX_INTERARRIVAL_IN_SECONDS
 
 # packed ASAP format
 #
-# When True, dummy score REST placeholders in the packed format always use
-# time=0 instead of mirroring the paired control time.
+# Prefix length (PREFIX_CONTROLS in anticipation/packed_sequence.py) pairs each
+# control with a dummy score slot so the body begins on a score triplet (strict
+# score/control alternation in the alternating region).
+#
+# Sliding-window tokenization: performance times in a window are relative to the
+# first performance note in that window (start_idx). Body score times are relative
+# to the minimum real score onset among aligned slots from start_idx onward.
+#
+# When True, dummy score REST placeholders always use score time 0 (TIME_OFFSET),
+# not the paired control's local time.
 DUMMY_REST_TIME_ZERO = True
 
 

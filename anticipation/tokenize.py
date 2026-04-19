@@ -8,7 +8,7 @@ import numpy as np
 
 from anticipation import ops
 from anticipation.config import *
-from anticipation.packed_sequence import dummy_rest_triplet
+from anticipation.packed_sequence import PREFIX_CONTROLS, dummy_rest_triplet
 from anticipation.vocab import *
 from anticipation.convert import compound_to_events, midi_to_interarrival, midi_to_compound
 from alignment import *
@@ -399,7 +399,7 @@ def tokenize3(datafiles, output, idx=0, debug=False, skip_Nones=True):
     return (seqcount, rest_count, stats[0], stats[1], stats[2], stats[3], all_truncations)
 
 
-def tokenize4(datafiles, output, idx=0, debug=False, skip_Nones=True, prefix_controls=33):
+def tokenize4(datafiles, output, idx=0, debug=False, skip_Nones=True, prefix_controls=PREFIX_CONTROLS):
     """
     Like tokenize3, but instead of taking ~5 seconds of control tokens up front, it
     uses the first `prefix_controls` control triples as a bootstrap prefix and
@@ -431,8 +431,7 @@ def tokenize4(datafiles, output, idx=0, debug=False, skip_Nones=True, prefix_con
                 cc = t[0]  # control triple (ATIME/ADUR/ANOTE with CONTROL offsets)
                 interleaved_tokens.extend(cc)
                 # Create the packed dummy REST placeholder for this control.
-                cc_time = cc[0] - CONTROL_OFFSET
-                interleaved_tokens.extend(dummy_rest_triplet(cc_time))
+                interleaved_tokens.extend(dummy_rest_triplet(0))
 
             prefix_len = k
 

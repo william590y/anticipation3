@@ -26,6 +26,7 @@ from anticipation.asap_aligned_stream import (
 )
 from anticipation.packed_sequence import (
     ALTERNATING_START,
+    PREFIX_CONTROLS,
     dummy_rest_triplet,
     is_dummy_score_triplet,
     is_prefix_placeholder_triplet,
@@ -48,7 +49,7 @@ print(f"Tokenization configuration:")
 print(f"  Workers: {NUM_WORKERS}")
 print(f"  Context size: {CONTEXT_SIZE}")
 print(f"  Serialized length: {CONTEXT_SIZE - 4}")
-print(f"  Prefix controls: 33 (fixed)")
+print(f"  Prefix controls: {PREFIX_CONTROLS} (fixed)")
 print(f"  Strategy: Sliding window over all piece positions")
 print(f"  Output format: space-separated tokens (one sequence per line)")
 print(f"  Aligned-stream cache: {STREAM_CACHE_DIR}")
@@ -129,16 +130,6 @@ def _strip_control_offsets(control_triplet):
     ]
 
 
-def _build_suffix_min(values):
-    suffix_min = [0] * len(values)
-    current = None
-    for idx in range(len(values) - 1, -1, -1):
-        value = values[idx]
-        current = value if current is None else min(current, value)
-        suffix_min[idx] = current
-    return suffix_min
-
-
 def _build_real_score_suffix_min(score_triplets):
     suffix_min = [0] * len(score_triplets)
     has_real = [False] * len(score_triplets)
@@ -154,7 +145,7 @@ def _build_real_score_suffix_min(score_triplets):
     return suffix_min, has_real
 
 
-def tokenize_sliding_windows(filegroup, prefix_controls=33):
+def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
     """
     Tokenize a single performance-score pair, extracting all possible packed sequences
     using a sliding window approach.
@@ -171,7 +162,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
     
     Args:
         filegroup: Tuple of (perf_midi, score_midi, perf_beats, score_beats)
-        prefix_controls: Number of control notes in the prefix (default 33)
+        prefix_controls: Number of control notes in the prefix (default PREFIX_CONTROLS)
     
     Returns:
         Dict with:
@@ -205,7 +196,6 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
         skipped_for_max_time = 0
         raw_perf_triplets = [_strip_control_offsets(item["control"]) for item in aligned_items]
         global_score_triplets = [item["score"] for item in aligned_items]
-        perf_suffix_min_times = _build_suffix_min([triplet[0] for triplet in raw_perf_triplets])
         score_suffix_min_times, score_suffix_has_real = _build_real_score_suffix_min(global_score_triplets)
         
         # Try different starting positions
@@ -217,7 +207,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             if remaining < k:
                 break  # Not enough notes for even the prefix
 
-            perf_min_time = perf_suffix_min_times[start_idx]
+            perf_anchor = raw_perf_triplets[start_idx][0]
             min_score_time_units = 0
             if score_suffix_has_real[start_idx]:
                 min_score_time_units = score_suffix_min_times[start_idx]
@@ -231,27 +221,27 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
             # Prefix: control + rest pairs using first k notes from normalized subset
             for i in range(k):
                 perf_triplet = raw_perf_triplets[start_idx + i]
-                local_perf_time = perf_triplet[0] - perf_min_time
-                
+                local_perf_time = perf_triplet[0] - perf_anchor
+
                 # Add control triplet (use correct offsets for each token type)
                 interleaved_tokens.extend([
                     local_perf_time + ATIME_OFFSET,   # time
                     perf_triplet[1] + ADUR_OFFSET,    # duration
                     perf_triplet[2] + ANOTE_OFFSET    # pitch
                 ])
-                
-                # Add dummy REST score triplet
-                interleaved_tokens.extend(dummy_rest_triplet(local_perf_time))
+
+                # Add dummy REST score triplet (time zero in score space)
+                interleaved_tokens.extend(dummy_rest_triplet(0))
             
             # Main body: alternate score/control
             # Uses notes [0:] for scores and notes [k:] for controls from subset
             for i in range(remaining):
                 item_idx = start_idx + i
                 perf_triplet = raw_perf_triplets[item_idx]
-                local_perf_time = perf_triplet[0] - perf_min_time
+                local_perf_time = perf_triplet[0] - perf_anchor
                 score_triplet = global_score_triplets[item_idx]
                 if score_triplet is None:
-                    interleaved_tokens.extend(dummy_rest_triplet(local_perf_time))
+                    interleaved_tokens.extend(dummy_rest_triplet(0))
                 else:
                     interleaved_tokens.extend([
                         score_triplet[0] - min_score_time_units,
@@ -264,7 +254,7 @@ def tokenize_sliding_windows(filegroup, prefix_controls=33):
                 if ii < remaining:
                     perf_triplet = raw_perf_triplets[start_idx + ii]
                     interleaved_tokens.extend([
-                        (perf_triplet[0] - perf_min_time) + ATIME_OFFSET,   # time
+                        (perf_triplet[0] - perf_anchor) + ATIME_OFFSET,   # time
                         perf_triplet[1] + ADUR_OFFSET,    # duration
                         perf_triplet[2] + ANOTE_OFFSET    # pitch
                     ])

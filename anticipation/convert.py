@@ -335,6 +335,9 @@ def events_to_compound(tokens, debug=False):
     tokens = [tok for tok in tokens if tok != SEPARATOR]
 
     assert len(tokens) % 3 == 0
+    if not tokens:
+        return []
+
     out = 5*(len(tokens)//3)*[0]
     out[0::5] = tokens[0::3]
     out[1::5] = tokens[1::3]
@@ -351,7 +354,17 @@ def events_to_compound(tokens, debug=False):
 
 
 def events_to_midi(tokens, debug=False):
-    return compound_to_midi(events_to_compound(tokens, debug=debug), debug=debug)
+    compound = events_to_compound(tokens, debug=debug)
+    if not compound:
+        # All events were REST / padding (unpad removed everything). Return a valid
+        # empty score so callers like save_midi never hit max() on an empty compound.
+        mid = mido.MidiFile()
+        mid.ticks_per_beat = TIME_RESOLUTION // 2
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        return mid
+    return compound_to_midi(compound, debug=debug)
 
 def midi_to_events(midifile, debug=False, quantize=True):
     return compound_to_events(midi_to_compound(midifile, debug=debug, quantize=quantize))

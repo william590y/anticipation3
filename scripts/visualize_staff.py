@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from alignment import align_tokens2
 from anticipation.config import *
+from anticipation.packed_sequence import PREFIX_CONTROLS
 from anticipation.vocab import *
 
 
@@ -31,7 +32,9 @@ def decode_event_triplet(triplet: List[int], is_control: bool) -> Tuple[float, f
     return start_seconds, dur_seconds, pitch
 
 
-def build_interleave_order(matched: List[List[Any]], method: str = "t4", prefix_controls: int = 33) -> List[Tuple[str, int]]:
+def build_interleave_order(
+    matched: List[List[Any]], method: str = "t4", prefix_controls: int = PREFIX_CONTROLS
+) -> List[Tuple[str, int]]:
     """Return a list of (type, matched_index) in the order they are emitted in the interleaved stream.
 
     type is one of: 'score', 'control', 'pad' (pad appears only in t4 prefix).
@@ -73,7 +76,7 @@ def main():
     parser.add_argument("--row", type=int, default=0, help="Row index in metadata.csv to visualize")
     parser.add_argument("--skip-nones", action="store_true")
     parser.add_argument("--method", choices=["t3", "t4"], default="t4")
-    parser.add_argument("--prefix-controls", type=int, default=33)
+    parser.add_argument("--prefix-controls", type=int, default=PREFIX_CONTROLS)
     parser.add_argument("--qpm", type=float, default=120.0, help="Tempo (quarters per minute) for display timing")
     parser.add_argument("--out", default="./data/staff_interleave.musicxml", help="Output file path (.musicxml or .png)")
     parser.add_argument("--format", choices=["musicxml", "png"], default=None, help="Output format override; inferred from --out if not set")
