@@ -238,7 +238,7 @@ def autoregressive_generate_score(
                     context.append(token)
                     feed_token(token)
                     print(token, end=',')
-                print(context[-33*3*2-4]-CONTROL_OFFSET, end='\n')
+                print(context[-33*3*2]-CONTROL_OFFSET, end='\n')
 
                 pos += 3
 

@@ -170,6 +170,24 @@ def max_predicted_score_onset_units(pred_score_triplets):
     return max(max(0, triplet[0] - TIME_OFFSET) for triplet in pred_score_triplets)
 
 
+def min_real_score_onset_units_suffix(gt_score_triplets, start_note_idx):
+    """
+    Minimum onset (in score time units above TIME_OFFSET) over real score notes
+    from start_note_idx onward. Matches tokenize-asap-sliding.py's
+    score_suffix_min_times / min_score_time_units convention for body scores.
+    """
+    if not gt_score_triplets or start_note_idx >= len(gt_score_triplets):
+        return 0
+    onsets = []
+    for t in gt_score_triplets[start_note_idx:]:
+        if len(t) < 3:
+            continue
+        if int(t[2]) == REST:
+            continue
+        onsets.append(int(t[0]) - TIME_OFFSET)
+    return min(onsets) if onsets else 0
+
+
 def empty_score_token_perplexity_trace():
     return {
         "note_index": [],
@@ -458,6 +476,7 @@ def autoregressive_generate_from_controls(
     next_logits = None
     note_idx = 0
     score_time_offset = 0
+    min_score_time_units = min_real_score_onset_units_suffix(gt_score_triplets, 0)
 
     def clamp_tokens(tokens):
         return [min(max(int(token), 0), vocab_size - 1) for token in tokens]
@@ -508,8 +527,12 @@ def autoregressive_generate_from_controls(
         )
         if use_ground_truth_note:
             gt_triplet = gt_score_triplets[note_idx]
-            local_time_tok = int(gt_triplet[0] - score_time_offset)
-            time_tok = min(max(local_time_tok, TIME_OFFSET), DUR_OFFSET - 1)
+            # Match tokenize-asap-sliding.py: body score times use score[0] - min_suffix
+            # (min real onset in units from this note index onward). Keeps teacher-forced
+            # tokens in-distribution vs bare full-score onset ids when score_time_offset==0.
+            raw_time_tok = int(gt_triplet[0]) - score_time_offset
+            shifted_time_tok = raw_time_tok - min_score_time_units
+            time_tok = min(max(shifted_time_tok, TIME_OFFSET), DUR_OFFSET - 1)
             dur_tok = min(max(int(gt_triplet[1]), DUR_OFFSET), NOTE_OFFSET - 1)
             pitch_tok = min(max(int(gt_triplet[2]), NOTE_OFFSET), CONTROL_OFFSET - 1)
 
@@ -517,6 +540,9 @@ def autoregressive_generate_from_controls(
             ensure_primed()
             feed([time_tok, dur_tok, pitch_tok])
             stats["ground_truth_score_notes_fed"] += 1
+            pred_score_triplets.append(
+                [int(gt_triplet[0]), int(gt_triplet[1]), int(gt_triplet[2])]
+            )
         else:
             time_tok, time_log_prob = decode_slot(TIME_OFFSET, DUR_OFFSET)
             dur_tok, dur_log_prob = decode_slot(DUR_OFFSET, NOTE_OFFSET)
@@ -531,9 +557,9 @@ def autoregressive_generate_from_controls(
             trace["dur"].append(float(np.exp(-dur_log_prob)))
             trace["pitch"].append(float(np.exp(-pitch_log_prob)))
             stats["generated_score_note_count"] += 1
-        pred_score_triplets.append(
-            [time_tok + score_time_offset, dur_tok, pitch_tok]
-        )
+            pred_score_triplets.append(
+                [time_tok + score_time_offset, dur_tok, pitch_tok]
+            )
         note_idx += 1
 
         if future_idx < len(control_triplets):
@@ -555,6 +581,9 @@ def autoregressive_generate_from_controls(
             # windows to the previous predicted note end is overly sensitive to duration
             # errors. Re-anchor using the latest predicted onset instead.
             score_time_offset = max_predicted_score_onset_units(pred_score_triplets)
+            min_score_time_units = min_real_score_onset_units_suffix(
+                gt_score_triplets, note_idx
+            )
             context = list(header)
             score_start_idx = len(header)
             past = None
