@@ -186,8 +186,8 @@ class TokenizedDataset(Dataset):
         if self.is_training:
             print(
                 "  Training mode: "
-                f"onset_jitter_std={self.onset_jitter_std}, "
-                f"dur_jitter_range={self.dur_jitter_range}, "
+                f"onset_jitter_std={self.onset_jitter_std} (controls in input only), "
+                f"dur_jitter_range={self.dur_jitter_range} (controls in input only), "
                 f"score_mask_ratio={self.mask_prob}, "
                 f"transpose_range={self.transpose_range_semitones}, "
                 f"tempo_scale_range={self.tempo_scale_range}, "
@@ -275,55 +275,6 @@ class TokenizedDataset(Dataset):
         return {
             "num_controls": len(ctrl_positions),
             "new_ctrl_times": new_ctrl_times,
-            "dur_factors": dur_factors,
-        }
-
-    def _sample_score_timing_plan(self, tokens):
-        from anticipation.vocab import CONTROL_OFFSET, TIME_OFFSET
-
-        score_positions = []
-        raw_times = []
-
-        i = 0
-        while i < len(tokens) - 2:
-            tok0 = tokens[i].item()
-            tok1 = tokens[i + 1].item()
-            tok2 = tokens[i + 2].item()
-
-            is_event_triplet = (
-                tok0 < CONTROL_OFFSET
-                and tok1 < CONTROL_OFFSET
-                and tok2 < CONTROL_OFFSET
-            )
-
-            if is_event_triplet:
-                score_positions.append(i)
-                raw_times.append(tok0 - TIME_OFFSET)
-                i += 3
-            else:
-                i += 1
-
-        new_score_times = None
-        if self.onset_jitter_std > 0 and len(raw_times) >= 2:
-            new_time = float(raw_times[0])
-            jittered = [new_time]
-            for k in range(1, len(raw_times)):
-                ioi = raw_times[k] - raw_times[k - 1]
-                scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
-                new_time = new_time + ioi * scale
-                jittered.append(new_time)
-            new_score_times = jittered
-
-        dur_factors = None
-        if self.dur_jitter_range > 0 and score_positions:
-            dur_factors = [
-                1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
-                for _ in score_positions
-            ]
-
-        return {
-            "num_scores": len(score_positions),
-            "new_score_times": new_score_times,
             "dur_factors": dur_factors,
         }
 
@@ -603,17 +554,18 @@ class TokenizedDataset(Dataset):
             labels = tokens.clone()
         else:
             transpose_shift, tempo_factor = self._sample_augmentation_params()
+            # Onset/duration jitter applies only to control (performance) triplets in the
+            # model input, not score triplets. Labels never use timing jitter (see below).
             control_timing_plan = self._sample_control_timing_plan(tokens)
-            score_timing_plan = self._sample_score_timing_plan(tokens)
             augmented_tokens = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=True,
-                apply_score_timing_augmentation=True,
+                apply_score_timing_augmentation=False,
                 apply_tempo_scaling_to_controls=True,
                 control_timing_plan=control_timing_plan,
-                score_timing_plan=score_timing_plan,
+                score_timing_plan=None,
             )
             labels = self._augment_sequence(
                 tokens,
@@ -813,7 +765,7 @@ def evaluate_model(
     pin_memory,
     num_workers=0,
     max_samples=500,
-    autoregressive_samples=100,
+    autoregressive_samples=20,
     disable_autoregressive_pitch_eval=False,
 ):
     model.eval()
@@ -1037,7 +989,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=500)
+    parser.add_argument('--eval_steps', type=int, default=1000)
     parser.add_argument(
         '--eval_max_samples',
         type=int,
