@@ -1020,19 +1020,19 @@ def main():
     parser.add_argument(
         '--onset_jitter_std',
         type=float,
-        default=0.1,
+        default=0.05,
         help='Std of N(1, std^2) multiplier applied to each inter-onset interval of control triplets and score-side context triplets; labels are unchanged (training only)',
     )
     parser.add_argument(
         '--dur_jitter_range',
         type=float,
-        default=0.1,
+        default=0.05,
         help='Half-range of U(1-r, 1+r) duration rescaling per control triplet and score-side context triplet; labels are unchanged (training only)',
     )
     parser.add_argument(
         '--mask_prob',
         type=float,
-        default=0.75,
+        default=0.00,
         help='Fraction of score triplets whose token embeddings are zeroed in the input context (training only)',
     )
     parser.add_argument(
