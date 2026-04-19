@@ -19,7 +19,6 @@ from multiprocessing import Pool
 
 from anticipation.config import *
 from anticipation.vocab import *
-from anticipation import ops
 from anticipation.asap_aligned_stream import (
     STREAM_CACHE_DIR,
     build_performance_anchored_stream,
@@ -193,7 +192,6 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
         pickup_start_indices = []
         most_negative_score_time_units = None
         full_length_candidates = 0
-        skipped_for_max_time = 0
         raw_perf_triplets = [_strip_control_offsets(item["control"]) for item in aligned_items]
         global_score_triplets = [item["score"] for item in aligned_items]
         score_suffix_min_times, score_suffix_has_real = _build_real_score_suffix_min(global_score_triplets)
@@ -265,15 +263,10 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
                 # Not enough tokens for a full sequence, stop trying later positions
                 break
             full_length_candidates += 1
-            
+
             # Trim to the packed serialized length
             interleaved_tokens = interleaved_tokens[:max_body]
-            
-            # Check if sequence is valid
-            if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
-                skipped_for_max_time += 1
-                continue  # Skip this sequence, try next position
-            
+
             sequence = interleaved_tokens
             
             # Verify sequence length
@@ -297,10 +290,6 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
             if full_length_candidates == 0:
                 failure_reason = (
                     f"piece is too short to form a full packed sequence of {CONTEXT_SIZE - 4} tokens"
-                )
-            elif skipped_for_max_time == full_length_candidates:
-                failure_reason = (
-                    f"all {full_length_candidates} candidate windows exceeded MAX_TIME={MAX_TIME}"
                 )
             else:
                 failure_reason = "no valid packed windows generated"

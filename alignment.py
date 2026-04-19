@@ -1,9 +1,42 @@
+import copy
+import os
+from collections import OrderedDict
+
 import numpy as np
 import scipy.interpolate
 from anticipation.convert import midi_to_events
 from anticipation.config import *
 from anticipation.vocab import *
 from itertools import combinations
+
+# Bump if align_tokens2 logic changes (invalidates on-disk / in-memory alignment caches).
+_ALIGN_TOKENS2_CACHE_VERSION = 1
+_ALIGN_TOKENS2_CACHE = OrderedDict()
+_ALIGN_TOKENS2_CACHE_MAX = 512
+
+
+def _file_stat_sig(path: str) -> tuple:
+    try:
+        st = os.stat(path)
+        return (int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return (0, 0)
+
+
+def _align_tokens2_cache_key(file1, file2, file3, file4, skip_Nones, thres):
+    return (
+        _ALIGN_TOKENS2_CACHE_VERSION,
+        os.path.abspath(file1),
+        os.path.abspath(file2),
+        os.path.abspath(file3),
+        os.path.abspath(file4),
+        _file_stat_sig(file1),
+        _file_stat_sig(file2),
+        _file_stat_sig(file3),
+        _file_stat_sig(file4),
+        bool(skip_Nones),
+        float(thres),
+    )
 
 def load_annotation_file(file_path):
     annotations = []
@@ -170,6 +203,12 @@ def align_tokens(file1, file2, file3, file4, skip_Nones=True):
     return matched_tuples
 
 def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
+    cache_key = _align_tokens2_cache_key(file1, file2, file3, file4, skip_Nones, thres)
+    cached = _ALIGN_TOKENS2_CACHE.get(cache_key)
+    if cached is not None:
+        _ALIGN_TOKENS2_CACHE.move_to_end(cache_key)
+        return copy.deepcopy(cached)
+
     # turn midi into events, without quantizing so we can get 16 digits of precision in arrival time
     perf = midi_to_events(file1, quantize=False)
     score = midi_to_events(file2, quantize=False)
@@ -185,6 +224,8 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
 
     matched_tuples = []
 
+    # Shallow copy: same list objects as s_tuples; .remove() matches legacy semantics for
+    # duplicate value-equal score rows (first equal removed, not necessarily the last-tie row).
     s_tuples_copy = s_tuples.copy()
 
     p_min = map.x.min()
@@ -198,29 +239,23 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
         p_time, p_note = p_tuple[0], p_tuple[2]
 
         if p_min <= p_time <= p_max:
-
+            mapped_p = float(map(p_time))
             for j, s_tuple in enumerate(s_tuples_copy):
-
-                s_time, s_note = s_tuple[0], s_tuple[2] 
-
+                s_time, s_note = s_tuple[0], s_tuple[2]
                 k = s_tuples.index(s_tuple)
-
-                dist = np.abs(map(p_time) - s_time)
-
+                dist = abs(mapped_p - s_time)
                 if p_note != s_note:
-                    continue # not a match (wrong pitch)
-
-                if dist <= thres and dist <= best_dist: # found a possible match
+                    continue  # not a match (wrong pitch)
+                if dist <= thres and dist <= best_dist:  # found a possible match (last tie wins)
                     best_dist = dist
                     best_match = s_tuple
                     best_index = k
 
         if best_index is not None:
-            matched_tuples.append([p_tuple,i,best_match,best_index])
+            matched_tuples.append([p_tuple, i, best_match, best_index])
             s_tuples_copy.remove(best_match)
         elif not skip_Nones:
-            matched_tuples.append([p_tuple,i,best_match,best_index])
-
+            matched_tuples.append([p_tuple, i, best_match, best_index])
 
     # revert back to token format
     for i, l in enumerate(matched_tuples):
@@ -230,7 +265,12 @@ def align_tokens2(file1, file2, file3, file4, skip_Nones=True, thres=0.1):
 
         if l[2][0] != None:
             l[2] = [round(l[2][0]*TIME_RESOLUTION), l[2][1]+DUR_OFFSET, l[2][2]+NOTE_OFFSET]
-        
+
         matched_tuples[i] = l
+
+    _ALIGN_TOKENS2_CACHE[cache_key] = copy.deepcopy(matched_tuples)
+    _ALIGN_TOKENS2_CACHE.move_to_end(cache_key)
+    while len(_ALIGN_TOKENS2_CACHE) > _ALIGN_TOKENS2_CACHE_MAX:
+        _ALIGN_TOKENS2_CACHE.popitem(last=False)
 
     return matched_tuples

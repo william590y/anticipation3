@@ -25,7 +25,7 @@ import torch
 
 from anticipation import ops
 from anticipation.asap_aligned_stream import build_performance_anchored_stream
-from anticipation.config import CONTEXT_SIZE, MAX_TIME
+from anticipation.config import CONTEXT_SIZE
 from anticipation.packed_sequence import (
     PREFIX_CONTROLS,
     dummy_rest_triplet,
@@ -137,8 +137,6 @@ def build_opening_packed_tokens(filegroup, prefix_controls=None):
     if len(interleaved_tokens) < max_body:
         return None, "sequence shorter than packed length"
     interleaved_tokens = interleaved_tokens[:max_body]
-    if ops.max_time(interleaved_tokens, seconds=False) >= MAX_TIME:
-        return None, f"max_time >= {MAX_TIME}"
     return [max(0, int(t)) for t in interleaved_tokens], None
 
 
