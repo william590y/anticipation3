@@ -224,8 +224,10 @@ def autoregressive_generate_score(
             next_logits = out.logits[0, -1, :]
 
         pos = score_start_idx
+        counter = 0
         while pos + 5 < len(tokens):
             if is_score_triplet(tokens, pos):
+                print(counter, end=':')
                 for slot in range(3):
                     if fed_score_tokens < ground_truth_score_tokens_to_feed:
                         token = int(tokens[pos + slot])
@@ -238,15 +240,24 @@ def autoregressive_generate_score(
                     context.append(token)
                     feed_token(token)
                     print(token, end=',')
+<<<<<<< Updated upstream
                 print(context[-33*3*2]-CONTROL_OFFSET, end='\n')
+=======
+                print(context[-33*3*2-3+2]-CONTROL_OFFSET, end='\n')
+>>>>>>> Stashed changes
 
                 pos += 3
 
                 if pos + 2 < len(tokens):
+                    print('>', end='')
                     for control_token in tokens[pos : pos + 3]:
                         context.append(control_token)
                         feed_token(control_token)
+                        #print(control_token, end=',')
+                    #print('', end='\n')
                     pos += 3
+
+                counter += 1
             else:
                 token = tokens[pos]
                 context.append(token)

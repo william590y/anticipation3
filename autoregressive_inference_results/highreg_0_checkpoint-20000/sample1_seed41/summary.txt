@@ -1,0 +1,24 @@
+Packed ASAP Autoregressive Inference
+============================================================
+Checkpoint: highreg_0/checkpoint-20000
+Test file: data/test_normalized.txt
+Total sequences available: 675642
+Sampled sequences: 1
+Constrained score decoding: True
+Ground-truth score tokens fed: 1
+MUSTER scoring enabled: False
+
+Aggregate metrics:
+  Autoregressive accuracy (pitch): 100.00%
+  Time accuracy: 1.01%
+  Duration accuracy: 74.75%
+  Exact triplet accuracy: 0.00%
+  Sequences evaluated: 1
+  Sequences failed: 0
+  Mean per-sequence pitch accuracy: 100.00% (+-0.00)
+
+Per-sequence outputs (for successful sequences):
+  input_performance.mid
+  ground_truth_score.mid
+  output_score.mid
+  stats.json
