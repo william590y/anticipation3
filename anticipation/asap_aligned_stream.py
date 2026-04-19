@@ -16,7 +16,8 @@ from alignment import align_tokens2, load_annotation_file
 
 TARGET_BEAT_INTERVAL = 0.5
 STREAM_CACHE_DIR = Path("data") / "asap_aligned_stream_cache"
-STREAM_PREPROCESS_VERSION = "performance_anchored_dummy_v1"
+# Bump when aligned-stream semantics change (forces cache miss vs data/asap_aligned_stream_cache).
+STREAM_PREPROCESS_VERSION = "performance_anchored_dummy_v2_align_cache_maxtime"
 
 
 def _path_str(pathlike) -> str:

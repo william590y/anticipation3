@@ -814,6 +814,7 @@ def evaluate_model(
     num_workers=0,
     max_samples=500,
     autoregressive_samples=100,
+    disable_autoregressive_pitch_eval=False,
 ):
     model.eval()
     total_loss = 0.0
@@ -889,7 +890,9 @@ def evaluate_model(
     autoregressive_correct = 0
     autoregressive_total = 0
 
-    if autoregressive_samples > 0:
+    if disable_autoregressive_pitch_eval:
+        autoregressive_accuracy = float("nan")
+    elif autoregressive_samples > 0:
         autoregressive_dataloader = _build_random_eval_dataloader(
             dataset=dataset,
             accelerator=accelerator,
@@ -935,15 +938,19 @@ def evaluate_model(
                             autoregressive_correct += 1
                         autoregressive_total += 1
 
-    autoregressive_stats = torch.tensor(
-        [autoregressive_correct, autoregressive_total],
-        device=accelerator.device,
-        dtype=torch.float64,
-    )
-    autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
-    autoregressive_correct = int(autoregressive_stats[0].item())
-    autoregressive_total = int(autoregressive_stats[1].item())
-    autoregressive_accuracy = autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
+        autoregressive_stats = torch.tensor(
+            [autoregressive_correct, autoregressive_total],
+            device=accelerator.device,
+            dtype=torch.float64,
+        )
+        autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
+        autoregressive_correct = int(autoregressive_stats[0].item())
+        autoregressive_total = int(autoregressive_stats[1].item())
+        autoregressive_accuracy = (
+            autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
+        )
+    else:
+        autoregressive_accuracy = 0.0
 
     accelerator.wait_for_everyone()
     return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
@@ -993,7 +1000,17 @@ def plot_losses(
     ax3.legend()
     ax3.grid(True, alpha=0.3)
 
-    ax4.plot(validation_steps, val_autoregressive_accuracies, label='Autoregressive Pitch Accuracy', color='purple', marker='s')
+    ar = np.asarray(val_autoregressive_accuracies, dtype=np.float64)
+    steps_ar = np.asarray(validation_steps, dtype=np.float64)
+    finite = np.isfinite(ar)
+    if finite.any():
+        ax4.plot(
+            steps_ar[finite],
+            ar[finite],
+            label='Autoregressive Pitch Accuracy',
+            color='purple',
+            marker='s',
+        )
     ax4.set_xlabel('Step')
     ax4.set_ylabel('Pitch Accuracy (%)')
     ax4.set_title('Validation Autoregressive Pitch Accuracy')
@@ -1020,7 +1037,7 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
-    parser.add_argument('--eval_steps', type=int, default=1000)
+    parser.add_argument('--eval_steps', type=int, default=500)
     parser.add_argument(
         '--eval_max_samples',
         type=int,
@@ -1032,6 +1049,12 @@ def main():
         type=int,
         default=100,
         help='Random validation sequences for autoregressive eval. <= 0 disables autoregressive eval.',
+    )
+    parser.add_argument(
+        '--disable-autoregressive-pitch-eval',
+        action='store_true',
+        default=False,
+        help='Skip autoregressive pitch decoding during validation (teacher-forced eval still runs).',
     )
     parser.add_argument(
         '--eval_num_workers',
@@ -1341,18 +1364,28 @@ def main():
                 **val_loader_kwargs,
                 max_samples=args.eval_max_samples,
                 autoregressive_samples=args.eval_autoregressive_samples,
+                disable_autoregressive_pitch_eval=args.disable_autoregressive_pitch_eval,
             )
 
             if accelerator.is_main_process:
                 validation_steps.append(validation_step)
                 val_losses.append(val_loss)
                 val_accuracies.append(val_acc * 100)
-                val_autoregressive_accuracies.append(val_auto_acc * 100)
+                val_autoregressive_accuracies.append(
+                    float("nan")
+                    if args.disable_autoregressive_pitch_eval
+                    else val_auto_acc * 100
+                )
 
+                ar_msg = (
+                    "(skipped)"
+                    if args.disable_autoregressive_pitch_eval
+                    else f"{val_auto_acc * 100:.2f}%"
+                )
                 message = (
                     f"Validation Loss: {val_loss:.4f}, "
                     f"Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
-                    f"Autoregressive Accuracy: {val_auto_acc*100:.2f}%"
+                    f"Autoregressive Accuracy: {ar_msg}"
                 )
                 print(message)
 
