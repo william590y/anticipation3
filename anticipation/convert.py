@@ -181,7 +181,14 @@ def midi_to_compound(midifile, debug=False, quantize=True):
                     if debug:
                         print('WARNING: ignoring bad offset')
                 else:
-                    duration_ticks = round(TIME_RESOLUTION*(time-onset_time))
+                    # duration quantization (mirrors the onset handling above):
+                    # with quantize=False, keep fractional 10ms ticks so a later
+                    # tempo rescale (e.g. beat normalization) doesn't amplify a
+                    # premature rounding error -- round once, after scaling.
+                    if quantize:
+                        duration_ticks = round(TIME_RESOLUTION*(time-onset_time))
+                    else:
+                        duration_ticks = TIME_RESOLUTION*(time-onset_time)
                     tokens[5*open_idx + 1] = duration_ticks
                     #del open_notes[(instr,message.note,message.channel)]
         elif message.type == 'set_tempo':

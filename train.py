@@ -11,15 +11,62 @@ from torch.optim import AdamW
 from tqdm import tqdm
 import gc
 import traceback
-import matplotlib.pyplot as plt
 import warnings
-from anticipation.config import CONTEXT_SIZE, EVENT_SIZE
+
+import torch.nn.functional as F
+
+try:
+    import wandb
+except ImportError:  # pragma: no cover - wandb is an optional dependency
+    wandb = None
+
+from anticipation.config import CONTEXT_SIZE, EVENT_SIZE, MAX_TIME, MAX_DUR, MAX_PITCH
 from anticipation.packed_sequence import (
     ALTERNATING_START,
+    is_control_triplet_tokens,
     is_real_score_triplet,
     iter_score_slot_positions,
 )
-from inference import autoregressive_generate_score
+from anticipation.vocab import (
+    ADUR_OFFSET,
+    ANOTE_OFFSET,
+    ATIME_OFFSET,
+    CONTROL_OFFSET,
+    DUR_OFFSET,
+    NOTE_OFFSET,
+    REST,
+    TIME_OFFSET,
+    VOCAB_SIZE,
+)
+from inference import batched_autoregressive_generate_score
+
+# Each triplet is (onset/time, duration, pitch/note). A token's role within its
+# triplet is therefore (token_index % 3). These names are reused for per-type
+# loss and accuracy reporting.
+TOKEN_TYPE_NAMES = ("onset", "duration", "pitch")
+
+
+def iter_sequence_triplets(tokens):
+    """Scan a packed sequence, yielding (pos, tok0, tok1, tok2, is_control).
+
+    Score/prefix-placeholder triplets (all tokens < CONTROL_OFFSET) yield
+    is_control=False; control triplets yield is_control=True. Anything else
+    (e.g. a SEPARATOR) is skipped one token at a time so the scan re-syncs.
+    """
+    i = 0
+    while i < len(tokens) - 2:
+        tok0 = int(tokens[i])
+        tok1 = int(tokens[i + 1])
+        tok2 = int(tokens[i + 2])
+
+        if tok0 < CONTROL_OFFSET and tok1 < CONTROL_OFFSET and tok2 < CONTROL_OFFSET:
+            yield i, tok0, tok1, tok2, False
+            i += 3
+        elif is_control_triplet_tokens(tok0, tok1, tok2):
+            yield i, tok0, tok1, tok2, True
+            i += 3
+        else:
+            i += 1
 
 # Helper function to monitor GPU memory usage
 def print_gpu_memory_stats():
@@ -229,33 +276,22 @@ class TokenizedDataset(Dataset):
         return transpose_shift, tempo_factor
 
     def _sample_control_timing_plan(self, tokens):
-        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR, ATIME_OFFSET
+        """Pre-sample jittered control onset times and duration factors.
 
+        Sampling the randomness once (instead of inside ``_augment_sequence``)
+        lets the input and label passes share identical augmentation decisions.
+        """
         ctrl_positions = []
         raw_times = []
-
-        i = 0
-        while i < len(tokens) - 2:
-            tok0 = tokens[i].item()
-            tok1 = tokens[i + 1].item()
-            tok2 = tokens[i + 2].item()
-
-            is_control_triplet = (
-                tok0 >= CONTROL_OFFSET
-                and tok1 >= CONTROL_OFFSET
-                and tok2 >= CONTROL_OFFSET
-                and tok0 != SEPARATOR
-            )
-
-            if is_control_triplet:
-                ctrl_positions.append(i)
+        for pos, tok0, _, _, is_control in iter_sequence_triplets(tokens):
+            if is_control:
+                ctrl_positions.append(pos)
                 raw_times.append(tok0 - ATIME_OFFSET)
-                i += 3
-            else:
-                i += 1
 
         new_ctrl_times = None
         if self.onset_jitter_std > 0 and len(raw_times) >= 2:
+            # Jitter each inter-onset interval multiplicatively, accumulating so
+            # local rubato is perturbed without drifting the global clock sign.
             new_time = float(raw_times[0])
             jittered = [new_time]
             for k in range(1, len(raw_times)):
@@ -284,24 +320,18 @@ class TokenizedDataset(Dataset):
         transpose_shift=0,
         tempo_factor=1.0,
         apply_timing_augmentation=True,
-        apply_score_timing_augmentation=False,
         apply_tempo_scaling_to_controls=True,
         control_timing_plan=None,
-        score_timing_plan=None,
     ):
-        from anticipation.vocab import (
-            CONTROL_OFFSET,
-            SEPARATOR,
-            REST,
-            ATIME_OFFSET,
-            ADUR_OFFSET,
-            ANOTE_OFFSET,
-            TIME_OFFSET,
-            DUR_OFFSET,
-            NOTE_OFFSET,
-        )
-        from anticipation.config import MAX_TIME, MAX_DUR, MAX_PITCH
+        """Apply training augmentations, returning a new token tensor.
 
+        Transposition applies to both score and control pitches (labels and
+        inputs must transpose together). Timing jitter and tempo scaling apply
+        only to control (performance) triplets: score timing is the prediction
+        target and is never perturbed. ``control_timing_plan`` carries the
+        pre-sampled jitter so the input pass uses it while the label pass
+        (``apply_timing_augmentation=False``) leaves control times clean.
+        """
         if not self.is_training:
             return tokens.clone()
 
@@ -329,106 +359,43 @@ class TokenizedDataset(Dataset):
             scaled = int(round((raw_tok - dur_base) * tempo_factor))
             return dur_base + max(0, min(MAX_DUR - 1, scaled))
 
-        event_positions = []
+        score_positions = []
         ctrl_positions = []
-        ctrl_index = 0
-
-        i = 0
-        while i < len(augmented) - 2:
-            tok0 = augmented[i].item()
-            tok1 = augmented[i + 1].item()
-            tok2 = augmented[i + 2].item()
-
-            is_event_triplet = tok0 < CONTROL_OFFSET and tok1 < CONTROL_OFFSET and tok2 < CONTROL_OFFSET
-            is_control_triplet = (
-                tok0 >= CONTROL_OFFSET
-                and tok1 >= CONTROL_OFFSET
-                and tok2 >= CONTROL_OFFSET
-                and tok0 != SEPARATOR
-            )
-
-            if is_event_triplet:
-                event_positions.append((i, tok0, tok1, tok2))
-                i += 3
-            elif is_control_triplet:
-                ctrl_positions.append((i, tok0, tok1, tok2))
-                i += 3
+        for pos, tok0, tok1, tok2, is_control in iter_sequence_triplets(augmented):
+            if is_control:
+                ctrl_positions.append((pos, tok0, tok1, tok2))
             else:
-                i += 1
+                score_positions.append((pos, tok0, tok1, tok2))
 
-        new_score_times = None
-        if apply_score_timing_augmentation:
-            if score_timing_plan is not None:
-                planned_times = score_timing_plan.get("new_score_times")
-                if planned_times is not None:
-                    new_score_times = [
-                        max(0, min(MAX_TIME - 1, int(round(t))))
-                        for t in planned_times
-                    ]
-            elif self.onset_jitter_std > 0 and len(event_positions) >= 2:
-                raw_times = [pos[1] - TIME_OFFSET for pos in event_positions]
-                new_time = float(raw_times[0])
-                jittered = [new_time]
-                for k in range(1, len(raw_times)):
-                    ioi = raw_times[k] - raw_times[k - 1]
-                    scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
-                    new_time = new_time + ioi * scale
-                    jittered.append(new_time)
-                new_score_times = [
-                    max(0, min(MAX_TIME - 1, int(round(t))))
-                    for t in jittered
-                ]
-
-        for k, (pos_i, tok0, tok1, tok2) in enumerate(event_positions):
-            if new_score_times is not None:
-                tok0 = TIME_OFFSET + new_score_times[k]
-
-            if apply_score_timing_augmentation and self.dur_jitter_range > 0:
-                if score_timing_plan is not None and score_timing_plan.get("dur_factors") is not None:
-                    dur_factor = score_timing_plan["dur_factors"][k]
-                else:
-                    dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
-                base_dur = tok1 - DUR_OFFSET
-                tok1 = DUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * dur_factor))))
-
-            if transpose_shift != 0 and tok2 != REST:
-                tok2 = _transpose_note(tok2, NOTE_OFFSET)
-
-            augmented[pos_i] = tok0
-            augmented[pos_i + 1] = tok1
-            augmented[pos_i + 2] = tok2
+        # Score / prefix-placeholder triplets: transposition only.
+        if transpose_shift != 0:
+            for pos_i, _, _, tok2 in score_positions:
+                if tok2 != REST:
+                    augmented[pos_i + 2] = _transpose_note(tok2, NOTE_OFFSET)
 
         new_ctrl_times = None
-        if apply_timing_augmentation:
-            if control_timing_plan is not None:
-                planned_times = control_timing_plan.get("new_ctrl_times")
-                if planned_times is not None:
-                    new_ctrl_times = [
-                        max(0, min(MAX_TIME - 1, int(round(t))))
-                        for t in planned_times
-                    ]
-            elif self.onset_jitter_std > 0 and len(ctrl_positions) >= 2:
-                raw_times = [pos[1] - ATIME_OFFSET for pos in ctrl_positions]
-                new_time = float(raw_times[0])
-                jittered = [new_time]
-                for k in range(1, len(raw_times)):
-                    ioi = raw_times[k] - raw_times[k - 1]
-                    scale = 1.0 + torch.randn(1).item() * self.onset_jitter_std
-                    new_time = new_time + ioi * scale
-                    jittered.append(new_time)
-                new_ctrl_times = [max(0, min(MAX_TIME - 1, int(round(t)))) for t in jittered]
+        if apply_timing_augmentation and control_timing_plan is not None:
+            planned_times = control_timing_plan.get("new_ctrl_times")
+            if planned_times is not None:
+                new_ctrl_times = [
+                    max(0, min(MAX_TIME - 1, int(round(t))))
+                    for t in planned_times
+                ]
+        dur_factors = (
+            control_timing_plan.get("dur_factors")
+            if apply_timing_augmentation and control_timing_plan is not None
+            else None
+        )
 
-        for k, (pos_i, tok0, tok1, tok2) in enumerate(ctrl_positions):
+        for ctrl_index, (pos_i, tok0, tok1, tok2) in enumerate(ctrl_positions):
             if new_ctrl_times is not None:
-                tok0 = ATIME_OFFSET + new_ctrl_times[k]
+                tok0 = ATIME_OFFSET + new_ctrl_times[ctrl_index]
 
-            if apply_timing_augmentation and self.dur_jitter_range > 0:
-                if control_timing_plan is not None and control_timing_plan.get("dur_factors") is not None:
-                    dur_factor = control_timing_plan["dur_factors"][ctrl_index]
-                else:
-                    dur_factor = 1.0 + (torch.rand(1).item() * 2.0 - 1.0) * self.dur_jitter_range
+            if dur_factors is not None:
                 base_dur = tok1 - ADUR_OFFSET
-                tok1 = ADUR_OFFSET + max(0, min(MAX_DUR - 1, int(round(base_dur * dur_factor))))
+                tok1 = ADUR_OFFSET + max(
+                    0, min(MAX_DUR - 1, int(round(base_dur * dur_factors[ctrl_index])))
+                )
 
             if apply_tempo_scaling_to_controls and tempo_factor != 1.0:
                 tok0 = _scale_time(tok0, ATIME_OFFSET)
@@ -440,7 +407,6 @@ class TokenizedDataset(Dataset):
             augmented[pos_i] = tok0
             augmented[pos_i + 1] = tok1
             augmented[pos_i + 2] = tok2
-            ctrl_index += 1
 
         return augmented
 
@@ -479,36 +445,17 @@ class TokenizedDataset(Dataset):
         return score_mask
 
     def _build_performance_loss_mask(self, tokens):
-        from anticipation.vocab import CONTROL_OFFSET, SEPARATOR
-
         loss_mask = torch.zeros_like(tokens, dtype=torch.bool)
         if not self.loss_mask_performance_tokens:
             return loss_mask
 
-        i = 0
-        while i < len(tokens) - 2:
-            tok0 = tokens[i].item()
-            tok1 = tokens[i + 1].item()
-            tok2 = tokens[i + 2].item()
-
-            is_control_triplet = (
-                tok0 >= CONTROL_OFFSET
-                and tok1 >= CONTROL_OFFSET
-                and tok2 >= CONTROL_OFFSET
-                and tok0 != SEPARATOR
-            )
-
-            if is_control_triplet:
-                loss_mask[i:i + 3] = True
-                i += 3
-            else:
-                i += 1
+        for pos, _, _, _, is_control in iter_sequence_triplets(tokens):
+            if is_control:
+                loss_mask[pos:pos + 3] = True
 
         return loss_mask
 
     def _clamp_tokens_to_vocab(self, tokens, tensor_name, sample_idx):
-        from anticipation.vocab import VOCAB_SIZE
-
         invalid_mask = (tokens < 0) | (tokens >= VOCAB_SIZE)
         if not torch.any(invalid_mask).item():
             return tokens
@@ -562,17 +509,14 @@ class TokenizedDataset(Dataset):
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=True,
-                apply_score_timing_augmentation=False,
                 apply_tempo_scaling_to_controls=True,
                 control_timing_plan=control_timing_plan,
-                score_timing_plan=None,
             )
             labels = self._augment_sequence(
                 tokens,
                 transpose_shift=transpose_shift,
                 tempo_factor=tempo_factor,
                 apply_timing_augmentation=False,
-                apply_score_timing_augmentation=False,
                 apply_tempo_scaling_to_controls=not self.loss_mask_performance_tokens,
             )
 
@@ -756,6 +700,32 @@ def _compute_original_weight_l2_penalty(model, reference_parameters):
     return total_penalty / max(1, total_elements)
 
 
+def num_score_slots(sequence_length, score_start_idx=ALTERNATING_START):
+    """Number of score-triplet slots in a packed sequence (heatmap width)."""
+    return len(list(iter_score_slot_positions(sequence_length, score_start_idx)))
+
+
+def _accumulate_per_type_teacher_forced(seq_logits, seq_labels, ce_sum, ce_count):
+    """Accumulate per-token-type cross-entropy for one teacher-forced sequence.
+
+    Causal LMs predict token ``j`` from the logits at position ``j - 1``; a
+    token's type is ``j % 3`` (0=onset, 1=duration, 2=pitch). ``-100`` labels are
+    ignored. ``ce_sum``/``ce_count`` are length-3 accumulators indexed by type.
+    """
+    shift_logits = seq_logits[:-1, :].float()
+    shift_labels = seq_labels[1:]
+    losses = F.cross_entropy(
+        shift_logits, shift_labels, reduction="none", ignore_index=-100
+    )
+    predicted_positions = torch.arange(1, seq_labels.size(0), device=losses.device)
+    roles = predicted_positions % EVENT_SIZE
+    valid = shift_labels != -100
+    for token_type in range(EVENT_SIZE):
+        selected = valid & (roles == token_type)
+        ce_sum[token_type] += float(losses[selected].sum().item())
+        ce_count[token_type] += int(selected.sum().item())
+
+
 def evaluate_model(
     model,
     accelerator,
@@ -767,12 +737,24 @@ def evaluate_model(
     max_samples=500,
     autoregressive_samples=20,
     disable_autoregressive_pitch_eval=False,
+    heatmap_slots=None,
 ):
+    """Run teacher-forced and autoregressive validation.
+
+    Returns a metrics dict with overall and per-token-type losses, teacher-forced
+    and autoregressive accuracies, and per-slot autoregressive error vectors used
+    to build the training-step x token-index heatmaps.
+    """
     model.eval()
+    if heatmap_slots is None:
+        heatmap_slots = num_score_slots(getattr(dataset, "sequence_length", 0) or 0)
+
     total_loss = 0.0
     total_samples = 0
     correct_pitches = 0
     total_pitches = 0
+    per_type_ce_sum = [0.0] * EVENT_SIZE
+    per_type_ce_count = [0] * EVENT_SIZE
 
     accelerator.wait_for_everyone()
     teacher_dataloader = _build_random_eval_dataloader(
@@ -809,6 +791,10 @@ def evaluate_model(
                 seq_labels = labels[b]
                 seq_logits = logits[b]
 
+                _accumulate_per_type_teacher_forced(
+                    seq_logits, seq_labels, per_type_ce_sum, per_type_ce_count
+                )
+
                 for pos in iter_score_slot_positions(len(seq_input), ALTERNATING_START):
                     if not is_real_score_triplet(seq_input, pos, ALTERNATING_START):
                         continue
@@ -821,7 +807,9 @@ def evaluate_model(
                         total_pitches += 1
 
     teacher_stats = torch.tensor(
-        [total_loss, total_samples, correct_pitches, total_pitches],
+        [total_loss, total_samples, correct_pitches, total_pitches]
+        + per_type_ce_sum
+        + [float(c) for c in per_type_ce_count],
         device=accelerator.device,
         dtype=torch.float64,
     )
@@ -830,6 +818,8 @@ def evaluate_model(
     total_samples = int(teacher_stats[1].item())
     correct_pitches = int(teacher_stats[2].item())
     total_pitches = int(teacher_stats[3].item())
+    per_type_ce_sum = [float(teacher_stats[4 + i].item()) for i in range(EVENT_SIZE)]
+    per_type_ce_count = [int(teacher_stats[4 + EVENT_SIZE + i].item()) for i in range(EVENT_SIZE)]
 
     if total_samples == 0:
         raise ValueError(
@@ -838,143 +828,187 @@ def evaluate_model(
 
     avg_loss = total_loss / total_samples
     teacher_forced_accuracy = correct_pitches / total_pitches if total_pitches > 0 else 0.0
+    per_type_loss = {
+        TOKEN_TYPE_NAMES[i]: (per_type_ce_sum[i] / per_type_ce_count[i] if per_type_ce_count[i] > 0 else float("nan"))
+        for i in range(EVENT_SIZE)
+    }
 
-    autoregressive_correct = 0
-    autoregressive_total = 0
+    results = {
+        "loss": avg_loss,
+        "teacher_forced_pitch_accuracy": teacher_forced_accuracy,
+        "loss_by_type": per_type_loss,
+    }
 
-    if disable_autoregressive_pitch_eval:
-        autoregressive_accuracy = float("nan")
-    elif autoregressive_samples > 0:
-        autoregressive_dataloader = _build_random_eval_dataloader(
-            dataset=dataset,
-            accelerator=accelerator,
-            batch_size=batch_size,
-            collate_fn=collate_fn,
-            pin_memory=pin_memory,
-            num_workers=num_workers,
-            requested_size=autoregressive_samples,
-            description="Autoregressive eval",
-        )
+    # Autoregressive evaluation: greedy-decode score triplets with teacher-forced
+    # ground-truth controls, then score onset/duration/pitch against ground truth.
+    # Per-slot vectors (indexed by score-slot ordinal = position in the sequence)
+    # feed the heatmaps; aggregate counts feed the accuracy line graphs.
+    pitch_err = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
+    onset_err = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
+    dur_err = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
+    onset_abs = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
+    dur_abs = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
+    slot_total = torch.zeros(heatmap_slots, dtype=torch.float64, device=accelerator.device)
 
-        with torch.no_grad():
-            for batch in tqdm(
-                autoregressive_dataloader,
-                desc="Autoregressive eval",
-                leave=False,
-                disable=not accelerator.is_local_main_process,
+    if disable_autoregressive_pitch_eval or autoregressive_samples <= 0:
+        results["autoregressive"] = None
+        accelerator.wait_for_everyone()
+        return results
+
+    autoregressive_dataloader = _build_random_eval_dataloader(
+        dataset=dataset,
+        accelerator=accelerator,
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        requested_size=autoregressive_samples,
+        description="Autoregressive eval",
+    )
+
+    with torch.no_grad():
+        for batch in tqdm(
+            autoregressive_dataloader,
+            desc="Autoregressive eval",
+            leave=False,
+            disable=not accelerator.is_local_main_process,
+        ):
+            input_ids = batch["input_ids"]
+            if input_ids.shape[0] == 0 or input_ids.shape[1] <= ALTERNATING_START:
+                continue
+            # Batched decode: every row shares the identical packed-sequence slot
+            # layout, so one KV-cached batch forward pass replaces a per-sequence
+            # Python loop -- a single-sequence forward barely uses the GPU's
+            # compute capacity, so this is a large speedup over the old approach.
+            pred_ctx = batched_autoregressive_generate_score(
+                model,
+                input_ids,
+                ALTERNATING_START,
+                str(accelerator.device),
+                constrain_score_tokens=True,
+                ground_truth_score_tokens_to_feed=0,
+            )
+            input_ids_dev = input_ids.to(accelerator.device)
+            for slot_idx, pos in enumerate(
+                iter_score_slot_positions(input_ids.shape[1], ALTERNATING_START)
             ):
-                input_ids = batch["input_ids"]
-                for seq in input_ids:
-                    seq = seq.detach().cpu()
-                    if len(seq) <= ALTERNATING_START:
-                        continue
-                    seq_list = [int(t) for t in seq]
-                    # Same decoding as inference.autoregressive_generate_score: KV cache,
-                    # one forward per fed token, teacher-forced GT controls after each score triplet.
-                    pred_ctx, _ = autoregressive_generate_score(
-                        model,
-                        seq_list,
-                        ALTERNATING_START,
-                        str(accelerator.device),
-                        constrain_score_tokens=True,
-                        ground_truth_score_tokens_to_feed=0,
-                    )
-                    for pos in iter_score_slot_positions(len(seq_list), ALTERNATING_START):
-                        if pos + 2 >= len(pred_ctx):
-                            break
-                        if not is_real_score_triplet(seq_list, pos, ALTERNATING_START):
-                            continue
-                        true_pitch = seq_list[pos + 2]
-                        pred_pitch = pred_ctx[pos + 2]
-                        if pred_pitch == true_pitch:
-                            autoregressive_correct += 1
-                        autoregressive_total += 1
+                if slot_idx >= heatmap_slots or pos + 2 >= pred_ctx.shape[1]:
+                    break
+                real_mask = input_ids_dev[:, pos + 2] != REST
+                if not torch.any(real_mask):
+                    continue
+                slot_total[slot_idx] += int(real_mask.sum().item())
+                onset_err[slot_idx] += int(
+                    ((pred_ctx[:, pos] != input_ids_dev[:, pos]) & real_mask).sum().item()
+                )
+                dur_err[slot_idx] += int(
+                    ((pred_ctx[:, pos + 1] != input_ids_dev[:, pos + 1]) & real_mask).sum().item()
+                )
+                pitch_err[slot_idx] += int(
+                    ((pred_ctx[:, pos + 2] != input_ids_dev[:, pos + 2]) & real_mask).sum().item()
+                )
+                onset_abs[slot_idx] += float(
+                    (torch.abs(pred_ctx[:, pos] - input_ids_dev[:, pos]) * real_mask).sum().item()
+                )
+                dur_abs[slot_idx] += float(
+                    (torch.abs(pred_ctx[:, pos + 1] - input_ids_dev[:, pos + 1]) * real_mask).sum().item()
+                )
 
-        autoregressive_stats = torch.tensor(
-            [autoregressive_correct, autoregressive_total],
-            device=accelerator.device,
-            dtype=torch.float64,
-        )
-        autoregressive_stats = accelerator.reduce(autoregressive_stats, reduction="sum")
-        autoregressive_correct = int(autoregressive_stats[0].item())
-        autoregressive_total = int(autoregressive_stats[1].item())
-        autoregressive_accuracy = (
-            autoregressive_correct / autoregressive_total if autoregressive_total > 0 else 0.0
-        )
-    else:
-        autoregressive_accuracy = 0.0
+    stacked = torch.stack([pitch_err, onset_err, dur_err, onset_abs, dur_abs, slot_total])
+    stacked = accelerator.reduce(stacked, reduction="sum")
+    pitch_err, onset_err, dur_err, onset_abs, dur_abs, slot_total = stacked.cpu().numpy()
+
+    total_slots = float(slot_total.sum())
+
+    def _accuracy(error_vec):
+        return 1.0 - (float(error_vec.sum()) / total_slots) if total_slots > 0 else 0.0
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        results["autoregressive"] = {
+            "pitch_accuracy": _accuracy(pitch_err),
+            "onset_accuracy": _accuracy(onset_err),
+            "duration_accuracy": _accuracy(dur_err),
+            "total_notes": int(total_slots),
+            # Per-slot heatmap rows (NaN where no real note occupied that slot).
+            "slot_pitch_error_freq": np.where(slot_total > 0, pitch_err / slot_total, np.nan),
+            "slot_onset_mae": np.where(slot_total > 0, onset_abs / slot_total, np.nan),
+            "slot_duration_mae": np.where(slot_total > 0, dur_abs / slot_total, np.nan),
+        }
 
     accelerator.wait_for_everyone()
-    return avg_loss, teacher_forced_accuracy, autoregressive_accuracy
+    return results
 
 
-def plot_losses(
-    train_losses,
-    train_loss_steps,
-    val_losses,
-    val_accuracies,
-    val_autoregressive_accuracies,
+def build_error_heatmap_chart(
+    history_rows,
     validation_steps,
-    output_dir,
+    *,
+    output_dir=None,
+    metric_key="metric",
+    title=None,
+    value_label="value",
+    cmap="magma",
 ):
-    """Plot training/validation losses and validation metrics, save figures."""
-    if train_loss_steps and len(train_loss_steps) == len(train_losses):
-        train_steps = train_loss_steps
-    else:
-        train_steps = list(range(1, len(train_losses) + 1))
+    """Render a (training step x score-slot) error heatmap with matplotlib.
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    ax1, ax2, ax3, ax4 = axes.flatten()
+    ``history_rows`` is a list of per-validation 1-D arrays (one value per score
+    slot, NaN where no real note occupied that slot). We stack them into a matrix
+    (rows = validations, columns = score-slot index) and draw it with
+    ``imshow``: x = score-slot ordinal (the k-th predicted note), y = training
+    step, color = the error metric. NaN cells are left blank (grey).
 
-    ax1.plot(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
-    ax1.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
-    ax1.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
-    ax1.set_xlabel('Step')
-    ax1.set_ylabel('Loss')
-    ax1.set_title('Training and Validation Loss (Linear Scale)')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    The native W&B ``wandb/heatmap/v0`` Vega preset that this used to return did
+    not render reliably, so we now render the figure ourselves. The PNG is saved
+    locally under ``<output_dir>/heatmaps/<metric_key>.png`` and, when wandb is
+    available, the same figure is returned wrapped in ``wandb.Image`` so it also
+    shows up on the dashboard.
+    """
+    if not history_rows:
+        return None
 
-    ax2.loglog(train_steps, train_losses, label='Training Loss', alpha=0.7, color='blue')
-    ax2.scatter(validation_steps, val_losses, label='Validation Loss', color='red', s=30, zorder=5)
-    ax2.plot(validation_steps, val_losses, alpha=0.3, color='red', linestyle='--')
-    ax2.set_xlabel('Step (log scale)')
-    ax2.set_ylabel('Loss (log scale)')
-    ax2.set_title('Training and Validation Loss (Log-Log Scale)')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3, which='both')
+    import matplotlib
+    matplotlib.use("Agg")  # headless / cluster-safe backend
+    import matplotlib.pyplot as plt
 
-    ax3.plot(validation_steps, val_accuracies, label='Teacher-Forced Pitch Accuracy', color='green', marker='o')
-    ax3.set_xlabel('Step')
-    ax3.set_ylabel('Pitch Accuracy (%)')
-    ax3.set_title('Validation Teacher-Forced Pitch Accuracy')
-    ax3.set_ylim([0, 100])
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    matrix = np.vstack(history_rows).astype(float)  # (n_validations, n_slots)
+    masked = np.ma.masked_invalid(matrix)
 
-    ar = np.asarray(val_autoregressive_accuracies, dtype=np.float64)
-    steps_ar = np.asarray(validation_steps, dtype=np.float64)
-    finite = np.isfinite(ar)
-    if finite.any():
-        ax4.plot(
-            steps_ar[finite],
-            ar[finite],
-            label='Autoregressive Pitch Accuracy',
-            color='purple',
-            marker='s',
-        )
-    ax4.set_xlabel('Step')
-    ax4.set_ylabel('Pitch Accuracy (%)')
-    ax4.set_title('Validation Autoregressive Pitch Accuracy')
-    ax4.set_ylim([0, 100])
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
+    fig_height = max(3.0, 0.35 * matrix.shape[0] + 1.5)
+    fig, ax = plt.subplots(figsize=(12, fig_height))
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad(color="lightgrey")
+    im = ax.imshow(
+        masked,
+        aspect="auto",
+        origin="lower",
+        cmap=cmap_obj,
+        interpolation="nearest",
+    )
+    ax.set_xlabel("Score-slot index (k-th predicted note)")
+    ax.set_ylabel("Training step")
+    if title:
+        ax.set_title(title)
 
-    plt.tight_layout()
-    plt.savefig(output_dir / 'training_metrics.png', dpi=150, bbox_inches='tight')
-    plt.close()
+    # Label y ticks with the actual validation steps, thinning if there are many.
+    n_rows = matrix.shape[0]
+    max_yticks = 25
+    stride = max(1, int(np.ceil(n_rows / max_yticks)))
+    tick_idx = list(range(0, n_rows, stride))
+    ax.set_yticks(tick_idx)
+    ax.set_yticklabels([str(int(validation_steps[i])) for i in tick_idx])
 
-    print(f"Training metrics plot saved to {output_dir / 'training_metrics.png'}")
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label(value_label)
+    fig.tight_layout()
+
+    if output_dir is not None:
+        heatmap_dir = Path(output_dir) / "heatmaps"
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(heatmap_dir / f"{metric_key}.png", dpi=150)
+
+    image = wandb.Image(fig) if wandb is not None else None
+    plt.close(fig)
+    return image
 
 
 def main():
@@ -1058,14 +1092,35 @@ def main():
         default=1e5,
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
+    parser.add_argument(
+        '--wandb_project',
+        type=str,
+        default='anticipation-asap',
+        help='Weights & Biases project name for metric logging.',
+    )
+    parser.add_argument(
+        '--wandb_run_name',
+        type=str,
+        default=None,
+        help='Optional Weights & Biases run name (defaults to the output dir name).',
+    )
+    parser.add_argument(
+        '--wandb_mode',
+        type=str,
+        default='online',
+        choices=['online', 'offline', 'disabled'],
+        help="Weights & Biases mode. Use 'disabled' to turn off logging entirely.",
+    )
     args = parser.parse_args()
 
     if args.original_weight_l2 < 0:
         raise ValueError("--original_weight_l2 must be non-negative.")
     if args.eval_num_workers < 0:
         raise ValueError("--eval_num_workers must be non-negative.")
-    
-    global device
+    if wandb is None and args.wandb_mode != 'disabled':
+        print("WARNING: wandb is not installed; falling back to --wandb_mode disabled.")
+        args.wandb_mode = 'disabled'
+
     validate_selected_cuda_device_or_raise(force_cpu=args.force_cpu)
     report_runtime_device(force_cpu=args.force_cpu)
     print(f"Per-rank effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
@@ -1105,7 +1160,20 @@ def main():
         if accelerator.is_main_process:
             os.makedirs(args.output_dir, exist_ok=True)
         accelerator.wait_for_everyone()
-        
+
+        # Initialize Weights & Biases on the main process only. All scalar metrics,
+        # per-token-type losses, autoregressive accuracies, and error heatmaps are
+        # streamed here (this replaces the old matplotlib .png / .npz artifacts).
+        use_wandb = accelerator.is_main_process and args.wandb_mode != 'disabled' and wandb is not None
+        if use_wandb:
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_run_name or args.output_dir.name,
+                mode=args.wandb_mode,
+                dir=str(args.output_dir),
+                config=vars(args),
+            )
+
         # Monitor initial GPU memory
         print("Initial GPU memory stats:")
         print_gpu_memory_stats()
@@ -1199,7 +1267,6 @@ def main():
             )
         
         # Resize model embeddings to match our vocabulary (VOCAB_SIZE=55028)
-        from anticipation.vocab import VOCAB_SIZE
         current_vocab_size = model.config.vocab_size
         if current_vocab_size != VOCAB_SIZE:
             print(f"Resizing model embeddings from {current_vocab_size} to {VOCAB_SIZE}")
@@ -1290,14 +1357,15 @@ def main():
         model.train()
         completed_steps = 0
         
-        # Lists to track losses and metrics
-        train_losses = []
-        train_loss_steps = []
-        val_losses = []
-        val_accuracies = []
-        val_autoregressive_accuracies = []
+        # Heatmap history (main process only): one row per validation, each row a
+        # per-slot error vector. These accumulate over training so each validation
+        # re-renders the full (step x token-index) heatmap for wandb.
+        heatmap_slots = num_score_slots(val_dataset.sequence_length)
         validation_steps = []
-        
+        pitch_error_history = []
+        onset_mae_history = []
+        duration_mae_history = []
+
         # Keep progress/logging on the main process so multi-GPU runs don't spam duplicate output.
         progress_bar = tqdm(total=args.max_steps, desc="Training", disable=not accelerator.is_main_process)
         training_failed = False
@@ -1309,7 +1377,7 @@ def main():
             if accelerator.is_main_process:
                 print(f"\nRunning validation at {validation_label}...")
 
-            val_loss, val_acc, val_auto_acc = evaluate_model(
+            results = evaluate_model(
                 model,
                 accelerator,
                 val_dataset,
@@ -1317,29 +1385,91 @@ def main():
                 max_samples=args.eval_max_samples,
                 autoregressive_samples=args.eval_autoregressive_samples,
                 disable_autoregressive_pitch_eval=args.disable_autoregressive_pitch_eval,
+                heatmap_slots=heatmap_slots,
             )
 
             if accelerator.is_main_process:
-                validation_steps.append(validation_step)
-                val_losses.append(val_loss)
-                val_accuracies.append(val_acc * 100)
-                val_autoregressive_accuracies.append(
-                    float("nan")
-                    if args.disable_autoregressive_pitch_eval
-                    else val_auto_acc * 100
-                )
+                val_loss = results["loss"]
+                val_acc = results["teacher_forced_pitch_accuracy"]
+                loss_by_type = results["loss_by_type"]
+                autoregressive = results["autoregressive"]
 
-                ar_msg = (
-                    "(skipped)"
-                    if args.disable_autoregressive_pitch_eval
-                    else f"{val_auto_acc * 100:.2f}%"
-                )
-                message = (
-                    f"Validation Loss: {val_loss:.4f}, "
-                    f"Teacher-Forced Accuracy: {val_acc*100:.2f}%, "
+                log_data = {
+                    "val/loss": val_loss,
+                    "val/teacher_forced_pitch_accuracy": val_acc * 100,
+                    "val/loss_onset": loss_by_type["onset"],
+                    "val/loss_duration": loss_by_type["duration"],
+                    "val/loss_pitch": loss_by_type["pitch"],
+                }
+
+                if autoregressive is not None:
+                    ar_pitch = autoregressive["pitch_accuracy"] * 100
+                    ar_onset = autoregressive["onset_accuracy"] * 100
+                    ar_dur = autoregressive["duration_accuracy"] * 100
+                    log_data.update(
+                        {
+                            "val/ar_pitch_accuracy": ar_pitch,
+                            "val/ar_onset_accuracy": ar_onset,
+                            "val/ar_duration_accuracy": ar_dur,
+                        }
+                    )
+                    ar_msg = (
+                        f"pitch {ar_pitch:.2f}%, onset {ar_onset:.2f}%, duration {ar_dur:.2f}%"
+                    )
+
+                    validation_steps.append(validation_step)
+                    pitch_error_history.append(autoregressive["slot_pitch_error_freq"])
+                    onset_mae_history.append(autoregressive["slot_onset_mae"])
+                    duration_mae_history.append(autoregressive["slot_duration_mae"])
+
+                    # Render heatmaps with matplotlib. PNGs are always written
+                    # locally under <output_dir>/heatmaps/; the same figures are
+                    # attached to the wandb log (as images) when wandb is enabled.
+                    pitch_map = build_error_heatmap_chart(
+                        pitch_error_history, validation_steps,
+                        output_dir=args.output_dir,
+                        metric_key="pitch_error_freq",
+                        title="Autoregressive pitch error frequency",
+                        value_label="pitch error frequency",
+                        cmap="magma",
+                    )
+                    onset_map = build_error_heatmap_chart(
+                        onset_mae_history, validation_steps,
+                        output_dir=args.output_dir,
+                        metric_key="onset_mae",
+                        title="Autoregressive onset MAE (10 ms bins)",
+                        value_label="onset MAE (bins)",
+                        cmap="viridis",
+                    )
+                    duration_map = build_error_heatmap_chart(
+                        duration_mae_history, validation_steps,
+                        output_dir=args.output_dir,
+                        metric_key="duration_mae",
+                        title="Autoregressive duration MAE (10 ms bins)",
+                        value_label="duration MAE (bins)",
+                        cmap="viridis",
+                    )
+                    if use_wandb:
+                        if pitch_map is not None:
+                            log_data["heatmaps/pitch_error_freq"] = pitch_map
+                        if onset_map is not None:
+                            log_data["heatmaps/onset_mae"] = onset_map
+                        if duration_map is not None:
+                            log_data["heatmaps/duration_mae"] = duration_map
+                else:
+                    ar_msg = "(skipped)"
+
+                if use_wandb:
+                    wandb.log(log_data, step=validation_step)
+
+                print(
+                    f"Validation Loss: {val_loss:.4f} "
+                    f"(onset {loss_by_type['onset']:.4f}, "
+                    f"duration {loss_by_type['duration']:.4f}, "
+                    f"pitch {loss_by_type['pitch']:.4f}), "
+                    f"Teacher-Forced Pitch Accuracy: {val_acc * 100:.2f}%, "
                     f"Autoregressive Accuracy: {ar_msg}"
                 )
-                print(message)
 
             accelerator.wait_for_everyone()
             model.train()
@@ -1421,10 +1551,17 @@ def main():
                                 
                                 # Log progress
                                 if completed_steps % 10 == 0 and accelerator.is_main_process:
-                                    # Store the training loss every 10 steps
-                                    train_losses.append(reduced_loss)
-                                    train_loss_steps.append(completed_steps)
-                                    
+                                    current_lr = scheduler.get_last_lr()[0]
+                                    if use_wandb:
+                                        train_log = {
+                                            "train/loss": reduced_loss,
+                                            "train/learning_rate": current_lr,
+                                        }
+                                        if reduced_l2_penalty is not None:
+                                            train_log["train/anchor_l2"] = reduced_l2_penalty
+                                            train_log["train/anchor_term"] = reduced_anchor_term
+                                        wandb.log(train_log, step=completed_steps)
+
                                     # Print more precise learning rate
                                     l2_detail = ""
                                     if reduced_l2_penalty is not None:
@@ -1434,9 +1571,9 @@ def main():
                                         )
                                     print(
                                         f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
-                                        f"LR: {scheduler.get_last_lr()[0]:.8e}{l2_detail}"
+                                        f"LR: {current_lr:.8e}{l2_detail}"
                                     )
-                                    
+
                                     # Check for NaN parameters periodically
                                     if check_model_for_nans(model):
                                         print("NaN parameters detected in model! Training may be unstable.")
@@ -1470,30 +1607,8 @@ def main():
                                     accelerator.wait_for_everyone()
                                     if accelerator.is_main_process:
                                         print(f"Saved checkpoint to {checkpoint_dir}")
-                                        
-                                        # Save the losses and metrics so far
-                                        np.savez(
-                                            checkpoint_dir / "losses.npz",
-                                            train_losses=np.array(train_losses),
-                                            train_loss_steps=np.array(train_loss_steps),
-                                            val_losses=np.array(val_losses),
-                                            val_accuracies=np.array(val_accuracies),
-                                            val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                                            validation_steps=np.array(validation_steps)
-                                        )
-                                        
-                                        # Create and save loss plot
-                                        plot_losses(
-                                            train_losses,
-                                            train_loss_steps,
-                                            val_losses,
-                                            val_accuracies,
-                                            val_autoregressive_accuracies,
-                                            validation_steps,
-                                            checkpoint_dir,
-                                        )
                                     accelerator.wait_for_everyone()
-                                    
+
                                     # Free up memory
                                     if torch.cuda.is_available():
                                         torch.cuda.empty_cache()
@@ -1506,7 +1621,7 @@ def main():
                     except RuntimeError as e:
                         if "CUDA out of memory" in str(e):
                             print(f"CUDA OOM error! Current batch size: {args.batch_size}")
-                            print(f"Current memory usage:")
+                            print("Current memory usage:")
                             print_gpu_memory_stats()
                             print("Consider reducing batch size or model size.")
                             print(f"Error details: {str(e)}")
@@ -1556,36 +1671,20 @@ def main():
                     accelerator.wait_for_everyone()
                     if accelerator.is_main_process:
                         print(f"Saved final model to {final_dir}")
-                        
-                        # Save the final losses
-                        np.savez(
-                            final_dir / "losses.npz",
-                            train_losses=np.array(train_losses),
-                            train_loss_steps=np.array(train_loss_steps),
-                            val_losses=np.array(val_losses),
-                            val_accuracies=np.array(val_accuracies),
-                            val_autoregressive_accuracies=np.array(val_autoregressive_accuracies),
-                            validation_steps=np.array(validation_steps)
-                        )
-                        
-                        # Create and save final loss plot
-                        plot_losses(
-                            train_losses,
-                            train_loss_steps,
-                            val_losses,
-                            val_accuracies,
-                            val_autoregressive_accuracies,
-                            validation_steps,
-                            final_dir,
-                        )
                     accelerator.wait_for_everyone()
-                    
+
                 except Exception as save_error:
-                    print(f"Error saving final model or generating plot: {save_error}")
-            
+                    print(f"Error saving final model: {save_error}")
+
+            if use_wandb:
+                wandb.finish()
+
     except Exception as setup_error:
         print(f"Error in setup: {setup_error}")
         print(traceback.format_exc())
+        # Re-raise so the process exits non-zero: cluster schedulers (and job
+        # dependencies like afterok) must see failed training as failed.
+        raise
 
 if __name__ == "__main__":
     main()

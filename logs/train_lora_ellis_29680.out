@@ -1,0 +1,62 @@
+Host: ellis-compute-02.cs.cornell.edu
+SLURM_JOB_PARTITION=ellis
+CUDA_VISIBLE_DEVICES=0
+Python: /home/wjl86/miniconda3/bin/python
+NVIDIA RTX A6000, 49140 MiB
+Start: Thu Jun 25 11:24:57 PM EDT 2026
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/wjl86/.netrc.
+wandb: Currently logged in as: wjl86 (wjl86-cornell-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in run_lora/wandb/run-20260625_232504-h90oskby
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run run_lora
+wandb: ⭐️ View project at https://wandb.ai/wjl86-cornell-university/anticipation-asap
+wandb: 🚀 View run at https://wandb.ai/wjl86-cornell-university/anticipation-asap/runs/h90oskby
+/home/wjl86/miniconda3/lib/python3.13/site-packages/peft/tuners/lora/layer.py:2504: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setting fan_in_fan_out to True.
+  warnings.warn(
+[ok] CUDA is available with 1 device(s)
+  Device 0: NVIDIA RTX A6000
+    - Total memory: 47.41 GB
+    - CUDA capability: 8.6
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 32
+Final device confirmation: cuda
+Mixed precision mode: bf16
+Distributed setup: type=DistributedType.NO, world_size=1, rank=0, local_rank=0, device=cuda
+Global effective batch size: 32
+Initial GPU memory stats:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+Found 2756680 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 675736 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Model vocabulary size matches tokenization (55028)
+Applied LoRA: r=16, alpha=32, dropout=0.05, targets=['c_attn', 'c_proj'], train_embeddings=True
+trainable params: 60,674,048 || all params: 420,382,720 || trainable%: 14.4330
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+After accelerator preparation, model device: cuda:0
+Original-weight L2 regularization disabled.
+GPU memory before training:
+GPU 0 memory allocated: 1627.64 MB
+GPU 0 memory reserved: 1630.00 MB
+GPU 0 max memory allocated: 1627.64 MB
+Clearing CUDA cache before training on cuda
+Starting training...
+Training:   0%|          | 0/40000 [00:00<?, ?it/s]`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+Training:   0%|          | 1/40000 [00:04<48:17:06,  4.35s/it]Training:   0%|          | 2/40000 [00:07<42:18:31,  3.81s/it]Training:   0%|          | 3/40000 [00:11<40:46:34,  3.67s/it]Training:   0%|          | 4/40000 [00:14<39:29:53,  3.56s/it]Training:   0%|          | 5/40000 [00:18<38:53:18,  3.50s/it]Training:   0%|          | 6/40000 [00:21<38:21:53,  3.45s/it]Training:   0%|          | 7/40000 [00:24<37:58:41,  3.42s/it]Training:   0%|          | 8/40000 [00:28<38:17:48,  3.45s/it]Training:   0%|          | 9/40000 [00:31<38:23:04,  3.46s/it]Training:   0%|          | 10/40000 [00:35<38:09:26,  3.44s/it]Training:   0%|          | 11/40000 [00:38<38:11:22,  3.44s/it]Training:   0%|          | 12/40000 [00:42<38:12:22,  3.44s/it]Training:   0%|          | 13/40000 [00:45<38:07:27,  3.43s/it]Training:   0%|          | 14/40000 [00:48<38:05:17,  3.43s/it]Training:   0%|          | 15/40000 [00:52<38:19:10,  3.45s/it]Training:   0%|          | 16/40000 [00:55<38:05:25,  3.43s/it]Training:   0%|          | 17/40000 [00:59<38:24:16,  3.46s/it]Training:   0%|          | 18/40000 [01:02<38:18:52,  3.45s/it]Training:   0%|          | 19/40000 [01:06<38:15:47,  3.45s/it]Training:   0%|          | 20/40000 [01:09<38:08:06,  3.43s/it]Training:   0%|          | 21/40000 [01:12<37:56:51,  3.42s/it]Training:   0%|          | 22/40000 [01:16<37:51:03,  3.41s/it]Training:   0%|          | 23/40000 [01:19<37:43:15,  3.40s/it]Training:   0%|          | 24/40000 [01:23<37:43:43,  3.40s/it]Training:   0%|          | 25/40000 [01:26<37:30:13,  3.38s/it]Training:   0%|          | 26/40000 [01:29<37:23:38,  3.37s/it]Training:   0%|          | 27/40000 [01:33<37:18:33,  3.36s/it]Training:   0%|          | 28/40000 [01:36<37:17:06,  3.36s/it]Training:   0%|          | 29/40000 [01:39<37:20:03,  3.36s/it]Training:   0%|          | 30/40000 [01:43<37:08:37,  3.35s/it]Training:   0%|          | 31/40000 [01:46<37:05:51,  3.34s/it]Training:   0%|          | 32/40000 [01:49<37:03:52,  3.34s/it]Training:   0%|          | 33/40000 [01:53<37:06:58,  3.34s/it]Training:   0%|          | 34/40000 [01:56<37:02:51,  3.34s/it]Training:   0%|          | 35/40000 [01:59<36:58:31,  3.33s/it]Training:   0%|          | 36/40000 [02:03<36:56:13,  3.33s/it]Training:   0%|          | 37/40000 [02:06<36:54:26,  3.32s/it]Training:   0%|          | 38/40000 [02:09<36:55:10,  3.33s/it]Training:   0%|          | 39/40000 [02:13<36:56:13,  3.33s/it]Training:   0%|          | 40/40000 [02:16<36:53:59,  3.32s/it]Training:   0%|          | 41/40000 [02:19<36:55:50,  3.33s/it]Training:   0%|          | 42/40000 [02:23<36:45:08,  3.31s/it]Training:   0%|          | 43/40000 [02:26<37:10:50,  3.35s/it]Training:   0%|          | 44/40000 [02:29<36:56:27,  3.33s/it]Training:   0%|          | 45/40000 [02:33<36:55:59,  3.33s/it]Training:   0%|          | 46/40000 [02:36<36:53:00,  3.32s/it]Training:   0%|          | 47/40000 [02:39<36:50:09,  3.32s/it]Training:   0%|          | 48/40000 [02:42<36:49:55,  3.32s/it]Training:   0%|          | 49/40000 [02:46<36:47:00,  3.31s/it]Training:   0%|          | 50/40000 [02:49<36:43:45,  3.31s/it]Training:   0%|          | 51/40000 [02:52<36:44:19,  3.31s/it]Training:   0%|          | 52/40000 [02:56<36:37:07,  3.30s/it]Training:   0%|          | 53/40000 [02:59<36:34:53,  3.30s/it]Training:   0%|          | 54/40000 [03:02<36:29:49,  3.29s/it]Training:   0%|          | 55/40000 [03:06<36:32:16,  3.29s/it]Training:   0%|          | 56/40000 [03:09<36:26:17,  3.28s/it]Training:   0%|          | 57/40000 [03:12<36:22:18,  3.28s/it]Training:   0%|          | 58/40000 [03:15<36:19:33,  3.27s/it]Training:   0%|          | 59/40000 [03:19<36:16:44,  3.27s/it]Training:   0%|          | 60/40000 [03:22<36:14:48,  3.27s/it]Training:   0%|          | 61/40000 [03:25<36:17:27,  3.27s/it]Training:   0%|          | 62/40000 [03:28<36:17:58,  3.27s/it]Training:   0%|          | 63/40000 [03:32<36:16:54,  3.27s/it]Training:   0%|          | 64/40000 [03:35<36:17:33,  3.27s/it]Training:   0%|          | 65/40000 [03:38<36:15:17,  3.27s/it]Training:   0%|          | 66/40000 [03:41<36:13:17,  3.27s/it]Training:   0%|          | 67/40000 [03:45<36:13:53,  3.27s/it]Training:   0%|          | 68/40000 [03:48<36:13:20,  3.27s/it]Training:   0%|          | 69/40000 [03:51<36:14:48,  3.27s/it]Training:   0%|          | 70/40000 [03:55<36:13:44,  3.27s/it]Training:   0%|          | 71/40000 [03:58<36:19:33,  3.28s/it]Training:   0%|          | 72/40000 [04:01<36:17:11,  3.27s/it]Training:   0%|          | 73/40000 [04:04<36:15:13,  3.27s/it]Training:   0%|          | 74/40000 [04:08<36:19:04,  3.27s/it]Training:   0%|          | 75/40000 [04:11<36:17:06,  3.27s/it]Training:   0%|          | 76/40000 [04:14<36:15:59,  3.27s/it][2026-06-25T23:29:52.128] error: *** JOB 29680 ON ellis-compute-02 CANCELLED AT 2026-06-25T23:29:52 DUE to SIGNAL Terminated ***

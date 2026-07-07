@@ -1,0 +1,59 @@
+Host: nlplarge-compute-01.tech.cornell.edu
+SLURM_JOB_PARTITION=gpu
+CUDA_VISIBLE_DEVICES=0
+Python: /home/wjl86/miniconda3/bin/python
+NVIDIA A100-SXM4-80GB, 81920 MiB
+Start: Sat Jul  4 10:34:54 PM EDT 2026
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: wjl86 (wjl86-cornell-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in run_nodummy/wandb/run-20260704_223512-a0oxm27m
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run run_nodummy
+wandb: ⭐️ View project at https://wandb.ai/wjl86-cornell-university/anticipation-asap
+wandb: 🚀 View run at https://wandb.ai/wjl86-cornell-university/anticipation-asap/runs/a0oxm27m
+[ok] CUDA is available with 1 device(s)
+  Device 0: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 256
+Final device confirmation: cuda
+Mixed precision mode: bf16
+Distributed setup: type=DistributedType.NO, world_size=1, rank=0, local_rank=0, device=cuda
+Global effective batch size: 256
+Initial GPU memory stats:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+Found 2665421 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 335012 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Model vocabulary size matches tokenization (55028)
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+After accelerator preparation, model device: cuda:0
+Warning: The cache directory for DeepSpeed Triton autotune, /home/wjl86/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+Original-weight L2 regularization enabled: lambda=100000.0, 292 tensors, 359,708,672 parameters, ~1372.2 MiB snapshot.
+GPU memory before training:
+GPU 0 memory allocated: 2768.37 MB
+GPU 0 memory reserved: 2772.00 MB
+GPU 0 max memory allocated: 2768.37 MB
+Clearing CUDA cache before training on cuda
+Starting training...
+Training:   0%|          | 0/20000 [00:00<?, ?it/s]`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+Training:   0%|          | 1/20000 [00:13<74:49:20, 13.47s/it]Training:   0%|          | 2/20000 [00:26<71:56:40, 12.95s/it]Training:   0%|          | 3/20000 [00:38<70:59:22, 12.78s/it]Training:   0%|          | 4/20000 [00:51<70:20:38, 12.66s/it]Training:   0%|          | 5/20000 [01:03<69:47:35, 12.57s/it]Training:   0%|          | 6/20000 [01:15<69:31:38, 12.52s/it]Training:   0%|          | 7/20000 [01:28<69:19:37, 12.48s/it]Training:   0%|          | 8/20000 [01:40<69:09:26, 12.45s/it]Training:   0%|          | 9/20000 [01:53<69:15:04, 12.47s/it]Training:   0%|          | 10/20000 [02:05<69:19:12, 12.48s/it]Training:   0%|          | 11/20000 [02:18<69:26:04, 12.51s/it]Training:   0%|          | 12/20000 [02:30<69:26:26, 12.51s/it]Training:   0%|          | 13/20000 [02:43<69:20:33, 12.49s/it]Training:   0%|          | 14/20000 [02:55<69:02:01, 12.43s/it]Training:   0%|          | 15/20000 [03:07<68:59:49, 12.43s/it]Training:   0%|          | 16/20000 [03:20<69:08:54, 12.46s/it]Training:   0%|          | 17/20000 [03:33<69:12:21, 12.47s/it]Training:   0%|          | 18/20000 [03:45<69:18:57, 12.49s/it]Training:   0%|          | 19/20000 [03:58<69:17:16, 12.48s/it]Training:   0%|          | 20/20000 [04:10<69:17:37, 12.49s/it]Training:   0%|          | 21/20000 [04:23<69:20:26, 12.49s/it]Training:   0%|          | 22/20000 [04:35<69:23:18, 12.50s/it]Training:   0%|          | 23/20000 [04:48<69:20:27, 12.50s/it]Training:   0%|          | 24/20000 [05:00<69:24:44, 12.51s/it]Training:   0%|          | 25/20000 [05:13<69:27:56, 12.52s/it]Training:   0%|          | 26/20000 [05:25<69:26:37, 12.52s/it]Training:   0%|          | 27/20000 [05:38<69:28:28, 12.52s/it]Training:   0%|          | 28/20000 [05:50<69:25:39, 12.51s/it]Training:   0%|          | 29/20000 [06:03<69:28:19, 12.52s/it]Training:   0%|          | 30/20000 [06:15<69:21:52, 12.50s/it]Training:   0%|          | 31/20000 [06:28<69:23:55, 12.51s/it]Training:   0%|          | 32/20000 [06:40<69:20:43, 12.50s/it]Training:   0%|          | 33/20000 [06:53<69:20:00, 12.50s/it]Training:   0%|          | 34/20000 [07:05<69:20:11, 12.50s/it]Training:   0%|          | 35/20000 [07:18<69:21:13, 12.51s/it]Training:   0%|          | 36/20000 [07:30<69:14:06, 12.48s/it]Training:   0%|          | 37/20000 [07:43<69:13:11, 12.48s/it]Training:   0%|          | 38/20000 [07:55<69:18:50, 12.50s/it]Training:   0%|          | 39/20000 [08:08<69:16:57, 12.50s/it]Training:   0%|          | 40/20000 [08:20<69:02:46, 12.45s/it]Training:   0%|          | 41/20000 [08:32<69:06:13, 12.46s/it]Training:   0%|          | 42/20000 [08:45<69:06:50, 12.47s/it]Training:   0%|          | 43/20000 [08:57<69:05:26, 12.46s/it]Training:   0%|          | 44/20000 [09:10<69:06:45, 12.47s/it]Training:   0%|          | 45/20000 [09:22<69:09:36, 12.48s/it]Training:   0%|          | 46/20000 [09:35<69:13:28, 12.49s/it]Training:   0%|          | 47/20000 [09:47<69:09:53, 12.48s/it]Training:   0%|          | 48/20000 [10:00<69:14:51, 12.49s/it]Training:   0%|          | 49/20000 [10:12<69:13:11, 12.49s/it]Training:   0%|          | 50/20000 [10:25<69:11:49, 12.49s/it]Training:   0%|          | 51/20000 [10:37<69:15:14, 12.50s/it]Training:   0%|          | 52/20000 [10:50<69:24:22, 12.53s/it][2026-07-04T22:46:40.608] error: *** JOB 741642 ON nlplarge-compute-01 CANCELLED AT 2026-07-04T22:46:40 DUE to SIGNAL Terminated ***

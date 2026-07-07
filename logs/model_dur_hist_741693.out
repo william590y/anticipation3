@@ -1,0 +1,20 @@
+Host: nlplarge-compute-01.tech.cornell.edu
+Checkpoint: run_nodummy/final  Test file: data/test_normalized.txt  Windows: 300
+Start: Sun Jul  5 05:12:44 AM EDT 2026
+Loading model from run_nodummy/final...
+  Model loaded on cuda
+Sampled 300 of 335012 validation windows (seed=17)
+  25/300 windows decoded (running total notes: 3450)
+  50/300 windows decoded (running total notes: 6900)
+  75/300 windows decoded (running total notes: 10350)
+  100/300 windows decoded (running total notes: 13800)
+  125/300 windows decoded (running total notes: 17250)
+  150/300 windows decoded (running total notes: 20700)
+  175/300 windows decoded (running total notes: 24150)
+  200/300 windows decoded (running total notes: 27600)
+  225/300 windows decoded (running total notes: 31050)
+  250/300 windows decoded (running total notes: 34500)
+  275/300 windows decoded (running total notes: 37950)
+  300/300 windows decoded (running total notes: 41400)
+Wrote analysis/duration_hist_model.png
+End: Sun Jul  5 05:57:37 AM EDT 2026

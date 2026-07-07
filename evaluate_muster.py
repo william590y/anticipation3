@@ -12,11 +12,11 @@ This module provides:
 from __future__ import annotations
 
 from collections import defaultdict
-import json
 import os
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 import torch
@@ -435,8 +435,6 @@ def triplets_to_musicxml(triplets, xml_path, beat_seconds=0.5):
         return True
     except Exception as exc:
         print(f"    Warning: Could not create MusicXML from triplets: {exc}")
-        import traceback
-
         traceback.print_exc()
         return False
 
@@ -447,8 +445,6 @@ def save_midi(events, filepath):
         midi_obj.save(filepath)
         return True
     except Exception as exc:
-        import traceback
-
         print(f"    Warning: Could not save {filepath}: {type(exc).__name__}: {exc}")
         traceback.print_exc()
         return False
@@ -543,8 +539,6 @@ def run_muster_evaluation(gt_xml_path, pred_xml_path, output_prefix, work_dir):
         return None
     except Exception as exc:
         print(f"    Warning: Error processing {pred_xml_path}: {exc}")
-        import traceback
-
         traceback.print_exc()
         return None
 

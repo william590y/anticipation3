@@ -17,7 +17,9 @@ from alignment import align_tokens2, load_annotation_file
 TARGET_BEAT_INTERVAL = 0.5
 STREAM_CACHE_DIR = Path("data") / "asap_aligned_stream_cache"
 # Bump when aligned-stream semantics change (forces cache miss vs data/asap_aligned_stream_cache).
-STREAM_PREPROCESS_VERSION = "performance_anchored_dummy_v2_align_cache_maxtime"
+# v3: score durations stay fractional through beat normalization (round once at the
+# end) instead of being pre-quantized to 10ms at the piece's original tempo.
+STREAM_PREPROCESS_VERSION = "performance_anchored_v3_fractional_durations"
 
 
 def _path_str(pathlike) -> str:

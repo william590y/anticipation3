@@ -1,0 +1,5 @@
+Host: ellis-compute-01.cs.cornell.edu
+Checkpoint: run_nodummy_v2/checkpoint-15000  Test file: data/test_normalized.txt  Output: visualizer/data.js
+Start: Mon Jul  6 01:32:04 PM EDT 2026
+Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4.53.0. You should pass an instance of `Cache` instead, e.g. `past_key_values=DynamicCache.from_legacy_cache(past_key_values)`.
+[2026-07-06T13:37:01.448] error: *** JOB 766246 ON ellis-compute-01 CANCELLED AT 2026-07-06T13:37:01 DUE to SIGNAL Terminated ***

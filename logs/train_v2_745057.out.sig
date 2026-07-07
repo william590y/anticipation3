@@ -1,0 +1,1 @@
+                                                                  [AValidation Loss: 1.4166 (onset 1.7584, duration 1.7305, pitch 0.7619), Teacher-Forced Pitch Accuracy: 99.75%, Autoregressive Accuracy: pitch 74.68%, onset 12.30%, duration 28.99%

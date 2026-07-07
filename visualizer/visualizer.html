@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Score Infilling Visualizer</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1d2026; --grid: #2a2e36; --beat: #343943;
+    --text: #d6d9de; --muted: #8a8f98;
+    --gt: #3fd08c; --pred: #ff9c41; --perf: #5aa9ff; --perf-prefix: #3a566e;
+    --cand: #ff5db1; --sel: #ffe14d; --miss: #e05d5d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding-bottom: 74px; background: var(--bg); color: var(--text);
+         font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+           border-bottom: 1px solid var(--grid); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  select, button { background: var(--panel); color: var(--text); border: 1px solid var(--grid);
+                   border-radius: 6px; padding: 4px 8px; font-size: 13px; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--muted); }
+  .legend { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .key { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+  .swatch { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+  .lbl { color: var(--muted); }
+  #meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .panel { margin: 12px 16px; background: var(--panel); border: 1px solid var(--grid);
+           border-radius: 10px; overflow: hidden; }
+  .panel h2 { font-size: 12px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+              color: var(--muted); margin: 0; padding: 8px 12px 0; display: flex; gap: 10px; align-items: baseline;}
+  .panel h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .rollwrap { overflow-x: auto; }
+  svg { display: block; }
+  #candinfo { padding: 10px 14px; font-size: 12px; }
+  #candinfo table { border-collapse: collapse; width: 100%; }
+  #candinfo th, #candinfo td { text-align: left; padding: 3px 10px 3px 0; color: var(--text); }
+  #candinfo th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--grid); }
+  #candinfo .bar { height: 8px; background: var(--cand); border-radius: 3px; display: inline-block; vertical-align: middle; }
+  #candinfo tr.cand-row { cursor: pointer; }
+  #candinfo tr.cand-row:hover, #candinfo tr.cand-row.hl { background: rgba(255,225,77,0.08); }
+  .note { cursor: pointer; }
+  .fadeout { opacity: 0.07 !important; }
+  .semifade { opacity: 0.25 !important; }
+  #empty { padding: 40px; text-align: center; color: var(--muted); }
+  #staleWarn { display: none; margin: 10px 16px 0; padding: 10px 12px; border-radius: 8px;
+               background: rgba(224,93,93,0.12); border: 1px solid var(--miss); color: var(--text); }
+  button.playing { border-color: var(--sel); color: var(--sel); }
+  .playhead { stroke: var(--sel); stroke-width: 2; pointer-events: none; }
+  #audioStatus { color: var(--muted); font-size: 12px; min-width: 110px; }
+  #audioStatus.err { color: var(--miss); }
+
+  #sequenceDock { position: fixed; left: 0; right: 0; bottom: 0; margin: 0;
+                  border-left: 0; border-right: 0; border-bottom: 0; border-radius: 10px 10px 0 0;
+                  z-index: 7; box-shadow: 0 -8px 22px rgba(0,0,0,0.28); }
+  #sequenceDock h2 { padding-top: 6px; }
+  #minimap { display: flex; flex-wrap: nowrap; gap: 1px; padding: 6px 12px 9px; overflow-x: auto; }
+  #minimap .sq { width: 6px; height: 12px; min-width: 3px; flex: 1 1 3px; max-width: 8px;
+                 border-radius: 1px; cursor: pointer; }
+  #minimap .sq:hover { outline: 2px solid var(--sel); }
+
+  #pplSection { margin-bottom: 86px; }
+  #pplLegend { display: flex; gap: 14px; padding: 6px 12px 0; font-size: 11px; color: var(--muted); }
+  #pplLegend .key { font-size: 11px; }
+  #pplWrap { padding: 4px 8px 10px; overflow-x: auto; }
+  #pplChart { display: block; min-width: 100%; }
+  #pplEmpty { display: none; padding: 8px 12px 10px; font-size: 11px; color: var(--muted);
+              border-top: 1px solid var(--grid); }
+  #pplTip { position: fixed; display: none; pointer-events: none; z-index: 8;
+            background: rgba(20,22,26,0.94); border: 1px solid var(--grid); border-radius: 6px;
+            padding: 5px 8px; font-size: 11px; color: var(--text); white-space: nowrap; }
+
+  #rankPane { position: fixed; right: 8px; top: 120px; bottom: 80px; width: 46px;
+              display: none; flex-direction: column; align-items: center; gap: 6px;
+              background: var(--panel); border: 1px solid var(--grid); border-radius: 10px;
+              padding: 10px 4px; z-index: 6; }
+  #rankPane .lbl { font-size: 10px; text-align: center; line-height: 1.2; }
+  #rankSlider { writing-mode: vertical-lr; direction: rtl; flex: 1; width: 22px; }
+  #rankVal { font-size: 12px; color: var(--sel); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Score Infilling Visualizer</h1>
+  <span class="lbl">validation window</span>
+  <select id="exampleSel"></select>
+  <span class="lbl">stream</span>
+  <select id="streamSel" title="Unfiltered = raw performance including notes the aligner dropped (performer mistakes)">
+    <option value="raw" selected>unfiltered (raw)</option>
+    <option value="filtered">filtered (model input)</option>
+  </select>
+  <span class="lbl">view</span>
+  <select id="viewMode" title="Switch between piano-roll and staff-style sheet display">
+    <option value="piano" selected>piano roll</option>
+    <option value="sheet">sheet music</option>
+  </select>
+  <label class="key" title="Horizontal time scale for the score and performance displays">
+    t-scale <input type="range" id="timeScale" min="45" max="220" step="5" value="90" style="vertical-align:middle">
+    <span id="timeScaleVal" style="min-width:46px; display:inline-block">90 px/s</span>
+  </label>
+  <button type="button" id="clearBtn" title="Clear the selected performance note">clear selection</button>
+  <label class="key" title="Keep the most probable candidates until their cumulative probability reaches this fraction">
+    top-p <input type="range" id="topP" min="1" max="100" step="1" value="90" style="vertical-align:middle">
+    <span id="topPVal" style="min-width:34px; display:inline-block">90%</span>
+  </label>
+  <label class="key"><input type="checkbox" id="showGt" checked> <span class="swatch" style="background:var(--gt)"></span> ground-truth score</label>
+  <label class="key"><input type="checkbox" id="showPred" checked> <span class="swatch" style="background:var(--pred)"></span> predicted score (AR rollout)</label>
+  <span class="lbl">audio</span>
+  <button type="button" id="playPerf" title="Play conditioning performance (current stream)">play performance</button>
+  <button type="button" id="playGt" title="Play ground-truth score">play ground truth</button>
+  <button type="button" id="playPred" title="Play model prediction">play prediction</button>
+  <button type="button" id="stopPlay" title="Stop playback">stop</button>
+  <span id="audioStatus" role="status" aria-live="polite"></span>
+  <span class="key"><span class="swatch" style="background:var(--perf)"></span> performance</span>
+  <span class="key"><span class="swatch" style="background:var(--miss)"></span> unmatched (mistake)</span>
+  <span class="key"><span class="swatch" style="background:transparent;border:2px solid var(--miss)"></span> generated pitch error</span>
+  <span class="key"><span class="swatch" style="background:var(--cand)"></span> slot candidates</span>
+  <span id="meta"></span>
+</header>
+
+<div id="staleWarn"></div>
+
+<div class="panel">
+  <h2>Score <span class="hint">(0.5 s beat grid — GT vs the model's autoregressive rollout; a selected performance note shows its own slot's candidate distribution, conditioned on the rollout so far)</span></h2>
+  <div class="rollwrap"><svg id="scoreRoll"></svg></div>
+</div>
+
+<div class="panel">
+  <h2>Performance <span class="hint">(real time — click a note to see the model's distribution for ITS quantized score note)</span></h2>
+  <div class="rollwrap"><svg id="perfRoll"></svg></div>
+</div>
+
+<div class="panel">
+  <h2>Selected prediction</h2>
+  <div id="candinfo"><span class="lbl">No performance note selected.</span></div>
+</div>
+
+<div class="panel" id="sequenceDock">
+  <h2>Sequence map <span class="hint">(one square per triplet in interleaving order — hover to locate; prefix pairs, then score/control pairs)</span></h2>
+  <div id="minimap"></div>
+</div>
+
+<div class="panel" id="pplSection">
+  <h2>Perplexity <span class="hint">(greedy AR token confidence by score slot)</span></h2>
+  <div id="pplLegend">
+    <span class="key"><span class="swatch" style="background:var(--pred)"></span> onset perplexity</span>
+    <span class="key"><span class="swatch" style="background:var(--perf)"></span> duration perplexity</span>
+    <span class="key"><span class="swatch" style="background:var(--cand)"></span> pitch perplexity</span>
+    <span class="lbl">(log y-axis; lower is more confident)</span>
+  </div>
+  <div id="pplWrap"><svg id="pplChart"></svg></div>
+  <div id="pplEmpty">Perplexity trace unavailable — regenerate <code>data.js</code> with the latest <code>precompute_visualizer.py</code>.</div>
+</div>
+
+<div id="pplTip"></div>
+
+<div id="rankPane">
+  <span class="lbl">rank<br>(by prob)</span>
+  <span id="rankVal">1</span>
+  <input type="range" id="rankSlider" min="1" max="1" step="1" value="1">
+</div>
+
+<div id="empty" style="display:none">No data loaded — run <code>precompute_visualizer.py</code> to generate <code>data.js</code> next to this file.</div>
+
+<script src="data.js?v=20260706f9"></script>
+<script>
+(() => {
+  const DATA = window.VISUALIZER_DATA;
+  if (!DATA || !DATA.examples || !Object.keys(DATA.examples).length) {
+    document.getElementById('empty').style.display = 'block';
+    return;
+  }
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const PITCH_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const pname = p => p == null ? 'REST' : PITCH_NAMES[p % 12] + (Math.floor(p / 12) - 1);
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  function normalizeRawBranches(example) {
+    const rawRollout = example?.rollouts?.raw;
+    const rawNotes = example?.raw_notes;
+    if (!rawRollout?.branches || !rawNotes) return;
+    const normalized = {};
+    Object.values(rawRollout.branches).forEach(branch => {
+      const slot = Number(branch.slot);
+      if (!Number.isInteger(slot) || slot < 0 || slot >= rawNotes.length) return;
+      normalized[String(slot)] = {
+        ...branch,
+        gt_slot: rawNotes[slot].j ?? null,
+        raw_index: slot,
+      };
+    });
+    rawRollout.branches = normalized;
+  }
+
+  Object.values(DATA.examples).forEach(normalizeRawBranches);
+
+  const sel = document.getElementById('exampleSel');
+  for (const id of Object.keys(DATA.examples)) {
+    const o = document.createElement('option');
+    const piece = DATA.examples[id].piece;
+    o.value = id;
+    o.textContent = 'window ' + id + (piece ? ' — ' + piece.split('/').slice(0, -1).join('/') : '');
+    sel.appendChild(o);
+  }
+
+  const staleWarn = document.getElementById('staleWarn');
+  const firstEx = DATA.examples[Object.keys(DATA.examples)[0]];
+  const hasDualRollouts = ex => ex?.rollouts?.filtered && ex?.rollouts?.raw;
+  if ((DATA.format !== 2 && DATA.format !== 3) || DATA.logits_conditioning !== 'autoregressive_rollout') {
+    staleWarn.style.display = 'block';
+    staleWarn.innerHTML =
+      '<b>Stale data.js</b> — regenerate with <code>precompute_visualizer.py</code> (format 3). ' +
+      'Hard-refresh (Ctrl+Shift+R). Format 3 adds separate filtered/raw AR rollouts; ' +
+      'format 2 only toggles the performance display, not the orange predictions.';
+  } else if (DATA.format === 2) {
+    staleWarn.style.display = 'block';
+    staleWarn.innerHTML =
+      '<b>Format-2 data</b> — stream toggle only changes the performance panel. ' +
+      'Re-run precompute for format 3 to switch orange predictions between filtered/raw.';
+  }
+
+  let ex = null;
+  let selectedKey = null;
+  let displayedCands = [];
+  let candEls = [];
+  let hoverRank = null;
+
+  const ROWH = 7, PAD_L = 46, PAD_T = 14, PAD_B = 22, STAFF_STEP = 5;
+  const BINS_PER_SEC = 100;
+
+  const streamSel = document.getElementById('streamSel');
+  const viewModeSel = document.getElementById('viewMode');
+  const timeScaleSlider = document.getElementById('timeScale');
+  const timeScaleVal = document.getElementById('timeScaleVal');
+  const metaEl = document.getElementById('meta');
+  let pxps = parseInt(timeScaleSlider.value, 10);
+
+  function isSheetMode() {
+    return viewModeSel.value === 'sheet';
+  }
+
+  function usingRawRollout() {
+    return streamSel.value === 'raw' && ex?.rollouts?.raw;
+  }
+
+  function currentRollout() {
+    if (usingRawRollout()) return ex.rollouts.raw;
+    if (ex?.rollouts?.filtered) return ex.rollouts.filtered;
+    return { pred_score: ex.pred_score, branches: ex.branches };
+  }
+
+  function noteSelectionKey(n) {
+    if (usingRawRollout() && n.r != null) return String(n.r);
+    if (n.j != null) return String(n.j);
+    return null;
+  }
+
+  function branchForNote(n) {
+    const key = noteSelectionKey(n);
+    return key != null ? currentRollout().branches[key] : null;
+  }
+
+  function hasScoreSlotForNote(n) {
+    return branchForNote(n) != null;
+  }
+
+  function rawNoteForFilteredIndex(j) {
+    if (!ex.raw_notes) return null;
+    return ex.raw_notes.find(n => n.j === j);
+  }
+
+  function selectionKeyForFilteredIndex(j) {
+    if (usingRawRollout()) {
+      const n = rawNoteForFilteredIndex(j);
+      if (n) return String(n.r);
+    }
+    return String(j);
+  }
+
+  function scoreSlotForNote(n) {
+    const branch = branchForNote(n);
+    return branch ? branch.slot : null;
+  }
+
+  function currentPerfNotes() {
+    if (streamSel.value === 'raw' && ex.raw_notes) return ex.raw_notes;
+    return ex.perf_notes.map((n, j) => ({ ...n, j }));
+  }
+
+  function updateStreamOptions() {
+    if (!ex) return;
+    const filteredN = ex.perf_notes.length;
+    const rawN = ex.raw_notes ? ex.raw_notes.length : filteredN;
+    const mistakes = ex.raw_notes ? ex.raw_notes.filter(n => n.j == null).length : 0;
+    streamSel.options[0].textContent =
+      `unfiltered (raw, ${rawN} notes${mistakes ? `, ${mistakes} unmatched` : ''})`;
+    streamSel.options[1].textContent = `filtered (model input, ${filteredN} notes)`;
+    if (ex.raw_notes) {
+      streamSel.disabled = false;
+      if (streamSel.value !== 'raw' && streamSel.value !== 'filtered') streamSel.value = 'raw';
+    }
+  }
+
+  function updateMeta() {
+    if (!ex) return;
+    const stream = streamSel.value === 'raw' && ex.raw_notes ? 'unfiltered' : 'filtered';
+    const notes = currentPerfNotes();
+    const mistakes = notes.filter(n => n.j == null).length;
+    metaEl.textContent =
+      `checkpoint: ${DATA.checkpoint}  ·  stream: ${stream} (${notes.length} notes` +
+      `${mistakes ? `, ${mistakes} unmatched` : ''})  ·  rollout: ${usingRawRollout() ? 'raw controls' : 'filtered controls'}` +
+      `  ·  view: ${isSheetMode() ? 'sheet' : 'piano'} @ ${pxps}px/s` +
+      `${hasDualRollouts(ex) ? '' : ' (re-run precompute for dual rollouts)'}`;
+  }
+
+  const playBtns = {
+    perf: document.getElementById('playPerf'),
+    gt: document.getElementById('playGt'),
+    pred: document.getElementById('playPred'),
+  };
+  const audioStatusEl = document.getElementById('audioStatus');
+  let audioCtx = null;
+  let activeVoices = [];
+  let playRaf = null;
+  let playingMode = null;
+  let playheadScore = null;
+  let playheadPerf = null;
+
+  function setAudioStatus(message, isError = false) {
+    audioStatusEl.textContent = message;
+    audioStatusEl.classList.toggle('err', isError);
+  }
+
+  async function ensureAudio() {
+    const AudioCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtor) throw new Error('Web Audio is not available in this browser.');
+    if (!audioCtx) audioCtx = new AudioCtor();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    if (audioCtx.state !== 'running') throw new Error(`Audio context is ${audioCtx.state}.`);
+    return audioCtx;
+  }
+
+  function stopPlayback(clearStatus = true) {
+    playingMode = null;
+    activeVoices.forEach(v => { try { v.stop(); } catch (_) {} });
+    activeVoices = [];
+    if (playRaf) cancelAnimationFrame(playRaf);
+    playRaf = null;
+    Object.values(playBtns).forEach(b => b.classList.remove('playing'));
+    [playheadScore, playheadPerf].forEach(ph => {
+      if (ph && ph.parentNode) ph.parentNode.removeChild(ph);
+    });
+    playheadScore = playheadPerf = null;
+    if (clearStatus) setAudioStatus('');
+  }
+
+  function makePlayhead(svg) {
+    const ph = document.createElementNS(NS, 'line');
+    ph.setAttribute('class', 'playhead');
+    ph.setAttribute('y1', 0);
+    ph.setAttribute('y2', svg.getAttribute('height'));
+    svg.appendChild(ph);
+    return ph;
+  }
+
+  function updatePlayhead(elapsedSec) {
+    const x = xOf(elapsedSec * BINS_PER_SEC);
+    [playheadScore, playheadPerf].forEach(ph => {
+      if (!ph) return;
+      ph.setAttribute('x1', x);
+      ph.setAttribute('x2', x);
+    });
+  }
+
+  function scheduleNote(ctx, when, durSec, midi, gain = 0.2) {
+    const freq = 440 * Math.pow(2, (midi - 69) / 12);
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    const atk = Math.min(0.01, durSec * 0.15);
+    const rel = Math.min(0.08, durSec * 0.2);
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(gain, when + atk);
+    env.gain.setValueAtTime(gain * 0.75, when + Math.max(atk, durSec - rel));
+    env.gain.exponentialRampToValueAtTime(0.0001, when + durSec);
+    osc.connect(env);
+    env.connect(ctx.destination);
+    osc.start(when);
+    osc.stop(when + durSec + 0.05);
+    activeVoices.push(osc);
+  }
+
+  async function playNotes(mode, notes) {
+    const list = notes.filter(n => n && n.p != null);
+    if (!list.length) {
+      setAudioStatus('No notes to play.', true);
+      return;
+    }
+    stopPlayback(false);
+    playingMode = mode;
+    playBtns[mode].classList.add('playing');
+    setAudioStatus('Starting audio...');
+    let ctx;
+    try {
+      ctx = await ensureAudio();
+    } catch (err) {
+      stopPlayback(false);
+      setAudioStatus(err?.message || 'Audio failed to start.', true);
+      return;
+    }
+    const t0 = ctx.currentTime + 0.05;
+    let endSec = 0;
+    const vel = mode === 'perf' ? 0.24 : 0.32;
+    for (const n of list) {
+      const onset = n.t / BINS_PER_SEC;
+      const dur = Math.max(n.d / BINS_PER_SEC, 0.04);
+      endSec = Math.max(endSec, onset + dur);
+      scheduleNote(ctx, t0 + onset, dur, n.p, vel);
+    }
+    setAudioStatus(`Playing ${list.length} notes.`);
+    playheadScore = makePlayhead(scoreSvg);
+    playheadPerf = makePlayhead(perfSvg);
+    const wallStart = performance.now();
+    const tick = () => {
+      if (!playingMode) return;
+      const elapsed = (performance.now() - wallStart) / 1000;
+      updatePlayhead(elapsed);
+      if (elapsed < endSec + 0.05) playRaf = requestAnimationFrame(tick);
+      else stopPlayback();
+    };
+    playRaf = requestAnimationFrame(tick);
+  }
+
+  async function playMode(mode) {
+    if (!ex) return;
+    if (mode === 'perf') await playNotes('perf', currentPerfNotes());
+    else if (mode === 'gt') await playNotes('gt', ex.gt_score);
+    else if (mode === 'pred') await playNotes('pred', currentRollout().pred_score);
+  }
+
+  const NATURAL_STEPS = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6];
+  const ACCIDENTALS = ['', '#', '', '#', '', '', '#', '', '#', '', '#', ''];
+  const pitchStep = p => {
+    const pc = ((p % 12) + 12) % 12;
+    const oct = Math.floor(p / 12) - 1;
+    return oct * 7 + NATURAL_STEPS[pc];
+  };
+  const isAccidental = p => ACCIDENTALS[((p % 12) + 12) % 12] !== '';
+
+  function noteSpan(notes) {
+    let tmax = 1, pmin = 127, pmax = 0;
+    for (const n of notes) {
+      if (!n) continue;
+      tmax = Math.max(tmax, (n.t + Math.max(n.d, 10)) / 100);
+      if (n.p != null) { pmin = Math.min(pmin, n.p); pmax = Math.max(pmax, n.p); }
+    }
+    const lo = Math.max(0, pmin - 2);
+    const hi = Math.min(127, pmax + 2);
+    return {
+      tmax,
+      pmin: lo,
+      pmax: hi,
+      smin: pitchStep(lo) - 3,
+      smax: pitchStep(hi) + 3,
+    };
+  }
+
+  function mkSvg(svg, span) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const w = PAD_L + span.tmax * pxps + 20;
+    const h = isSheetMode()
+      ? PAD_T + (span.smax - span.smin + 1) * STAFF_STEP + PAD_B + 16
+      : PAD_T + (span.pmax - span.pmin + 1) * ROWH + PAD_B;
+    svg.setAttribute('width', w); svg.setAttribute('height', h);
+    return { w, h };
+  }
+
+  const yOf = (span, p) => isSheetMode()
+    ? PAD_T + 8 + (span.smax - pitchStep(p)) * STAFF_STEP
+    : PAD_T + (span.pmax - p) * ROWH;
+  const noteH = () => isSheetMode() ? 7 : ROWH - 1;
+  const noteY = (span, p) => isSheetMode() ? yOf(span, p) - noteH() / 2 : yOf(span, p);
+  const noteW = d => Math.max((d / 100) * pxps, isSheetMode() ? 9 : 2);
+  const xOf = t => PAD_L + (t / 100) * pxps;
+
+  function drawGrid(svg, span, dims, beatSeconds) {
+    if (isSheetMode()) drawStaffGrid(svg, span, dims, beatSeconds);
+    else drawPianoGrid(svg, span, dims, beatSeconds);
+  }
+
+  function drawPianoGrid(svg, span, dims, beatSeconds) {
+    for (let p = span.pmin; p <= span.pmax; p++) {
+      if (p % 12 === 0) {
+        const y = yOf(span, p) + ROWH / 2;
+        line(svg, PAD_L, y, dims.w - 4, y, css('--grid'), 1);
+        text(svg, 4, y + 3, pname(p), css('--muted'), 10);
+      }
+    }
+    const step = beatSeconds || 0.5;
+    for (let t = 0; t <= span.tmax + 1e-6; t += step) {
+      const x = PAD_L + t * pxps;
+      const major = Math.round(t / step) % 4 === 0;
+      line(svg, x, PAD_T - 4, x, dims.h - PAD_B + 4, major ? css('--beat') : css('--grid'), major ? 1.2 : 0.6);
+      if (major) text(svg, x + 2, dims.h - 6, t.toFixed(1) + 's', css('--muted'), 10);
+    }
+  }
+
+  function drawStaffGrid(svg, span, dims, beatSeconds) {
+    const step = beatSeconds || 0.5;
+    const staffColor = css('--grid');
+    for (let s = span.smin; s <= span.smax; s++) {
+      if (s % 2 !== 0) continue;
+      const y = PAD_T + 8 + (span.smax - s) * STAFF_STEP;
+      const strong = s % 7 === 0;
+      line(svg, PAD_L, y, dims.w - 4, y, strong ? css('--beat') : staffColor, strong ? 1 : 0.7);
+      if (strong) {
+        const cMidi = Math.round(((s / 7) + 1) * 12);
+        text(svg, 5, y + 3, pname(cMidi), css('--muted'), 10);
+      }
+    }
+    for (let t = 0; t <= span.tmax + 1e-6; t += step) {
+      const x = PAD_L + t * pxps;
+      const major = Math.round(t / step) % 4 === 0;
+      line(svg, x, PAD_T - 4, x, dims.h - PAD_B + 4, major ? css('--beat') : css('--grid'), major ? 1.2 : 0.6);
+      if (major) text(svg, x + 2, dims.h - 6, t.toFixed(1) + 's', css('--muted'), 10);
+    }
+  }
+
+  function line(svg, x1, y1, x2, y2, stroke, wd) {
+    const e = document.createElementNS(NS, 'line');
+    e.setAttribute('x1', x1); e.setAttribute('y1', y1);
+    e.setAttribute('x2', x2); e.setAttribute('y2', y2);
+    e.setAttribute('stroke', stroke); e.setAttribute('stroke-width', wd);
+    svg.appendChild(e); return e;
+  }
+  function text(svg, x, y, s, fill, size) {
+    const e = document.createElementNS(NS, 'text');
+    e.setAttribute('x', x); e.setAttribute('y', y);
+    e.setAttribute('fill', fill); e.setAttribute('font-size', size);
+    e.textContent = s; svg.appendChild(e); return e;
+  }
+  function rect(svg, x, y, w, h, fill, cls) {
+    const e = document.createElementNS(NS, 'rect');
+    e.setAttribute('x', x); e.setAttribute('y', y);
+    e.setAttribute('width', Math.max(w, 2)); e.setAttribute('height', h);
+    e.setAttribute('rx', isSheetMode() ? 5 : 2); e.setAttribute('fill', fill);
+    if (cls) e.setAttribute('class', cls);
+    svg.appendChild(e); return e;
+  }
+
+  function accidentalMark(svg, span, n, fill) {
+    if (!isSheetMode() || !n || n.p == null || !isAccidental(n.p)) return null;
+    const e = text(svg, xOf(n.t) - 8, yOf(span, n.p) + 3, '#', fill, 10);
+    e.setAttribute('font-weight', '600');
+    return e;
+  }
+
+  function setBaseStroke(e, color, width, dash = '') {
+    e.dataset.baseStroke = color;
+    e.dataset.baseStrokeWidth = String(width);
+    e.dataset.baseStrokeDash = dash;
+    restoreBaseStroke(e);
+  }
+
+  function restoreBaseStroke(e) {
+    if (!e) return;
+    const color = e.dataset.baseStroke;
+    if (color) {
+      e.setAttribute('stroke', color);
+      e.setAttribute('stroke-width', e.dataset.baseStrokeWidth || 1);
+      if (e.dataset.baseStrokeDash) e.setAttribute('stroke-dasharray', e.dataset.baseStrokeDash);
+      else e.removeAttribute('stroke-dasharray');
+    } else {
+      e.setAttribute('stroke', 'none');
+      e.setAttribute('stroke-width', 0);
+      e.removeAttribute('stroke-dasharray');
+    }
+  }
+
+  const scoreSvg = document.getElementById('scoreRoll');
+  let scoreSpan = null;
+  let gtEls = {}, predEls = {}, candLayer = null;
+
+  function drawScore() {
+    const rollout = currentRollout();
+    const gt = ex.gt_score.filter(Boolean);
+    const pred = rollout.pred_score.filter(Boolean);
+    const branchCands = Object.values(rollout.branches).flatMap(b => b.candidates.filter(c => !c.rest));
+    scoreSpan = noteSpan([...gt, ...pred, ...branchCands]);
+    const dims = mkSvg(scoreSvg, scoreSpan);
+    drawGrid(scoreSvg, scoreSpan, dims, 0.5);
+    gtEls = {}; predEls = {};
+    rollout.pred_score.forEach((n, i) => {
+      if (!n) return;
+      const e = rect(scoreSvg, xOf(n.t), noteY(scoreSpan, n.p), noteW(n.d), noteH(), css('--pred'));
+      e.setAttribute('opacity', 0.65); e.dataset.slot = i;
+      const branch = rollout.branches[String(i)];
+      const gtSlot = branch && branch.gt_slot != null ? branch.gt_slot : (usingRawRollout() ? null : i);
+      const gtNote = gtSlot != null ? ex.gt_score[gtSlot] : null;
+      const pitchError = gtNote && gtNote.p !== n.p;
+      if (pitchError) {
+        e.dataset.pitchError = '1';
+        setBaseStroke(e, css('--miss'), 2);
+      }
+      const title = document.createElementNS(NS, 'title');
+      title.textContent = pitchError
+        ? `pitch error at slot ${i}: generated ${pname(n.p)}, ground truth ${pname(gtNote.p)} at slot ${gtSlot}`
+        : `generated score slot ${i}: ${pname(n.p)}`;
+      e.appendChild(title);
+      accidentalMark(scoreSvg, scoreSpan, n, css('--pred'));
+      predEls[i] = e;
+    });
+    ex.gt_score.forEach((n, i) => {
+      if (!n) return;
+      const e = rect(scoreSvg, xOf(n.t), noteY(scoreSpan, n.p), noteW(n.d), noteH(), 'none');
+      setBaseStroke(e, css('--gt'), 1.6);
+      e.dataset.slot = i;
+      accidentalMark(scoreSvg, scoreSpan, n, css('--gt'));
+      gtEls[i] = e;
+    });
+    candLayer = document.createElementNS(NS, 'g');
+    scoreSvg.appendChild(candLayer);
+    applyToggles();
+  }
+
+  function applyToggles() {
+    const sgt = document.getElementById('showGt').checked;
+    const spr = document.getElementById('showPred').checked;
+    Object.values(gtEls).forEach(e => e.style.display = sgt ? '' : 'none');
+    Object.values(predEls).forEach(e => e.style.display = spr ? '' : 'none');
+  }
+
+  const perfSvg = document.getElementById('perfRoll');
+  let perfEls = [];
+  let perfElByKey = {};
+
+  function drawPerf() {
+    const notes = currentPerfNotes();
+    const span = noteSpan(notes);
+    const dims = mkSvg(perfSvg, span);
+    drawGrid(perfSvg, span, dims, 1.0);
+    perfEls = []; perfElByKey = {};
+    notes.forEach((n) => {
+      const j = n.j;
+      const isMistake = j == null;
+      const inPrefix = j != null && j < ex.prefix_controls;
+      const selKey = noteSelectionKey(n);
+      const clickable = hasScoreSlotForNote(n);
+      const fill = isMistake ? css('--miss') : css('--perf');
+      const e = rect(perfSvg, xOf(n.t), noteY(span, n.p), noteW(n.d), noteH(), fill, 'note');
+      e.setAttribute('opacity', isMistake ? (clickable ? 1 : 0.9) : (clickable ? 1 : 0.4));
+      if (inPrefix && clickable) {
+        setBaseStroke(e, css('--perf-prefix'), 1, '3 2');
+      }
+      e.dataset.key = selKey || '';
+      e.style.cursor = clickable ? 'pointer' : 'default';
+      e.addEventListener('click', ev => {
+        ev.stopPropagation();
+        if (clickable) selectNote(selKey);
+        else if (isMistake) showMistakeInfo(n);
+      });
+      const title = document.createElementNS(NS, 'title');
+      const slot = scoreSlotForNote(n);
+      title.textContent = isMistake
+        ? `unmatched performance note  ${pname(n.p)}  t=${(n.t/100).toFixed(2)}s` +
+          (clickable ? `  — click: model score slot ${slot} (raw rollout)` : '  (no rollout slot)')
+        : `perf #${j}${inPrefix ? ' (prefix)' : ''}  ${pname(n.p)}  t=${(n.t/100).toFixed(2)}s` +
+          (clickable ? `  — click: quantized score slot ${slot}` : '  (no score slot in this window)');
+      e.appendChild(title);
+      accidentalMark(perfSvg, span, n, fill);
+      perfEls.push(e);
+      if (selKey) perfElByKey[selKey] = e;
+    });
+    perfSvg.addEventListener('click', () => clearSelection());
+  }
+
+  function showMistakeInfo(n) {
+    clearSelection();
+    document.getElementById('candinfo').innerHTML =
+      `<span class="lbl">Unmatched performance note (${pname(n.p)} @ ${(n.t/100).toFixed(2)}s) — ` +
+      `not in the filtered model input. No raw-rollout slot was precomputed for it.</span>`;
+  }
+
+  const topPSlider = document.getElementById('topP');
+  const topPVal = document.getElementById('topPVal');
+  const topPFraction = () => topPSlider.value / 100;
+  const rankPane = document.getElementById('rankPane');
+  const rankSlider = document.getElementById('rankSlider');
+  const rankVal = document.getElementById('rankVal');
+
+  function nucleusFilter(cands, p) {
+    const total = cands.reduce((s, c) => s + c.prob, 0) || 1;
+    let cum = 0;
+    const kept = [];
+    for (const c of cands) {
+      kept.push(c);
+      cum += c.prob / total;
+      if (cum >= p) break;
+    }
+    return kept;
+  }
+
+  function clearCandidates() {
+    while (candLayer && candLayer.firstChild) candLayer.removeChild(candLayer.firstChild);
+    displayedCands = []; candEls = []; hoverRank = null;
+  }
+
+  function clearSelection() {
+    selectedKey = null;
+    clearCandidates();
+    Object.values(gtEls).forEach(e => e.classList.remove('fadeout', 'semifade'));
+    Object.values(predEls).forEach(e => e.classList.remove('fadeout', 'semifade'));
+    perfEls.forEach(restoreBaseStroke);
+    rankPane.style.display = 'none';
+    document.getElementById('candinfo').innerHTML =
+      '<span class="lbl">No performance note selected.</span>';
+    drawPerplexity();
+  }
+
+  function applyRankHighlight() {
+    const n = hoverRank != null ? hoverRank : parseInt(rankSlider.value, 10);
+    candEls.forEach((ce, i) => {
+      const active = (i === n - 1);
+      const c = displayedCands[i];
+      const maxP = displayedCands[0] ? displayedCands[0].prob : 1;
+      const baseAlpha = 0.15 + 0.85 * (c.prob / maxP);
+      if (ce.rect) {
+        ce.rect.setAttribute('stroke', active ? css('--sel') : 'none');
+        ce.rect.setAttribute('stroke-width', active ? 2 : 0);
+        ce.rect.setAttribute('opacity', active ? 1 : (candEls.some((_, k) => k === n - 1) ? baseAlpha * 0.55 : baseAlpha));
+      }
+      if (ce.label) ce.label.setAttribute('opacity', active ? 1 : 0.45);
+      if (ce.row) ce.row.classList.toggle('hl', active);
+    });
+    rankVal.textContent = String(n);
+  }
+
+  function selectNote(key) {
+    clearSelection();
+    selectedKey = key;
+    const el = perfElByKey[key];
+    if (el) { el.setAttribute('stroke', css('--sel')); el.setAttribute('stroke-width', 2); }
+
+    const rollout = currentRollout();
+    const branch = rollout.branches[key];
+    const info = document.getElementById('candinfo');
+    if (!branch) {
+      info.innerHTML = `<span class="lbl">No rollout branch for selection key ${key}.</span>`;
+      return;
+    }
+
+    const slot = branch.slot;
+    const gtSlot = branch.gt_slot != null ? branch.gt_slot : slot;
+    Object.entries(gtEls).forEach(([s, e]) => e.classList.add(+s === gtSlot ? 'semifade' : 'fadeout'));
+    Object.entries(predEls).forEach(([s, e]) => e.classList.add(+s === slot ? 'semifade' : 'fadeout'));
+    const gtNote = ex.gt_score[gtSlot];
+    const predNote = rollout.pred_score[slot];
+    if (gtNote) {
+      const g = rect(candLayer, xOf(gtNote.t), noteY(scoreSpan, gtNote.p),
+                     noteW(gtNote.d), noteH(), 'none');
+      g.setAttribute('stroke', css('--gt')); g.setAttribute('stroke-width', 2.2);
+      g.setAttribute('stroke-dasharray', '4 2');
+    }
+
+    displayedCands = nucleusFilter(branch.candidates, topPFraction());
+    const maxP = Math.max(...displayedCands.map(c => c.prob), 1e-9);
+    candEls = [];
+    let greedyMarked = false;
+    displayedCands.forEach((c, rank) => {
+      let r = null, t = null;
+      const isGreedy = c.greedy && !greedyMarked;
+      if (isGreedy) greedyMarked = true;
+      if (!c.rest) {
+        const alpha = 0.15 + 0.85 * (c.prob / maxP);
+        r = rect(candLayer, xOf(c.t), noteY(scoreSpan, c.p), noteW(c.d), noteH(), css('--cand'));
+        r.setAttribute('opacity', alpha.toFixed(3));
+        r.style.cursor = 'pointer';
+        if (isGreedy) { r.setAttribute('stroke', css('--pred')); r.setAttribute('stroke-width', 1.4); }
+        t = text(candLayer, xOf(c.t) + 2, noteY(scoreSpan, c.p) - 2,
+                 (100 * c.prob).toFixed(1) + '%', css('--text'), 9);
+        t.setAttribute('opacity', Math.max(0.45, alpha).toFixed(3));
+        accidentalMark(candLayer, scoreSpan, c, css('--cand'));
+        r.addEventListener('mouseenter', () => { hoverRank = rank + 1; applyRankHighlight(); });
+        r.addEventListener('mouseleave', () => { hoverRank = null; applyRankHighlight(); });
+      }
+      candEls.push({ rect: r, label: t, row: null });
+    });
+
+    const rows = displayedCands.map((c, r) => {
+      const bar = Math.max(2, 120 * c.prob / maxP);
+      const greedyDot = c.greedy && displayedCands.slice(0, r).every(x => !x.greedy)
+        ? ' <span style="color:var(--pred)" title="greedy rollout choice">●</span>' : '';
+      return `<tr class="cand-row" data-rank="${r + 1}">
+        <td>${r + 1}${greedyDot}</td>
+        <td>${c.rest ? 'REST' : pname(c.p)}</td>
+        <td>${(c.t / 100).toFixed(2)} s</td>
+        <td>${(c.d / 100).toFixed(2)} s</td>
+        <td><span class="bar" style="width:${bar}px"></span> ${(100 * c.prob).toFixed(2)}%</td>
+        <td class="lbl">${c.probs.map(p => (100 * p).toFixed(1) + '%').join(' · ')}</td>
+      </tr>`;
+    }).join('');
+    const gtDesc = gtNote
+      ? `${pname(gtNote.p)} @ ${(gtNote.t / 100).toFixed(2)} s, dur ${(gtNote.d / 100).toFixed(2)} s`
+      : 'dummy REST slot';
+    const predDesc = predNote
+      ? `${pname(predNote.p)} @ ${(predNote.t / 100).toFixed(2)} s`
+      : '—';
+    const label = usingRawRollout()
+      ? `raw perf #${branch.raw_index != null ? branch.raw_index : key}` +
+        (branch.gt_slot != null ? ` (matched filtered #${branch.gt_slot})` : ' (unmatched)')
+      : `perf #${key}`;
+    info.innerHTML = `
+      <div style="margin-bottom:6px">${label} → score slot <b>${slot}</b>
+        &nbsp;·&nbsp; ground truth: <b style="color:var(--gt)">${gtDesc}</b>
+        &nbsp;·&nbsp; rollout chose: <b style="color:var(--pred)">${predDesc}</b>
+        &nbsp;·&nbsp; <span class="lbl">showing ${displayedCands.length}/${branch.candidates.length} (top-p ${topPSlider.value}%) — ${usingRawRollout() ? 'raw' : 'filtered'} AR rollout at slot ${slot}</span></div>
+      <table>
+        <tr><th>#</th><th>pitch</th><th>onset</th><th>duration</th><th>joint prob</th><th>onset · dur · pitch prob</th></tr>
+        ${rows}
+      </table>`;
+
+    info.querySelectorAll('tr.cand-row').forEach(row => {
+      const rank = parseInt(row.dataset.rank, 10);
+      candEls[rank - 1].row = row;
+      row.addEventListener('mouseenter', () => { hoverRank = rank; applyRankHighlight(); });
+      row.addEventListener('mouseleave', () => { hoverRank = null; applyRankHighlight(); });
+    });
+
+    rankSlider.max = String(displayedCands.length);
+    rankSlider.value = '1';
+    rankPane.style.display = 'flex';
+    applyRankHighlight();
+    drawPerplexity();
+  }
+
+  const minimap = document.getElementById('minimap');
+
+  function flashEl(e) {
+    if (!e) return;
+    e.setAttribute('stroke', css('--sel'));
+    e.setAttribute('stroke-width', 2.4);
+    e.removeAttribute('stroke-dasharray');
+    e.scrollIntoView && e.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }
+  function unflashEl(e, keepSelected) {
+    if (!e) return;
+    if (keepSelected) { e.setAttribute('stroke', css('--sel')); e.setAttribute('stroke-width', 2); }
+    else restoreBaseStroke(e);
+  }
+
+  function drawMinimap() {
+    minimap.innerHTML = '';
+    const rollout = currentRollout();
+    const k = ex.prefix_controls;
+    const numSlots = ex.gt_score.length;
+    const cells = [];
+    for (let j = 0; j < k; j++) {
+      cells.push({ kind: 'control', j, label: `prefix control (perf #${j})` });
+      cells.push({ kind: 'placeholder', label: `prefix REST placeholder ${j}` });
+    }
+    for (let s = 0; s < numSlots; s++) {
+      cells.push({ kind: 'score', slot: s, label: `score slot ${s} (quantizes perf #${s})` });
+      cells.push({ kind: 'control', j: s + k, label: `control (perf #${s + k})` });
+    }
+    const colors = { control: css('--perf'), placeholder: css('--muted'), score: css('--pred') };
+    cells.forEach(cell => {
+      const d = document.createElement('div');
+      d.className = 'sq';
+      d.style.background = colors[cell.kind];
+      d.title = cell.label;
+      d.addEventListener('mouseenter', () => {
+        const key = selectionKeyForFilteredIndex(cell.j);
+        if (cell.kind === 'control' && cell.j != null) flashEl(perfElByKey[key]);
+        else if (cell.kind === 'score') { flashEl(predEls[cell.slot]); flashEl(gtEls[cell.slot]); }
+      });
+      d.addEventListener('mouseleave', () => {
+        const key = selectionKeyForFilteredIndex(cell.j);
+        if (cell.kind === 'control' && cell.j != null) unflashEl(perfElByKey[key], key === selectedKey);
+        else if (cell.kind === 'score') { unflashEl(predEls[cell.slot]); unflashEl(gtEls[cell.slot]); }
+      });
+      d.addEventListener('click', () => {
+        if (cell.kind === 'control' && cell.j != null) {
+          const key = selectionKeyForFilteredIndex(cell.j);
+          if (rollout.branches[key]) selectNote(key);
+        } else if (cell.kind === 'score') {
+          const key = selectionKeyForFilteredIndex(cell.slot);
+          if (rollout.branches[key]) selectNote(key);
+        }
+      });
+      minimap.appendChild(d);
+    });
+  }
+
+  function selectedSlotIndex() {
+    if (selectedKey == null) return null;
+    const b = currentRollout()?.branches?.[selectedKey];
+    return b?.slot ?? null;
+  }
+
+  function drawPerplexity() {
+    const wrap = document.getElementById('pplWrap');
+    const svg = document.getElementById('pplChart');
+    const empty = document.getElementById('pplEmpty');
+    const tip = document.getElementById('pplTip');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    tip.style.display = 'none';
+
+    const ppl = currentRollout()?.perplexity;
+    const hasData = ppl && ppl.time && ppl.time.some(v => v != null);
+    wrap.style.display = hasData ? 'block' : 'none';
+    empty.style.display = hasData ? 'none' : 'block';
+    if (!hasData) return;
+
+    const series = [
+      { key: 'time', color: css('--pred'), label: 'onset' },
+      { key: 'dur', color: css('--perf'), label: 'dur' },
+      { key: 'pitch', color: css('--cand'), label: 'pitch' },
+    ];
+    const n = ppl.time.length;
+    const W = Math.max(520, wrap.clientWidth || 600);
+    const H = 92;
+    const ML = 44, MR = 10, MT = 8, MB = 20;
+    const iw = W - ML - MR, ih = H - MT - MB;
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const vals = [];
+    for (const s of series) {
+      for (let i = 0; i < n; i++) {
+        const v = ppl[s.key][i];
+        if (v != null && isFinite(v) && v > 0) vals.push(v);
+      }
+    }
+    let ymin = Math.max(1, Math.min(...vals));
+    let ymax = Math.max(...vals);
+    if (!isFinite(ymin) || !isFinite(ymax)) return;
+    if (ymax <= ymin) ymax = ymin * 1.5;
+    const logMinRaw = Math.log10(ymin);
+    const logMaxRaw = Math.log10(ymax);
+    const logPad = Math.max((logMaxRaw - logMinRaw) * 0.08, 0.02);
+    const logMin = Math.max(0, logMinRaw - logPad);
+    const logMax = logMaxRaw + logPad;
+    const logSpan = Math.max(logMax - logMin, 0.01);
+    const xAt = i => ML + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
+    const yAt = v => MT + ih - ((Math.log10(Math.max(v, Math.pow(10, logMin))) - logMin) / logSpan) * ih;
+
+    function fmtPplTick(v) {
+      if (v >= 100) return v.toFixed(0);
+      if (v >= 10) return v.toFixed(1).replace(/\.0$/, '');
+      return v.toFixed(2).replace(/\.00$/, '').replace(/0$/, '');
+    }
+
+    function logTicks(minLog, maxLog) {
+      const ticks = [];
+      const e0 = Math.floor(minLog);
+      const e1 = Math.ceil(maxLog);
+      for (let e = e0; e <= e1; e++) {
+        for (const m of [1, 2, 5]) {
+          const v = m * Math.pow(10, e);
+          const lv = Math.log10(v);
+          if (lv >= minLog - 1e-9 && lv <= maxLog + 1e-9) ticks.push(v);
+        }
+      }
+      if (ticks.length < 3) {
+        ticks.push(Math.pow(10, minLog), Math.pow(10, (minLog + maxLog) / 2), Math.pow(10, maxLog));
+      }
+      return [...new Set(ticks.map(v => +v.toPrecision(6)))].sort((a, b) => a - b);
+    }
+
+    const grid = document.createElementNS(NS, 'g');
+    grid.setAttribute('opacity', '0.35');
+    for (const yv of logTicks(logMin, logMax)) {
+      const y = yAt(yv);
+      const line = document.createElementNS(NS, 'line');
+      line.setAttribute('x1', ML);
+      line.setAttribute('x2', ML + iw);
+      line.setAttribute('y1', y);
+      line.setAttribute('y2', y);
+      line.setAttribute('stroke', css('--grid'));
+      grid.appendChild(line);
+      const lbl = text(grid, 4, y + 3, fmtPplTick(yv), css('--muted'), 9);
+      lbl.setAttribute('text-anchor', 'start');
+    }
+    svg.appendChild(grid);
+
+    const axis = document.createElementNS(NS, 'line');
+    axis.setAttribute('x1', ML);
+    axis.setAttribute('x2', ML + iw);
+    axis.setAttribute('y1', MT + ih);
+    axis.setAttribute('y2', MT + ih);
+    axis.setAttribute('stroke', css('--grid'));
+    svg.appendChild(axis);
+
+    for (const s of series) {
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const v = ppl[s.key][i];
+        if (v == null || !isFinite(v)) continue;
+        pts.push(`${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`);
+      }
+      if (!pts.length) continue;
+      const path = document.createElementNS(NS, 'polyline');
+      path.setAttribute('points', pts.join(' '));
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', s.color);
+      path.setAttribute('stroke-width', '1.6');
+      path.setAttribute('stroke-linejoin', 'round');
+      path.setAttribute('stroke-linecap', 'round');
+      svg.appendChild(path);
+    }
+
+    const slot = selectedSlotIndex();
+    if (slot != null && slot >= 0 && slot < n) {
+      const sel = document.createElementNS(NS, 'line');
+      sel.setAttribute('x1', xAt(slot));
+      sel.setAttribute('x2', xAt(slot));
+      sel.setAttribute('y1', MT);
+      sel.setAttribute('y2', MT + ih);
+      sel.setAttribute('stroke', css('--sel'));
+      sel.setAttribute('stroke-width', '1.5');
+      sel.setAttribute('stroke-dasharray', '4 3');
+      sel.setAttribute('opacity', '0.85');
+      svg.appendChild(sel);
+    }
+
+    const xLbl = text(svg, ML + iw / 2, H - 4, 'score slot index', css('--muted'), 9);
+    xLbl.setAttribute('text-anchor', 'middle');
+
+    const hit = document.createElementNS(NS, 'rect');
+    hit.setAttribute('x', ML);
+    hit.setAttribute('y', MT);
+    hit.setAttribute('width', iw);
+    hit.setAttribute('height', ih);
+    hit.setAttribute('fill', 'transparent');
+    hit.style.cursor = 'crosshair';
+    hit.addEventListener('mousemove', ev => {
+      const rect = svg.getBoundingClientRect();
+      const x = ((ev.clientX - rect.left) / rect.width) * W;
+      const idx = n <= 1 ? 0 : Math.round(((x - ML) / iw) * (n - 1));
+      const i = Math.max(0, Math.min(n - 1, idx));
+      const parts = series.map(s => {
+        const v = ppl[s.key][i];
+        return `${s.label}: ${v == null ? '—' : v.toFixed(2)}`;
+      });
+      tip.textContent = `slot ${i} — ${parts.join(' · ')}`;
+      tip.style.display = 'block';
+      tip.style.left = (ev.clientX + 12) + 'px';
+      tip.style.top = (ev.clientY + 12) + 'px';
+    });
+    hit.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    svg.appendChild(hit);
+  }
+
+  function loadExample(id) {
+    ex = DATA.examples[id];
+    selectedKey = null;
+    stopPlayback();
+    updateStreamOptions();
+    drawScore();
+    drawPerf();
+    drawMinimap();
+    drawPerplexity();
+    updateMeta();
+    clearSelection();
+  }
+
+  function redrawRollsPreservingSelection(redrawMap = false) {
+    if (!ex) return;
+    const keep = selectedKey;
+    stopPlayback();
+    drawScore();
+    drawPerf();
+    if (redrawMap) drawMinimap();
+    drawPerplexity();
+    updateMeta();
+    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    else clearSelection();
+  }
+
+  sel.addEventListener('change', () => loadExample(sel.value));
+  streamSel.addEventListener('change', () => {
+    const keep = selectedKey;
+    stopPlayback();
+    drawScore();
+    drawPerf();
+    drawMinimap();
+    drawPerplexity();
+    updateMeta();
+    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    else clearSelection();
+  });
+  viewModeSel.addEventListener('change', () => redrawRollsPreservingSelection());
+  timeScaleSlider.addEventListener('input', () => {
+    pxps = parseInt(timeScaleSlider.value, 10);
+    timeScaleVal.textContent = `${pxps} px/s`;
+    redrawRollsPreservingSelection();
+  });
+  document.getElementById('clearBtn').addEventListener('click', clearSelection);
+  document.getElementById('showGt').addEventListener('change', applyToggles);
+  document.getElementById('showPred').addEventListener('change', applyToggles);
+  playBtns.perf.addEventListener('click', () => { void playMode('perf'); });
+  playBtns.gt.addEventListener('click', () => { void playMode('gt'); });
+  playBtns.pred.addEventListener('click', () => { void playMode('pred'); });
+  document.getElementById('stopPlay').addEventListener('click', stopPlayback);
+  topPSlider.addEventListener('input', () => {
+    topPVal.textContent = topPSlider.value + '%';
+    if (selectedKey != null) selectNote(selectedKey);
+  });
+  rankSlider.addEventListener('input', () => { hoverRank = null; applyRankHighlight(); });
+
+  if (firstEx.raw_notes) {
+    streamSel.value = 'raw';
+    streamSel.disabled = false;
+  } else {
+    streamSel.value = 'filtered';
+    streamSel.disabled = true;
+    streamSel.title = 'Raw streams unavailable — regenerate data.js with format-2 precompute';
+  }
+
+  loadExample(sel.value = Object.keys(DATA.examples)[0]);
+})();
+</script>
+</body>
+</html>

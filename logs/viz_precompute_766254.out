@@ -1,0 +1,35 @@
+Host: ellis-compute-01.cs.cornell.edu
+Checkpoint: run_nodummy_v2/checkpoint-15000  Test file: data/test_normalized.txt  Output: visualizer/data.js
+Start: Mon Jul  6 01:37:21 PM EDT 2026
+Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4.53.0. You should pass an instance of `Cache` instead, e.g. `past_key_values=DynamicCache.from_legacy_cache(past_key_values)`.
+Loading aligned-stream cache for raw-stream recovery...
+  1067 cached pieces
+Loading model from run_nodummy_v2/checkpoint-15000...
+  Model loaded on cuda
+Sampled 8 of 335012 validation windows (seed=17)
+  computing window 1277...
+    source: Bach/Prelude/bwv_863/LeeN01M.mid @ filtered idx 7 (171 raw notes, 1 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 17384...
+    source: Chopin/Etudes_op_10/2/TOIVIO02.mid @ filtered idx 349 (171 raw notes, 1 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 63753...
+    source: Schubert/Impromptu_op.90_D.899/3/Mizumoto07M.mid @ filtered idx 1391 (227 raw notes, 57 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 84460...
+    source: Beethoven/Piano_Sonatas/16-1/Khmara05M.mid @ filtered idx 65 (171 raw notes, 1 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 85010...
+    source: Beethoven/Piano_Sonatas/16-1/Khmara05M.mid @ filtered idx 615 (171 raw notes, 1 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 147130...
+    source: Chopin/Barcarolle/Park10M.mid @ filtered idx 673 (182 raw notes, 12 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 277977...
+    source: Schubert/Impromptu_op142/1/Kleisen02.mid @ filtered idx 5070 (176 raw notes, 6 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+  computing window 291731...
+    source: Schubert/Impromptu_op142/1/Lisiecki10M.mid @ filtered idx 2022 (170 raw notes, 0 unmatched)
+    170 filtered perf notes, 138 GT score notes, 138 filtered slots, 138 raw slots with candidates
+Wrote visualizer/data.js and visualizer/data.json
+End: Mon Jul  6 01:51:42 PM EDT 2026

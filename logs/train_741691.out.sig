@@ -1,0 +1,5 @@
+Autoregressive eval:   0%|          | 0/2 [00:00<?, ?it/s]Autoregressive eval:  50%|█████     | 1/2 [00:23<00:23, 23.42s/it]Autoregressive eval: 100%|██████████| 2/2 [00:46<00:00, 23.07s/it]                                                                  Validation Loss: 1.3902 (onset 1.7053, duration 1.7328, pitch 0.7335), Teacher-Forced Pitch Accuracy: 99.93%, Autoregressive Accuracy: pitch 92.63%, onset 17.86%, duration 27.37%
+                                                                  [AValidation Loss: 1.3738 (onset 1.6684, duration 1.7176, pitch 0.7362), Teacher-Forced Pitch Accuracy: 99.90%, Autoregressive Accuracy: pitch 88.77%, onset 19.55%, duration 30.42%
+                                                                  [AValidation Loss: 1.3955 (onset 1.7163, duration 1.7343, pitch 0.7368), Teacher-Forced Pitch Accuracy: 99.94%, Autoregressive Accuracy: pitch 88.58%, onset 17.10%, duration 37.15%
+Saved checkpoint to run_nodummy/checkpoint-20000
+Saved final model to run_nodummy/final

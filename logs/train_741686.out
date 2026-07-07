@@ -1,0 +1,10 @@
+Host: nlplarge-compute-01.tech.cornell.edu
+SLURM_JOB_PARTITION=gpu
+CUDA_VISIBLE_DEVICES=0,1,2,3
+Python: /home/wjl86/miniconda3/bin/python
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+Start: Sat Jul  4 10:57:09 PM EDT 2026
+/var/spool/slurmd/job741686/slurm_script: line 51: /home/wjl86/.local/bin/torchrun: cannot execute: required file not found

@@ -1,0 +1,185 @@
+_wandb:
+    value:
+        cli_version: 0.27.2
+        e:
+            gbgetoxbhrf2lesvy4j5c8f8wkwt9o0t:
+                args:
+                    - --data_file
+                    - data/train_normalized.txt
+                    - --val_file
+                    - data/test_normalized.txt
+                    - --output_dir
+                    - ./run_lora
+                    - --wandb_run_name
+                    - run_lora
+                    - --wandb_mode
+                    - online
+                    - --lora_r
+                    - "16"
+                    - --lora_alpha
+                    - "32"
+                    - --lora_dropout
+                    - "0.05"
+                    - --lora_target_modules
+                    - c_attn,c_proj
+                codePath: train_lora.py
+                codePathLocal: train_lora.py
+                cpu_count: 40
+                cpu_count_logical: 80
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "85857402880"
+                        used: "40736133120"
+                email: wjl86@cornell.edu
+                executable: /home/wjl86/miniconda3/bin/python
+                git:
+                    commit: 533bf00aa9c8e438a26c377bafb3b4cddf3c1bcf
+                    remote: https://github.com/william590y/anticipation3.git
+                gpu: NVIDIA RTX A6000
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10752
+                      memoryTotal: "51527024640"
+                      name: NVIDIA RTX A6000
+                      uuid: GPU-b7c01c54-a30e-ea2b-8a68-f0e32fc43592
+                host: ellis-compute-02.cs.cornell.edu
+                memory:
+                    total: "1081817939968"
+                os: Linux-6.8.0-110-generic-x86_64-with-glibc2.39
+                program: /home/wjl86/anticipation3/train_lora.py
+                python: CPython 3.13.5
+                root: run_lora
+                slurm:
+                    cluster_name: unicorn
+                    conf: /var/spool/slurmd/conf-cache/slurm.conf
+                    cpus_on_node: "8"
+                    cpus_per_task: "8"
+                    gpus_on_node: "1"
+                    gtids: "0"
+                    job_account: thickstun
+                    job_cpus_per_node: "8"
+                    job_end_time: "1813980604"
+                    job_gid: "1723234"
+                    job_gpus: "0"
+                    job_id: "30207"
+                    job_name: train-asap-lora-ellis
+                    job_nodelist: ellis-compute-02
+                    job_num_nodes: "1"
+                    job_partition: ellis
+                    job_qos: normal
+                    job_start_time: "1782444604"
+                    job_uid: "1685572"
+                    job_user: wjl86
+                    jobid: "30207"
+                    localid: "0"
+                    mem_per_node: "65536"
+                    nnodes: "1"
+                    nodeid: "0"
+                    nodelist: ellis-compute-02
+                    nprocs: "1"
+                    ntasks: "1"
+                    oom_kill_step: "0"
+                    prio_process: "0"
+                    procid: "0"
+                    submit_dir: /home/wjl86/anticipation3
+                    submit_host: unicorn-login-02
+                    task_pid: "1196481"
+                    tasks_per_node: "1"
+                    topology_addr: ellis-compute-02
+                    topology_addr_pattern: node
+                    tres_per_task: cpu=8
+                startedAt: "2026-06-26T03:30:13.807540Z"
+                writerId: gbgetoxbhrf2lesvy4j5c8f8wkwt9o0t
+        m: []
+        python_version: 3.13.5
+        t:
+            "1":
+                - 1
+                - 11
+                - 49
+                - 71
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+                - 98
+            "3":
+                - 2
+                - 13
+                - 16
+                - 61
+            "4": 3.13.5
+            "5": 0.27.2
+            "6": 4.56.2
+            "12": 0.27.2
+            "13": linux-x86_64
+batch_size:
+    value: 8
+data_file:
+    value: data/train_normalized.txt
+disable_autoregressive_pitch_eval:
+    value: false
+dur_jitter_range:
+    value: 0.05
+eval_autoregressive_samples:
+    value: 100
+eval_max_samples:
+    value: 500
+eval_num_workers:
+    value: 0
+eval_steps:
+    value: 1000
+force_cpu:
+    value: false
+gradient_accumulation_steps:
+    value: 4
+learning_rate:
+    value: 3e-05
+lora_alpha:
+    value: 32
+lora_dropout:
+    value: 0.05
+lora_r:
+    value: 16
+lora_target_modules:
+    value: c_attn,c_proj
+lora_train_embeddings:
+    value: true
+loss_mask_performance_tokens:
+    value: false
+mask_prob:
+    value: 0
+max_steps:
+    value: 40000
+model_name:
+    value: stanford-crfm/music-medium-800k
+onset_jitter_std:
+    value: 0.05
+original_weight_l2:
+    value: 0
+output_dir:
+    value: run_lora
+reduce_memory:
+    value: false
+save_steps:
+    value: 2500
+tempo_scale_range:
+    value: 0.2
+transpose_range_semitones:
+    value: 12
+val_batch_size:
+    value: 8
+val_file:
+    value: data/test_normalized.txt
+wandb_mode:
+    value: online
+wandb_project:
+    value: anticipation-asap
+wandb_run_name:
+    value: run_lora
+warmup_steps:
+    value: 0

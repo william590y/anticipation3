@@ -1,0 +1,43 @@
+Initial GPU memory stats:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+Found 2756680 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 675736 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Model vocabulary size matches tokenization (55028)
+/home/wjl86/miniconda3/lib/python3.13/site-packages/peft/tuners/lora/layer.py:2504: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setting fan_in_fan_out to True.
+  warnings.warn(
+Applied LoRA: r=16, alpha=32, dropout=0.05, targets=['c_attn', 'c_proj'], train_embeddings=True
+trainable params: 60,674,048 || all params: 420,382,720 || trainable%: 14.4330
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+After accelerator preparation, model device: cuda:0
+Original-weight L2 regularization disabled.
+GPU memory before training:
+GPU 0 memory allocated: 1627.64 MB
+GPU 0 memory reserved: 1630.00 MB
+GPU 0 max memory allocated: 1627.64 MB
+Clearing CUDA cache before training on cuda
+Starting training...
+Training:   0%|          | 0/40000 [00:00<?, ?it/s]`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+Training:   0%|          | 76/40000 [04:14<36:15:59,  3.27s/it]
+Step: 10/40000, Loss: 19.6292, LR: 2.99999958e-05
+Step: 20/40000, Loss: 19.7390, LR: 2.99999833e-05
+Step: 30/40000, Loss: 20.1228, LR: 2.99999625e-05
+Step: 40/40000, Loss: 20.0165, LR: 2.99999334e-05
+Step: 50/40000, Loss: 20.2736, LR: 2.99998959e-05
+Step: 60/40000, Loss: 18.3947, LR: 2.99998501e-05
+Step: 70/40000, Loss: 22.9369, LR: 2.99997960e-05

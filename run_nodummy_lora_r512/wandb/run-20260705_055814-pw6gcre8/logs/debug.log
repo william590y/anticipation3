@@ -1,0 +1,24 @@
+2026-07-05 05:58:14,931 INFO    MainThread:2597063 [wandb_setup.py:_flush():81] Current SDK version is 0.27.2
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_setup.py:_flush():81] Configure stats pid to 2597063
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:setup_run_log_directory():723] Logging user logs to run_nodummy_lora_r512/wandb/run-20260705_055814-pw6gcre8/logs/debug.log
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:setup_run_log_directory():724] Logging internal logs to run_nodummy_lora_r512/wandb/run-20260705_055814-pw6gcre8/logs/debug-internal.log
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:init():766] calling init triggers
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:init():771] wandb.init called with sweep_config: {}
+config: {'data_file': PosixPath('data/train_normalized.txt'), 'val_file': PosixPath('data/test_normalized.txt'), 'model_name': 'stanford-crfm/music-medium-800k', 'output_dir': PosixPath('run_nodummy_lora_r512'), 'batch_size': 16, 'val_batch_size': 16, 'gradient_accumulation_steps': 1, 'learning_rate': 3e-05, 'max_steps': 20000, 'save_steps': 2500, 'eval_steps': 1000, 'eval_max_samples': 500, 'eval_autoregressive_samples': 100, 'disable_autoregressive_pitch_eval': False, 'eval_num_workers': 0, 'warmup_steps': 0, 'force_cpu': False, 'reduce_memory': False, 'onset_jitter_std': 0.05, 'dur_jitter_range': 0.05, 'mask_prob': 0.0, 'loss_mask_performance_tokens': False, 'transpose_range_semitones': 12, 'tempo_scale_range': 0.2, 'original_weight_l2': 0.0, 'lora_r': 512, 'lora_alpha': 1024, 'lora_dropout': 0.05, 'lora_target_modules': 'c_attn,c_proj', 'lora_train_embeddings': True, 'wandb_project': 'anticipation-asap', 'wandb_run_name': 'run_nodummy_lora_r512', 'wandb_mode': 'online', '_wandb': {}}
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:init():814] starting backend
+2026-07-05 05:58:14,932 INFO    MainThread:2597063 [wandb_init.py:init():829] sending inform_init request
+2026-07-05 05:58:15,205 INFO    MainThread:2597063 [wandb_init.py:init():834] backend started and connected
+2026-07-05 05:58:15,208 INFO    MainThread:2597063 [wandb_init.py:init():904] updated telemetry
+2026-07-05 05:58:15,238 INFO    MainThread:2597063 [wandb_init.py:init():927] communicating run to backend with 90.0 second timeout
+2026-07-05 05:58:15,573 INFO    MainThread:2597063 [wandb_init.py:init():972] starting run threads in backend
+2026-07-05 05:58:15,824 INFO    MainThread:2597063 [wandb_run.py:_console_start():2523] atexit reg
+2026-07-05 05:58:15,824 INFO    MainThread:2597063 [wandb_run.py:_redirect():2373] redirect: wrap_raw
+2026-07-05 05:58:15,824 INFO    MainThread:2597063 [wandb_run.py:_redirect():2442] Wrapping output streams.
+2026-07-05 05:58:15,824 INFO    MainThread:2597063 [wandb_run.py:_redirect():2465] Redirects installed.
+2026-07-05 05:58:15,828 INFO    MainThread:2597063 [wandb_init.py:init():1010] run started, returning control to user process
+2026-07-05 13:16:08,470 INFO    MainThread:2597063 [wandb_run.py:_finish():2285] finishing run wjl86-cornell-university/anticipation-asap/pw6gcre8
+2026-07-05 13:16:08,470 INFO    MainThread:2597063 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-07-05 13:16:08,471 INFO    MainThread:2597063 [wandb_run.py:_restore():2472] restore
+2026-07-05 13:16:08,471 INFO    MainThread:2597063 [wandb_run.py:_restore():2478] restore done
+2026-07-05 13:16:09,430 INFO    MainThread:2597063 [wandb_run.py:_footer_sync_info():3891] logging synced files

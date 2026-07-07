@@ -23,26 +23,20 @@ from typing import Iterable
 
 import numpy as np
 import torch
-from safetensors.torch import load_file as load_safetensors
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM
 
-from anticipation.config import EVENT_SIZE
 from anticipation.convert import events_to_midi
 from anticipation.packed_sequence import (
     ALTERNATING_START,
     extract_packed_components,
     is_real_score_triplet,
+    is_score_slot_start,
     is_score_triplet as packed_is_score_triplet,
     iter_score_slot_positions,
     triplet_values,
 )
 from anticipation.score_constraints import constrain_score_token_logits
 from anticipation.vocab import (
-    ADUR_OFFSET,
-    ANOTE_OFFSET,
-    ATIME_OFFSET,
-    CONTROL_OFFSET,
     DUR_OFFSET,
     NOTE_OFFSET,
     REST,
@@ -50,6 +44,8 @@ from anticipation.vocab import (
 )
 from evaluate_muster import (
     check_muster_installation,
+    guess_default_checkpoint,
+    load_model,
     run_muster_evaluation,
     triplets_to_musicxml,
 )
@@ -72,74 +68,11 @@ MUSTER_METRIC_KEYS = (
     "mean_error_rate_with_voice",
 )
 
-def guess_default_checkpoint() -> str:
-    candidates = []
-    for candidate in (
-        Path("checkpoint-2000"),
-        Path("checkpoint-3500"),
-        Path("hf-ckpt-3500") / "checkpoint-3500",
-    ):
-        config_path = candidate / "config.json"
-        weight_path = candidate / "model.safetensors"
-        if config_path.exists():
-            candidates.append((config_path.stat().st_mtime, str(candidate)))
-        elif weight_path.exists():
-            candidates.append((weight_path.stat().st_mtime, str(candidate)))
-
-    if not candidates:
-        return DEFAULT_CONFIG_SOURCE
-
-    candidates.sort(reverse=True)
-    return candidates[0][1]
-
-
 def checkpoint_label(checkpoint_path: str) -> str:
     parts = [part for part in Path(checkpoint_path).parts if part not in (".", "")]
     if not parts:
         return "checkpoint"
     return "_".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-
-
-def load_model(checkpoint_path: str, config_source: str):
-    checkpoint = Path(checkpoint_path)
-    print(f"Loading model from {checkpoint_path}...")
-
-    if (checkpoint / "config.json").exists():
-        model = AutoModelForCausalLM.from_pretrained(
-            str(checkpoint),
-            local_files_only=True,
-        )
-    else:
-        weight_path = checkpoint / "model.safetensors"
-        if not weight_path.exists():
-            raise FileNotFoundError(
-                f"Could not find config.json or model.safetensors in {checkpoint_path}"
-            )
-        if not Path(config_source).exists():
-            raise FileNotFoundError(
-                f"Fallback config source not found: {config_source}"
-            )
-        config = AutoConfig.from_pretrained(config_source, local_files_only=True)
-        model = AutoModelForCausalLM.from_config(config)
-        state_dict = load_safetensors(str(weight_path))
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-        if unexpected_keys:
-            raise RuntimeError(
-                f"Unexpected keys while loading {checkpoint_path}: {unexpected_keys}"
-            )
-        allowed_missing = {"lm_head.weight"}
-        if set(missing_keys) - allowed_missing:
-            raise RuntimeError(
-                f"Missing keys while loading {checkpoint_path}: {missing_keys}"
-            )
-        model.tie_weights()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.config.use_cache = True
-    model = model.to(device)
-    model.eval()
-    print(f"  Model loaded on {device}")
-    return model, device
 
 
 def sample_test_lines(
@@ -195,12 +128,28 @@ def autoregressive_generate_score(
     ground_truth_score_tokens_to_feed: int = 1,
     rollout_trace: list | None = None,
 ) -> tuple[list[int], int]:
+    """Greedy-decode score triplets with ground-truth controls teacher-forced.
+
+    Primes the KV cache on the prefix (``tokens[:score_start_idx]``), then walks
+    the body: each score triplet is generated token-by-token (greedy argmax,
+    optionally constrained to the legal token range per slot), and the
+    ground-truth control triplet that follows it is fed verbatim. The first
+    ``ground_truth_score_tokens_to_feed`` score tokens are copied from ground
+    truth instead of generated.
+
+    Returns (full generated context, number of ground-truth score tokens fed).
+    """
     if ground_truth_score_tokens_to_feed < 0:
         raise ValueError("--ground-truth-score-tokens-to-feed must be non-negative")
 
     context = list(tokens[:score_start_idx])
-    # tokens = [tok for tok in tokens if tok >= CONTROL_OFFSET]
     fed_score_tokens = 0
+
+    def trace(event: str, **fields):
+        if rollout_trace is not None:
+            rollout_trace.append(
+                {"source": "inference_packed", "event": event, "n": len(context), **fields}
+            )
 
     with torch.inference_mode():
         primed = model(
@@ -209,13 +158,11 @@ def autoregressive_generate_score(
         )
         past = primed.past_key_values
         next_logits = primed.logits[0, -1, :]
-        if rollout_trace is not None:
-            rollout_trace.append(
-                {"source": "inference_packed", "event": "after_prime", "n": len(context)}
-            )
+        trace("after_prime")
 
-        def feed_token(token: int):
+        def append_and_feed(token: int):
             nonlocal past, next_logits
+            context.append(token)
             out = model(
                 torch.tensor([[token]], device=device),
                 past_key_values=past,
@@ -223,10 +170,12 @@ def autoregressive_generate_score(
             )
             past = out.past_key_values
             next_logits = out.logits[0, -1, :]
+            trace("feed", token=int(token))
 
         pos = score_start_idx
         while pos + 5 < len(tokens):
             if is_score_triplet(tokens, pos):
+                # Generate (or copy) the three score tokens.
                 for slot in range(3):
                     if fed_score_tokens < ground_truth_score_tokens_to_feed:
                         token = int(tokens[pos + slot])
@@ -236,50 +185,90 @@ def autoregressive_generate_score(
                         if constrain_score_tokens:
                             logits = constrain_score_token_logits(logits, slot)
                         token = int(logits.argmax().item())
-                    context.append(token)
-                    feed_token(token)
-                    if rollout_trace is not None:
-                        rollout_trace.append(
-                            {
-                                "source": "inference_packed",
-                                "event": "feed",
-                                "token": int(token),
-                                "n": len(context),
-                            }
-                        )
-
+                    append_and_feed(token)
                 pos += 3
 
+                # Teacher-force the following ground-truth control triplet.
                 if pos + 2 < len(tokens):
                     for control_token in tokens[pos : pos + 3]:
-                        context.append(control_token)
-                        feed_token(control_token)
-                        if rollout_trace is not None:
-                            rollout_trace.append(
-                                {
-                                    "source": "inference_packed",
-                                    "event": "feed",
-                                    "token": int(control_token),
-                                    "n": len(context),
-                                }
-                            )
+                        append_and_feed(int(control_token))
                     pos += 3
             else:
-                token = tokens[pos]
-                context.append(token)
-                feed_token(token)
-                if rollout_trace is not None:
-                    rollout_trace.append(
-                        {
-                            "source": "inference_packed",
-                            "event": "feed",
-                            "token": int(token),
-                            "n": len(context),
-                        }
-                    )
+                # Unexpected token at a score slot (e.g. legacy formats):
+                # pass it through and re-sync one token at a time.
+                append_and_feed(int(tokens[pos]))
                 pos += 1
 
     return context, fed_score_tokens
+
+
+def batched_autoregressive_generate_score(
+    model,
+    tokens_batch: torch.Tensor,
+    score_start_idx: int,
+    device: str,
+    constrain_score_tokens: bool = True,
+    ground_truth_score_tokens_to_feed: int = 1,
+) -> torch.Tensor:
+    """Batched version of ``autoregressive_generate_score``.
+
+    Decodes every row of ``tokens_batch`` (shape ``(batch, length)``, all rows
+    the same packed-sequence length) simultaneously with one shared KV cache
+    batch, instead of looping one sequence at a time. A single-sequence
+    forward pass barely uses a GPU's compute capacity, so batching this is a
+    large speedup for validation's autoregressive accuracy check, which
+    otherwise decodes ``autoregressive_samples`` sequences fully sequentially.
+
+    Every row shares the identical score/control slot layout (guaranteed by
+    the packed-sequence format), so the slot schedule below is computed once
+    from the batch shape rather than per row.
+
+    Returns the generated context, shape ``(batch, length)``, on ``device``.
+    """
+    if ground_truth_score_tokens_to_feed < 0:
+        raise ValueError("ground_truth_score_tokens_to_feed must be non-negative")
+
+    tokens_batch = tokens_batch.to(device)
+    length = tokens_batch.shape[1]
+    context_chunks = [tokens_batch[:, :score_start_idx]]
+    fed_score_tokens = 0
+
+    with torch.inference_mode():
+        primed = model(context_chunks[0], use_cache=True)
+        past = primed.past_key_values
+        next_logits = primed.logits[:, -1, :]
+
+        def append_and_feed(token_col: torch.Tensor):
+            nonlocal past, next_logits
+            context_chunks.append(token_col.unsqueeze(1))
+            out = model(token_col.unsqueeze(1), past_key_values=past, use_cache=True)
+            past = out.past_key_values
+            next_logits = out.logits[:, -1, :]
+
+        pos = score_start_idx
+        while pos + 5 < length:
+            if is_score_slot_start(pos, score_start_idx):
+                for slot in range(3):
+                    if fed_score_tokens < ground_truth_score_tokens_to_feed:
+                        token_col = tokens_batch[:, pos + slot]
+                        fed_score_tokens += 1
+                    else:
+                        logits = next_logits
+                        if constrain_score_tokens:
+                            logits = constrain_score_token_logits(logits, slot)
+                        token_col = logits.argmax(dim=-1)
+                    append_and_feed(token_col)
+                pos += 3
+
+                if pos + 2 < length:
+                    for k in range(3):
+                        append_and_feed(tokens_batch[:, pos + k])
+                    pos += 3
+            else:
+                append_and_feed(tokens_batch[:, pos])
+                pos += 1
+
+    return torch.cat(context_chunks, dim=1)
 
 
 def triplets_to_events(triplets: Iterable[list[int]]) -> list[int]:

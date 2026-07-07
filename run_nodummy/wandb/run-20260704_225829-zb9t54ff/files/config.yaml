@@ -1,0 +1,194 @@
+_wandb:
+    value:
+        cli_version: 0.27.2
+        e:
+            fobmwtnp1cryymu04xoh4ooar5dn7bg5:
+                args:
+                    - --data_file
+                    - data/train_normalized.txt
+                    - --val_file
+                    - data/test_normalized.txt
+                    - --output_dir
+                    - ./run_nodummy
+                    - --wandb_run_name
+                    - run_nodummy
+                    - --wandb_mode
+                    - online
+                    - --max_steps
+                    - "20000"
+                    - --batch_size
+                    - "16"
+                    - --val_batch_size
+                    - "16"
+                    - --gradient_accumulation_steps
+                    - "1"
+                codePath: train.py
+                codePathLocal: train.py
+                cpu_count: 128
+                cpu_count_logical: 256
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "85832237056"
+                        used: "38286422016"
+                email: wjl86@cornell.edu
+                executable: /home/wjl86/miniconda3/bin/python
+                git:
+                    commit: 533bf00aa9c8e438a26c377bafb3b4cddf3c1bcf
+                    remote: https://github.com/william590y/anticipation3.git
+                gpu: NVIDIA A100-SXM4-80GB
+                gpu_count: 4
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100-SXM4-80GB
+                      uuid: GPU-52e8d7a4-42a9-6672-2ebf-44fa0198eafb
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100-SXM4-80GB
+                      uuid: GPU-1eacbda1-c580-9d12-cc5e-0b8d67054e31
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100-SXM4-80GB
+                      uuid: GPU-36e67beb-039d-7dbc-3916-b262b8d7831a
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100-SXM4-80GB
+                      uuid: GPU-56f7704c-ce97-fb16-6a45-49fc6e79f918
+                host: nlplarge-compute-01.tech.cornell.edu
+                memory:
+                    total: "2151605731328"
+                os: Linux-6.8.0-111-generic-x86_64-with-glibc2.39
+                program: /home/wjl86/anticipation3/train.py
+                python: CPython 3.13.5
+                root: run_nodummy
+                slurm:
+                    cluster_name: unicorn
+                    conf: /var/spool/slurmd/conf-cache/slurm.conf
+                    cpus_on_node: "8"
+                    cpus_per_task: "8"
+                    gpus_on_node: "4"
+                    gtids: "0"
+                    job_account: thickstun
+                    job_cpus_per_node: "8"
+                    job_end_time: "1814756288"
+                    job_gid: "1723234"
+                    job_gpus: 0,5,6,7
+                    job_id: "741691"
+                    job_name: train-asap
+                    job_nodelist: nlplarge-compute-01
+                    job_num_nodes: "1"
+                    job_partition: gpu
+                    job_qos: normal
+                    job_start_time: "1783220288"
+                    job_uid: "1685572"
+                    job_user: wjl86
+                    jobid: "741691"
+                    localid: "0"
+                    mem_per_node: "32768"
+                    nnodes: "1"
+                    nodeid: "0"
+                    nodelist: nlplarge-compute-01
+                    nprocs: "1"
+                    ntasks: "1"
+                    oom_kill_step: "0"
+                    prio_process: "0"
+                    procid: "0"
+                    submit_dir: /home/wjl86/anticipation3
+                    submit_host: unicorn-login-02
+                    task_pid: "3362195"
+                    tasks_per_node: "1"
+                    topology_addr: nlplarge-compute-01
+                    topology_addr_pattern: node
+                    tres_per_task: cpu=8
+                startedAt: "2026-07-05T02:58:29.003914Z"
+                writerId: fobmwtnp1cryymu04xoh4ooar5dn7bg5
+        m: []
+        python_version: 3.13.5
+        t:
+            "1":
+                - 1
+                - 5
+                - 11
+                - 49
+                - 53
+                - 71
+            "2":
+                - 1
+                - 5
+                - 6
+                - 11
+                - 41
+                - 49
+                - 53
+                - 71
+            "3":
+                - 2
+                - 13
+                - 16
+                - 61
+            "4": 3.13.5
+            "5": 0.27.2
+            "6": 4.56.2
+            "12": 0.27.2
+            "13": linux-x86_64
+batch_size:
+    value: 16
+data_file:
+    value: data/train_normalized.txt
+disable_autoregressive_pitch_eval:
+    value: false
+dur_jitter_range:
+    value: 0.05
+eval_autoregressive_samples:
+    value: 100
+eval_max_samples:
+    value: 500
+eval_num_workers:
+    value: 0
+eval_steps:
+    value: 1000
+force_cpu:
+    value: false
+gradient_accumulation_steps:
+    value: 1
+learning_rate:
+    value: 3e-05
+loss_mask_performance_tokens:
+    value: false
+mask_prob:
+    value: 0
+max_steps:
+    value: 20000
+model_name:
+    value: stanford-crfm/music-medium-800k
+onset_jitter_std:
+    value: 0.05
+original_weight_l2:
+    value: 100000
+output_dir:
+    value: run_nodummy
+reduce_memory:
+    value: false
+save_steps:
+    value: 2500
+tempo_scale_range:
+    value: 0.2
+transpose_range_semitones:
+    value: 12
+val_batch_size:
+    value: 16
+val_file:
+    value: data/test_normalized.txt
+wandb_mode:
+    value: online
+wandb_project:
+    value: anticipation-asap
+wandb_run_name:
+    value: run_nodummy
+warmup_steps:
+    value: 0

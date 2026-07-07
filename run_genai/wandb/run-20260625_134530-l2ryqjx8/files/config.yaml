@@ -1,0 +1,258 @@
+_wandb:
+    value:
+        cli_version: 0.27.2
+        e:
+            097k7ei6syqfucpnp9qawplgtwjyrx4j:
+                args:
+                    - --data_file
+                    - data/train_normalized.txt
+                    - --val_file
+                    - data/test_normalized.txt
+                    - --output_dir
+                    - ./run_genai
+                    - --wandb_run_name
+                    - run_genai
+                    - --wandb_mode
+                    - online
+                codePath: train.py
+                codePathLocal: train.py
+                cpu_count: 112
+                cpu_count_logical: 224
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "85832237056"
+                        used: "38474813440"
+                email: wjl86@cornell.edu
+                executable: /home/wjl86/miniconda3/bin/python
+                git:
+                    commit: 533bf00aa9c8e438a26c377bafb3b4cddf3c1bcf
+                    remote: https://github.com/william590y/anticipation3.git
+                gpu: NVIDIA B200
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Blackwell
+                      cudaCores: 18944
+                      memoryTotal: "192265846784"
+                      name: NVIDIA B200
+                      uuid: GPU-c96076fd-539d-be80-bbb7-956404b5a2ab
+                host: genai-large-01.cs.cornell.edu
+                memory:
+                    total: "2164173258752"
+                os: Linux-6.8.0-124-generic-x86_64-with-glibc2.39
+                program: /home/wjl86/anticipation3/train.py
+                python: CPython 3.13.5
+                root: run_genai
+                slurm:
+                    cluster_name: unicorn
+                    conf: /var/spool/slurmd/conf-cache/slurm.conf
+                    cpus_on_node: "16"
+                    cpus_per_task: "16"
+                    gpus: "1"
+                    gpus_on_node: "1"
+                    gtids: "0"
+                    job_account: thickstun
+                    job_cpus_per_node: "16"
+                    job_end_time: "1813945515"
+                    job_gid: "1723234"
+                    job_gpus: "0"
+                    job_id: "972595"
+                    job_name: train-asap
+                    job_nodelist: genai-large-01
+                    job_num_nodes: "1"
+                    job_partition: genai-thickstun-highpri
+                    job_qos: normal
+                    job_start_time: "1782409515"
+                    job_uid: "1685572"
+                    job_user: wjl86
+                    jobid: "972595"
+                    localid: "0"
+                    mem_per_node: "131072"
+                    nnodes: "1"
+                    nodeid: "0"
+                    nodelist: genai-large-01
+                    nprocs: "1"
+                    ntasks: "1"
+                    oom_kill_step: "0"
+                    prio_process: "0"
+                    procid: "0"
+                    submit_dir: /home/wjl86/anticipation3
+                    submit_host: unicorn-login-02
+                    task_pid: "1469992"
+                    tasks_per_node: "1"
+                    topology_addr: genai-large-01
+                    topology_addr_pattern: node
+                    tres_per_task: cpu=16
+                startedAt: "2026-06-25T17:45:30.039764Z"
+                writerId: 097k7ei6syqfucpnp9qawplgtwjyrx4j
+        m: []
+        python_version: 3.13.5
+        t:
+            "1":
+                - 1
+                - 11
+                - 49
+                - 71
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 71
+            "3":
+                - 2
+                - 13
+                - 16
+                - 61
+            "4": 3.13.5
+            "5": 0.27.2
+            "6": 4.56.2
+            "12": 0.27.2
+            "13": linux-x86_64
+        visualize:
+            heatmaps/duration_mae:
+                panel_config:
+                    fieldSettings:
+                        value: value
+                        x_axis: x_axis
+                        y_axis: y_axis
+                    panelDefId: wandb/heatmap/v0
+                    stringSettings:
+                        show_text: false
+                    transform:
+                        name: tableWithLeafColNames
+                    userQuery:
+                        queryFields:
+                            - args:
+                                - name: runSets
+                                  value: ${runSets}
+                              fields:
+                                - fields: []
+                                  name: id
+                                - fields: []
+                                  name: name
+                                - fields: []
+                                  name: _defaultColorIndex
+                                - args:
+                                    - name: tableKey
+                                      value: heatmaps/duration_mae_table
+                                  fields: []
+                                  name: summaryTable
+                              name: runSets
+                panel_type: Vega2
+            heatmaps/onset_mae:
+                panel_config:
+                    fieldSettings:
+                        value: value
+                        x_axis: x_axis
+                        y_axis: y_axis
+                    panelDefId: wandb/heatmap/v0
+                    stringSettings:
+                        show_text: false
+                    transform:
+                        name: tableWithLeafColNames
+                    userQuery:
+                        queryFields:
+                            - args:
+                                - name: runSets
+                                  value: ${runSets}
+                              fields:
+                                - fields: []
+                                  name: id
+                                - fields: []
+                                  name: name
+                                - fields: []
+                                  name: _defaultColorIndex
+                                - args:
+                                    - name: tableKey
+                                      value: heatmaps/onset_mae_table
+                                  fields: []
+                                  name: summaryTable
+                              name: runSets
+                panel_type: Vega2
+            heatmaps/pitch_error_freq:
+                panel_config:
+                    fieldSettings:
+                        value: value
+                        x_axis: x_axis
+                        y_axis: y_axis
+                    panelDefId: wandb/heatmap/v0
+                    stringSettings:
+                        show_text: false
+                    transform:
+                        name: tableWithLeafColNames
+                    userQuery:
+                        queryFields:
+                            - args:
+                                - name: runSets
+                                  value: ${runSets}
+                              fields:
+                                - fields: []
+                                  name: id
+                                - fields: []
+                                  name: name
+                                - fields: []
+                                  name: _defaultColorIndex
+                                - args:
+                                    - name: tableKey
+                                      value: heatmaps/pitch_error_freq_table
+                                  fields: []
+                                  name: summaryTable
+                              name: runSets
+                panel_type: Vega2
+batch_size:
+    value: 8
+data_file:
+    value: data/train_normalized.txt
+disable_autoregressive_pitch_eval:
+    value: false
+dur_jitter_range:
+    value: 0.05
+eval_autoregressive_samples:
+    value: 100
+eval_max_samples:
+    value: 500
+eval_num_workers:
+    value: 0
+eval_steps:
+    value: 1000
+force_cpu:
+    value: false
+gradient_accumulation_steps:
+    value: 4
+learning_rate:
+    value: 3e-05
+loss_mask_performance_tokens:
+    value: false
+mask_prob:
+    value: 0
+max_steps:
+    value: 40000
+model_name:
+    value: stanford-crfm/music-medium-800k
+onset_jitter_std:
+    value: 0.05
+original_weight_l2:
+    value: 100000
+output_dir:
+    value: run_genai
+reduce_memory:
+    value: false
+save_steps:
+    value: 2500
+tempo_scale_range:
+    value: 0.2
+transpose_range_semitones:
+    value: 12
+val_batch_size:
+    value: 8
+val_file:
+    value: data/test_normalized.txt
+wandb_mode:
+    value: online
+wandb_project:
+    value: anticipation-asap
+wandb_run_name:
+    value: run_genai
+warmup_steps:
+    value: 0

@@ -1,0 +1,690 @@
+Host: nlplarge-compute-01.tech.cornell.edu
+SLURM_JOB_PARTITION=gpu
+CUDA_VISIBLE_DEVICES=0,1,2,3
+Python: /home/wjl86/miniconda3/bin/python
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+NVIDIA A100-SXM4-80GB, 81920 MiB
+Start: Sun Jul  5 01:46:54 PM EDT 2026
+[ok] CUDA is available with 4 device(s)
+  Device 0: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 1: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 2: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 3: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 16
+Final device confirmation: cuda
+Mixed precision mode: bf16
+[ok] CUDA is available with 4 device(s)
+  Device 0: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 1: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 2: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 3: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 16
+Final device confirmation: cuda
+Mixed precision mode: bf16
+[ok] CUDA is available with 4 device(s)
+  Device 0: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 1: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 2: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 3: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 16
+Final device confirmation: cuda
+Mixed precision mode: bf16
+[ok] CUDA is available with 4 device(s)
+  Device 0: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 1: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 2: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+  Device 3: NVIDIA A100-SXM4-80GB
+    - Total memory: 79.25 GB
+    - CUDA capability: 8.0
+Using device: cuda
+PyTorch version: 2.11.0+cu128
+CUDA version: 12.8
+Per-rank effective batch size: 16
+Final device confirmation: cuda
+Mixed precision mode: bf16
+Distributed setup: type=DistributedType.MULTI_GPU, world_size=4, rank=1, local_rank=1, device=cuda:1
+Distributed setup: type=DistributedType.MULTI_GPU, world_size=4, rank=0, local_rank=0, device=cuda:0
+Global effective batch size: 64
+/home/wjl86/miniconda3/lib/python3.13/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+[rank0]:[W705 13:47:09.488481350 ProcessGroupNCCL.cpp:5188] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
+Distributed setup: type=DistributedType.MULTI_GPU, world_size=4, rank=3, local_rank=3, device=cuda:3
+Distributed setup: type=DistributedType.MULTI_GPU, world_size=4, rank=2, local_rank=2, device=cuda:2
+Initial GPU memory stats:
+Initial GPU memory stats:Initial GPU memory stats:
+GPU 0 memory allocated: 0.00 MB
+
+GPU 0 memory allocated: 0.00 MBGPU 0 memory reserved: 0.00 MB
+
+GPU 0 memory reserved: 0.00 MBGPU 0 max memory allocated: 0.00 MB
+
+GPU 1 memory allocated: 0.00 MBGPU 0 max memory allocated: 0.00 MB
+
+GPU 0 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MBGPU 1 memory allocated: 0.00 MB
+
+GPU 0 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MBGPU 1 memory reserved: 2.00 MB
+
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 2.00 MB
+GPU 1 max memory allocated: 0.00 MBGPU 2 max memory allocated: 0.00 MBGPU 2 memory allocated: 0.00 MB
+
+
+GPU 3 memory allocated: 0.00 MBGPU 2 memory reserved: 0.00 MB
+
+GPU 2 max memory allocated: 0.00 MBGPU 3 memory reserved: 0.00 MB
+
+GPU 3 memory allocated: 0.00 MBGPU 3 max memory allocated: 0.00 MB
+
+Loading training dataset from data/train_normalized.txt...GPU 3 memory reserved: 0.00 MB
+
+Scanning data/train_normalized.txt for line offsets...
+GPU 3 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 2.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: wjl86 (wjl86-cornell-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run tqs7htq2
+wandb: Tracking run with wandb version 0.27.2
+wandb: Run data is saved locally in run_nodummy_v2/wandb/run-20260705_134710-tqs7htq2
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run run_nodummy_v2
+wandb: ⭐️ View project at https://wandb.ai/wjl86-cornell-university/anticipation-asap
+wandb: 🚀 View run at https://wandb.ai/wjl86-cornell-university/anticipation-asap/runs/tqs7htq2
+Initial GPU memory stats:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 2.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Loading training dataset from data/train_normalized.txt...
+Scanning data/train_normalized.txt for line offsets...
+Found 2665421 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 2665421 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 335012 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Found 2665421 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 2665421 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Training mode: onset_jitter_std=0.05 (controls in input only), dur_jitter_range=0.05 (controls in input only), score_mask_ratio=0.0, transpose_range=12, tempo_scale_range=0.2, loss_mask_performance_tokens=False
+Loading validation dataset from data/test_normalized.txt...
+Scanning data/test_normalized.txt for line offsets...
+Found 335012 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Found 335012 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Model vocabulary size matches tokenization (55028)
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 2.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Found 335012 sequences
+Tokenization format validated (triplet-aligned, no header tokens)
+Sequence length: 1020
+  Validation mode: no augmentation, loss_mask_performance_tokens=False
+Loading model stanford-crfm/music-medium-800k...
+Model vocabulary size matches tokenization (55028)
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 2.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Model vocabulary size matches tokenization (55028)
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 2.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Model vocabulary size matches tokenization (55028)
+GPU memory after loading model:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 2.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+After accelerator preparation, model device: cuda:2
+After accelerator preparation, model device: cuda:3
+After accelerator preparation, model device: cuda:1
+After accelerator preparation, model device: cuda:0
+Warning: The cache directory for DeepSpeed Triton autotune, /home/wjl86/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+Warning: The cache directory for DeepSpeed Triton autotune, /home/wjl86/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.Warning: The cache directory for DeepSpeed Triton autotune, /home/wjl86/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+
+Warning: The cache directory for DeepSpeed Triton autotune, /home/wjl86/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+GPU memory before training:
+GPU 0 memory allocated: 0.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 max memory allocated: 0.00 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+Original-weight L2 regularization enabled: lambda=100000.0, 292 tensors, 359,708,672 parameters, ~1372.2 MiB snapshot.GPU memory before training:
+
+GPU 0 memory allocated: 0.00 MBGPU memory before training:
+
+GPU 0 memory reserved: 0.00 MB
+GPU memory before training:GPU 0 max memory allocated: 0.00 MB
+
+GPU 0 memory allocated: 4140.55 MBGPU 1 memory allocated: 4140.55 MB
+GPU 0 memory allocated: 0.00 MB
+
+GPU 1 memory reserved: 4152.00 MB
+GPU 0 memory reserved: 0.00 MB
+GPU 0 memory reserved: 4152.00 MBGPU 0 max memory allocated: 0.00 MB
+
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 4140.55 MBGPU 0 max memory allocated: 4140.55 MB
+GPU 2 memory allocated: 0.00 MB
+
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 1 memory allocated: 0.00 MBGPU 3 max memory allocated: 0.00 MB
+
+Clearing CUDA cache before training on cuda:1
+Starting training...
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MBGPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+
+GPU 2 max memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MBGPU 3 memory allocated: 4140.55 MB
+
+GPU 3 memory reserved: 4152.00 MB
+GPU 2 max memory allocated: 0.00 MBGPU 3 max memory allocated: 4140.55 MB
+
+Clearing CUDA cache before training on cuda:3
+GPU 3 memory allocated: 0.00 MBStarting training...
+
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Clearing CUDA cache before training on cuda:0
+Starting training...
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 4140.55 MB
+GPU 2 memory reserved: 4152.00 MB
+GPU 2 max memory allocated: 4140.55 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Clearing CUDA cache before training on cuda:2
+Starting training...
+Training:   0%|          | 0/20000 [00:00<?, ?it/s]`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+`loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+Training:   0%|          | 1/20000 [00:01<10:58:54,  1.98s/it]Training:   0%|          | 2/20000 [00:03<8:07:09,  1.46s/it] Training:   0%|          | 3/20000 [00:04<7:11:19,  1.29s/it]Training:   0%|          | 4/20000 [00:05<6:43:56,  1.21s/it]Training:   0%|          | 5/20000 [00:06<6:30:15,  1.17s/it]Training:   0%|          | 6/20000 [00:07<6:20:04,  1.14s/it]Training:   0%|          | 7/20000 [00:08<6:14:30,  1.12s/it]Training:   0%|          | 8/20000 [00:09<6:10:36,  1.11s/it]Training:   0%|          | 9/20000 [00:10<5:36:59,  1.01s/it]Training:   0%|          | 10/20000 [00:11<5:17:01,  1.05it/s]Step: 10/20000, Loss: 10.1894, LR: 2.99999833e-05, AnchorL2: 4.818023e-09, AnchorTerm: 4.818023e-04
+Training:   0%|          | 11/20000 [00:12<5:04:26,  1.09it/s]Training:   0%|          | 12/20000 [00:12<4:52:52,  1.14it/s]Training:   0%|          | 13/20000 [00:13<4:45:34,  1.17it/s]Training:   0%|          | 14/20000 [00:14<4:39:23,  1.19it/s]Training:   0%|          | 15/20000 [00:15<4:34:53,  1.21it/s]Training:   0%|          | 16/20000 [00:16<4:32:01,  1.22it/s]Training:   0%|          | 17/20000 [00:16<4:30:46,  1.23it/s]Training:   0%|          | 18/20000 [00:17<4:29:11,  1.24it/s]Training:   0%|          | 19/20000 [00:18<4:28:16,  1.24it/s]Training:   0%|          | 20/20000 [00:19<4:27:09,  1.25it/s]Step: 20/20000, Loss: 7.1512, LR: 2.99999334e-05, AnchorL2: 1.171503e-08, AnchorTerm: 1.171503e-03
+Training:   0%|          | 21/20000 [00:20<4:27:24,  1.25it/s]Training:   0%|          | 22/20000 [00:20<4:27:06,  1.25it/s]Training:   0%|          | 23/20000 [00:21<4:27:05,  1.25it/s]Training:   0%|          | 24/20000 [00:22<4:26:31,  1.25it/s]Training:   0%|          | 25/20000 [00:23<4:26:22,  1.25it/s]Training:   0%|          | 26/20000 [00:24<4:26:54,  1.25it/s]Training:   0%|          | 27/20000 [00:24<4:27:18,  1.25it/s]Training:   0%|          | 28/20000 [00:25<4:26:48,  1.25it/s]Training:   0%|          | 29/20000 [00:26<4:26:20,  1.25it/s]Training:   0%|          | 30/20000 [00:27<4:26:08,  1.25it/s]Step: 30/20000, Loss: 6.2160, LR: 2.99998501e-05, AnchorL2: 2.086496e-08, AnchorTerm: 2.086496e-03
+Training:   0%|          | 31/20000 [00:28<4:25:53,  1.25it/s]Training:   0%|          | 32/20000 [00:28<4:25:45,  1.25it/s]Training:   0%|          | 33/20000 [00:29<4:24:47,  1.26it/s]Training:   0%|          | 34/20000 [00:30<4:25:02,  1.26it/s]Training:   0%|          | 35/20000 [00:31<4:25:39,  1.25it/s]Training:   0%|          | 36/20000 [00:32<4:25:54,  1.25it/s]Training:   0%|          | 37/20000 [00:32<4:25:42,  1.25it/s]Training:   0%|          | 38/20000 [00:33<4:25:23,  1.25it/s]Training:   0%|          | 39/20000 [00:34<4:27:01,  1.25it/s]Training:   0%|          | 40/20000 [00:35<4:25:30,  1.25it/s]Step: 40/20000, Loss: 5.0378, LR: 2.99997335e-05, AnchorL2: 2.862837e-08, AnchorTerm: 2.862837e-03
+Training:   0%|          | 41/20000 [00:36<4:27:08,  1.25it/s]Training:   0%|          | 42/20000 [00:36<4:25:28,  1.25it/s]Training:   0%|          | 43/20000 [00:37<4:24:45,  1.26it/s]Training:   0%|          | 44/20000 [00:38<4:36:22,  1.20it/s]Training:   0%|          | 45/20000 [00:39<4:33:35,  1.22it/s]Training:   0%|          | 46/20000 [00:40<4:30:29,  1.23it/s]Training:   0%|          | 47/20000 [00:40<4:28:11,  1.24it/s]Training:   0%|          | 48/20000 [00:41<4:26:55,  1.25it/s]Training:   0%|          | 49/20000 [00:42<4:25:44,  1.25it/s]Training:   0%|          | 50/20000 [00:43<4:25:00,  1.25it/s]Step: 50/20000, Loss: 4.4488, LR: 2.99995836e-05, AnchorL2: 3.568361e-08, AnchorTerm: 3.568361e-03
+Training:   0%|          | 51/20000 [00:44<4:25:32,  1.25it/s]Training:   0%|          | 52/20000 [00:44<4:24:53,  1.26it/s]Training:   0%|          | 53/20000 [00:45<4:23:53,  1.26it/s]Training:   0%|          | 54/20000 [00:46<4:23:47,  1.26it/s]Training:   0%|          | 55/20000 [00:47<4:24:06,  1.26it/s]Training:   0%|          | 56/20000 [00:48<4:23:59,  1.26it/s]Training:   0%|          | 57/20000 [00:48<4:24:45,  1.26it/s]Training:   0%|          | 58/20000 [00:49<4:25:17,  1.25it/s]Training:   0%|          | 59/20000 [00:50<4:25:50,  1.25it/s]Training:   0%|          | 60/20000 [00:51<4:25:21,  1.25it/s]Step: 60/20000, Loss: 3.9814, LR: 2.99994004e-05, AnchorL2: 4.220997e-08, AnchorTerm: 4.220997e-03
+Training:   0%|          | 61/20000 [00:52<4:25:31,  1.25it/s]Training:   0%|          | 62/20000 [00:52<4:24:41,  1.26it/s]Training:   0%|          | 63/20000 [00:53<4:27:09,  1.24it/s]Training:   0%|          | 64/20000 [00:54<4:26:36,  1.25it/s]Training:   0%|          | 65/20000 [00:55<4:26:12,  1.25it/s]Training:   0%|          | 66/20000 [00:56<4:25:52,  1.25it/s]Training:   0%|          | 67/20000 [00:56<4:25:08,  1.25it/s]Training:   0%|          | 68/20000 [00:57<4:24:20,  1.26it/s]Training:   0%|          | 69/20000 [00:58<4:45:34,  1.16it/s]Training:   0%|          | 70/20000 [00:59<4:38:23,  1.19it/s]Step: 70/20000, Loss: 3.6508, LR: 2.99991839e-05, AnchorL2: 4.937063e-08, AnchorTerm: 4.937063e-03
+Training:   0%|          | 71/20000 [01:00<4:34:38,  1.21it/s]Training:   0%|          | 72/20000 [01:01<4:31:46,  1.22it/s]Training:   0%|          | 73/20000 [01:01<4:29:41,  1.23it/s]Training:   0%|          | 74/20000 [01:02<4:28:32,  1.24it/s]Training:   0%|          | 75/20000 [01:03<4:27:16,  1.24it/s]Training:   0%|          | 76/20000 [01:04<4:26:37,  1.25it/s]Training:   0%|          | 77/20000 [01:05<4:25:52,  1.25it/s]Training:   0%|          | 78/20000 [01:05<4:32:50,  1.22it/s]Training:   0%|          | 79/20000 [01:06<4:30:38,  1.23it/s]Training:   0%|          | 80/20000 [01:07<4:28:39,  1.24it/s]Step: 80/20000, Loss: 3.3459, LR: 2.99989341e-05, AnchorL2: 5.692153e-08, AnchorTerm: 5.692153e-03
+Training:   0%|          | 81/20000 [01:08<4:29:39,  1.23it/s]Training:   0%|          | 82/20000 [01:09<4:42:53,  1.17it/s]Training:   0%|          | 83/20000 [01:10<4:37:34,  1.20it/s]Training:   0%|          | 84/20000 [01:11<4:47:35,  1.15it/s]Training:   0%|          | 85/20000 [01:11<4:40:54,  1.18it/s]Training:   0%|          | 86/20000 [01:12<4:36:33,  1.20it/s]Training:   0%|          | 87/20000 [01:13<4:33:27,  1.21it/s]Training:   0%|          | 88/20000 [01:14<4:30:45,  1.23it/s]Training:   0%|          | 89/20000 [01:15<4:29:03,  1.23it/s]Training:   0%|          | 90/20000 [01:15<4:27:58,  1.24it/s]Step: 90/20000, Loss: 3.1945, LR: 2.99986510e-05, AnchorL2: 6.374803e-08, AnchorTerm: 6.374803e-03
+Training:   0%|          | 91/20000 [01:16<4:30:57,  1.22it/s]Training:   0%|          | 92/20000 [01:17<4:28:59,  1.23it/s]Training:   0%|          | 93/20000 [01:18<4:28:25,  1.24it/s]Training:   0%|          | 94/20000 [01:19<4:28:09,  1.24it/s]Training:   0%|          | 95/20000 [01:19<4:27:52,  1.24it/s]Training:   0%|          | 96/20000 [01:20<4:27:24,  1.24it/s]Training:   0%|          | 97/20000 [01:21<4:26:49,  1.24it/s]Training:   0%|          | 98/20000 [01:22<4:25:53,  1.25it/s]Training:   0%|          | 99/20000 [01:23<4:27:36,  1.24it/s]Training:   0%|          | 100/20000 [01:23<4:26:35,  1.24it/s]Step: 100/20000, Loss: 3.1324, LR: 2.99983345e-05, AnchorL2: 7.017813e-08, AnchorTerm: 7.017813e-03
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   1%|          | 101/20000 [01:24<4:26:45,  1.24it/s]Training:   1%|          | 102/20000 [01:25<4:25:33,  1.25it/s]Training:   1%|          | 103/20000 [01:26<4:24:26,  1.25it/s]Training:   1%|          | 104/20000 [01:27<4:24:01,  1.26it/s]Training:   1%|          | 105/20000 [01:27<4:23:59,  1.26it/s]Training:   1%|          | 106/20000 [01:28<4:24:20,  1.25it/s]Training:   1%|          | 107/20000 [01:29<4:24:04,  1.26it/s]Training:   1%|          | 108/20000 [01:30<4:37:12,  1.20it/s]Training:   1%|          | 109/20000 [01:31<4:33:03,  1.21it/s]Training:   1%|          | 110/20000 [01:32<4:36:18,  1.20it/s]Step: 110/20000, Loss: 2.9935, LR: 2.99979848e-05, AnchorL2: 7.718966e-08, AnchorTerm: 7.718966e-03
+Training:   1%|          | 111/20000 [01:32<4:44:07,  1.17it/s]Training:   1%|          | 112/20000 [01:33<4:38:47,  1.19it/s]Training:   1%|          | 113/20000 [01:34<4:34:47,  1.21it/s]Training:   1%|          | 114/20000 [01:35<4:33:09,  1.21it/s]Training:   1%|          | 115/20000 [01:36<4:29:36,  1.23it/s]Training:   1%|          | 116/20000 [01:36<4:27:31,  1.24it/s]Training:   1%|          | 117/20000 [01:37<4:25:44,  1.25it/s]Training:   1%|          | 118/20000 [01:38<4:25:39,  1.25it/s]Training:   1%|          | 119/20000 [01:39<4:25:42,  1.25it/s]Training:   1%|          | 120/20000 [01:40<4:24:41,  1.25it/s]Step: 120/20000, Loss: 2.8517, LR: 2.99976018e-05, AnchorL2: 8.475050e-08, AnchorTerm: 8.475050e-03
+Training:   1%|          | 121/20000 [01:40<4:23:56,  1.26it/s]Training:   1%|          | 122/20000 [01:41<4:23:20,  1.26it/s]Training:   1%|          | 123/20000 [01:42<4:23:12,  1.26it/s]Training:   1%|          | 124/20000 [01:43<4:24:32,  1.25it/s]Training:   1%|          | 125/20000 [01:44<4:27:56,  1.24it/s]Training:   1%|          | 126/20000 [01:44<4:26:20,  1.24it/s]Training:   1%|          | 127/20000 [01:45<4:25:28,  1.25it/s]Training:   1%|          | 128/20000 [01:46<4:24:22,  1.25it/s]Training:   1%|          | 129/20000 [01:47<4:23:45,  1.26it/s]Training:   1%|          | 130/20000 [01:48<4:29:49,  1.23it/s]Step: 130/20000, Loss: 2.7176, LR: 2.99971854e-05, AnchorL2: 9.186278e-08, AnchorTerm: 9.186278e-03
+Training:   1%|          | 131/20000 [01:48<4:30:02,  1.23it/s]Training:   1%|          | 132/20000 [01:49<4:29:38,  1.23it/s]Training:   1%|          | 133/20000 [01:50<4:27:17,  1.24it/s]Training:   1%|          | 134/20000 [01:51<4:29:15,  1.23it/s]Training:   1%|          | 135/20000 [01:52<4:25:38,  1.25it/s]Training:   1%|          | 136/20000 [01:53<4:26:38,  1.24it/s]Training:   1%|          | 137/20000 [01:53<4:29:36,  1.23it/s]Training:   1%|          | 138/20000 [01:54<4:26:55,  1.24it/s]Training:   1%|          | 139/20000 [01:55<4:26:15,  1.24it/s]Training:   1%|          | 140/20000 [01:56<4:23:09,  1.26it/s]Step: 140/20000, Loss: 2.5843, LR: 2.99967358e-05, AnchorL2: 9.758006e-08, AnchorTerm: 9.758006e-03
+Training:   1%|          | 141/20000 [01:56<4:21:11,  1.27it/s]Training:   1%|          | 142/20000 [01:57<4:22:22,  1.26it/s]Training:   1%|          | 143/20000 [01:58<4:22:09,  1.26it/s]Training:   1%|          | 144/20000 [01:59<4:21:13,  1.27it/s]Training:   1%|          | 145/20000 [02:00<4:19:49,  1.27it/s]Training:   1%|          | 146/20000 [02:00<4:19:02,  1.28it/s]Training:   1%|          | 147/20000 [02:01<4:20:45,  1.27it/s]Training:   1%|          | 148/20000 [02:02<4:23:13,  1.26it/s]Training:   1%|          | 149/20000 [02:03<4:20:37,  1.27it/s]Training:   1%|          | 150/20000 [02:04<4:20:37,  1.27it/s]Step: 150/20000, Loss: 2.5193, LR: 2.99962528e-05, AnchorL2: 1.035703e-07, AnchorTerm: 1.035703e-02
+Training:   1%|          | 151/20000 [02:04<4:19:35,  1.27it/s]Training:   1%|          | 152/20000 [02:05<4:18:04,  1.28it/s]Training:   1%|          | 153/20000 [02:06<4:17:42,  1.28it/s]Training:   1%|          | 154/20000 [02:07<4:17:09,  1.29it/s]Training:   1%|          | 155/20000 [02:07<4:16:41,  1.29it/s]Training:   1%|          | 156/20000 [02:08<4:17:47,  1.28it/s]Training:   1%|          | 157/20000 [02:09<4:18:23,  1.28it/s]Training:   1%|          | 158/20000 [02:10<4:20:39,  1.27it/s]Training:   1%|          | 159/20000 [02:11<4:21:13,  1.27it/s]Training:   1%|          | 160/20000 [02:12<4:32:25,  1.21it/s]Step: 160/20000, Loss: 2.3250, LR: 2.99957366e-05, AnchorL2: 1.107314e-07, AnchorTerm: 1.107314e-02
+Training:   1%|          | 161/20000 [02:12<4:27:56,  1.23it/s]Training:   1%|          | 162/20000 [02:13<4:23:37,  1.25it/s]Training:   1%|          | 163/20000 [02:14<4:21:40,  1.26it/s]Training:   1%|          | 164/20000 [02:15<4:20:06,  1.27it/s]Training:   1%|          | 165/20000 [02:15<4:20:32,  1.27it/s]Training:   1%|          | 166/20000 [02:16<4:19:19,  1.27it/s]Training:   1%|          | 167/20000 [02:17<4:19:19,  1.27it/s]Training:   1%|          | 168/20000 [02:18<4:18:39,  1.28it/s]Training:   1%|          | 169/20000 [02:19<4:17:38,  1.28it/s]Training:   1%|          | 170/20000 [02:19<4:21:48,  1.26it/s]Step: 170/20000, Loss: 2.3898, LR: 2.99951870e-05, AnchorL2: 1.185838e-07, AnchorTerm: 1.185838e-02
+Training:   1%|          | 171/20000 [02:20<4:22:21,  1.26it/s]Training:   1%|          | 172/20000 [02:21<4:20:15,  1.27it/s]Training:   1%|          | 173/20000 [02:22<4:18:35,  1.28it/s]Training:   1%|          | 174/20000 [02:22<4:17:27,  1.28it/s]Training:   1%|          | 175/20000 [02:23<4:16:59,  1.29it/s]Training:   1%|          | 176/20000 [02:24<4:16:21,  1.29it/s]Training:   1%|          | 177/20000 [02:25<4:15:52,  1.29it/s]Training:   1%|          | 178/20000 [02:26<4:15:43,  1.29it/s]Training:   1%|          | 179/20000 [02:26<4:15:56,  1.29it/s]Training:   1%|          | 180/20000 [02:27<4:16:44,  1.29it/s]Step: 180/20000, Loss: 2.1352, LR: 2.99946042e-05, AnchorL2: 1.275377e-07, AnchorTerm: 1.275377e-02
+Training:   1%|          | 181/20000 [02:28<4:16:25,  1.29it/s]Training:   1%|          | 182/20000 [02:29<4:16:23,  1.29it/s]Training:   1%|          | 183/20000 [02:29<4:16:19,  1.29it/s]Training:   1%|          | 184/20000 [02:30<4:16:25,  1.29it/s]Training:   1%|          | 185/20000 [02:31<4:32:12,  1.21it/s]Training:   1%|          | 186/20000 [02:32<4:37:33,  1.19it/s]Training:   1%|          | 187/20000 [02:33<4:32:50,  1.21it/s]Training:   1%|          | 188/20000 [02:34<4:28:37,  1.23it/s]Training:   1%|          | 189/20000 [02:34<4:25:33,  1.24it/s]Training:   1%|          | 190/20000 [02:35<4:22:16,  1.26it/s]Step: 190/20000, Loss: 2.0794, LR: 2.99939880e-05, AnchorL2: 1.369943e-07, AnchorTerm: 1.369943e-02
+Training:   1%|          | 191/20000 [02:36<4:20:50,  1.27it/s]Training:   1%|          | 192/20000 [02:37<4:20:04,  1.27it/s]Training:   1%|          | 193/20000 [02:37<4:18:12,  1.28it/s]Training:   1%|          | 194/20000 [02:38<4:17:25,  1.28it/s]Training:   1%|          | 195/20000 [02:39<4:17:53,  1.28it/s]Training:   1%|          | 196/20000 [02:40<4:17:06,  1.28it/s]Training:   1%|          | 197/20000 [02:41<4:17:49,  1.28it/s]Training:   1%|          | 198/20000 [02:41<4:22:17,  1.26it/s]Training:   1%|          | 199/20000 [02:42<4:21:21,  1.26it/s]Training:   1%|          | 200/20000 [02:43<4:26:29,  1.24it/s]Step: 200/20000, Loss: 2.0033, LR: 2.99933386e-05, AnchorL2: 1.462190e-07, AnchorTerm: 1.462190e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   1%|          | 201/20000 [02:44<4:25:08,  1.24it/s]Training:   1%|          | 202/20000 [02:45<4:21:28,  1.26it/s]Training:   1%|          | 203/20000 [02:45<4:19:16,  1.27it/s]Training:   1%|          | 204/20000 [02:46<4:19:06,  1.27it/s]Training:   1%|          | 205/20000 [02:47<4:25:39,  1.24it/s]Training:   1%|          | 206/20000 [02:48<4:22:18,  1.26it/s]Training:   1%|          | 207/20000 [02:49<4:21:56,  1.26it/s]Training:   1%|          | 208/20000 [02:49<4:23:24,  1.25it/s]Training:   1%|          | 209/20000 [02:50<4:20:51,  1.26it/s]Training:   1%|          | 210/20000 [02:51<4:19:19,  1.27it/s]Step: 210/20000, Loss: 1.9803, LR: 2.99926558e-05, AnchorL2: 1.541764e-07, AnchorTerm: 1.541764e-02
+Training:   1%|          | 211/20000 [02:52<4:18:55,  1.27it/s]Training:   1%|          | 212/20000 [02:53<4:18:03,  1.28it/s]Training:   1%|          | 213/20000 [02:53<4:21:27,  1.26it/s]Training:   1%|          | 214/20000 [02:54<4:23:22,  1.25it/s]Training:   1%|          | 215/20000 [02:55<4:21:48,  1.26it/s]Training:   1%|          | 216/20000 [02:56<4:21:08,  1.26it/s]Training:   1%|          | 217/20000 [02:57<4:27:30,  1.23it/s]Training:   1%|          | 218/20000 [02:57<4:23:32,  1.25it/s]Training:   1%|          | 219/20000 [02:58<4:21:13,  1.26it/s]Training:   1%|          | 220/20000 [02:59<4:19:20,  1.27it/s]Step: 220/20000, Loss: 1.8732, LR: 2.99919398e-05, AnchorL2: 1.611377e-07, AnchorTerm: 1.611377e-02
+Training:   1%|          | 221/20000 [03:00<4:18:12,  1.28it/s]Training:   1%|          | 222/20000 [03:00<4:17:14,  1.28it/s]Training:   1%|          | 223/20000 [03:01<4:16:32,  1.28it/s]Training:   1%|          | 224/20000 [03:02<4:20:42,  1.26it/s]Training:   1%|          | 225/20000 [03:03<4:18:52,  1.27it/s]Training:   1%|          | 226/20000 [03:04<4:18:59,  1.27it/s]Training:   1%|          | 227/20000 [03:04<4:18:12,  1.28it/s]Training:   1%|          | 228/20000 [03:05<4:16:56,  1.28it/s]Training:   1%|          | 229/20000 [03:06<4:16:19,  1.29it/s]Training:   1%|          | 230/20000 [03:07<4:15:50,  1.29it/s]Step: 230/20000, Loss: 1.9401, LR: 2.99911905e-05, AnchorL2: 1.678321e-07, AnchorTerm: 1.678321e-02
+Training:   1%|          | 231/20000 [03:07<4:15:40,  1.29it/s]Training:   1%|          | 232/20000 [03:08<4:15:24,  1.29it/s]Training:   1%|          | 233/20000 [03:09<4:15:17,  1.29it/s]Training:   1%|          | 234/20000 [03:10<4:15:06,  1.29it/s]Training:   1%|          | 235/20000 [03:11<4:14:08,  1.30it/s]Training:   1%|          | 236/20000 [03:11<4:14:48,  1.29it/s]Training:   1%|          | 237/20000 [03:12<4:15:01,  1.29it/s]Training:   1%|          | 238/20000 [03:13<4:28:55,  1.22it/s]Training:   1%|          | 239/20000 [03:14<4:29:44,  1.22it/s]Training:   1%|          | 240/20000 [03:15<4:26:20,  1.24it/s]Step: 240/20000, Loss: 1.8501, LR: 2.99904079e-05, AnchorL2: 1.744554e-07, AnchorTerm: 1.744554e-02
+Training:   1%|          | 241/20000 [03:15<4:23:00,  1.25it/s]Training:   1%|          | 242/20000 [03:16<4:20:25,  1.26it/s]Training:   1%|          | 243/20000 [03:17<4:19:05,  1.27it/s]Training:   1%|          | 244/20000 [03:18<4:19:08,  1.27it/s]Training:   1%|          | 245/20000 [03:19<4:17:57,  1.28it/s]Training:   1%|          | 246/20000 [03:19<4:16:51,  1.28it/s]Training:   1%|          | 247/20000 [03:20<4:16:28,  1.28it/s]Training:   1%|          | 248/20000 [03:21<4:16:02,  1.29it/s]Training:   1%|          | 249/20000 [03:22<4:15:39,  1.29it/s]Training:   1%|▏         | 250/20000 [03:22<4:15:10,  1.29it/s]Step: 250/20000, Loss: 1.7419, LR: 2.99895920e-05, AnchorL2: 1.809637e-07, AnchorTerm: 1.809637e-02
+Training:   1%|▏         | 251/20000 [03:23<4:18:14,  1.27it/s]Training:   1%|▏         | 252/20000 [03:24<4:18:53,  1.27it/s]Training:   1%|▏         | 253/20000 [03:25<4:24:47,  1.24it/s]Training:   1%|▏         | 254/20000 [03:26<4:21:44,  1.26it/s]Training:   1%|▏         | 255/20000 [03:26<4:19:18,  1.27it/s]Training:   1%|▏         | 256/20000 [03:27<4:19:53,  1.27it/s]Training:   1%|▏         | 257/20000 [03:28<4:20:03,  1.27it/s]Training:   1%|▏         | 258/20000 [03:29<4:18:26,  1.27it/s]Training:   1%|▏         | 259/20000 [03:29<4:17:36,  1.28it/s]Training:   1%|▏         | 260/20000 [03:30<4:21:05,  1.26it/s]Step: 260/20000, Loss: 1.7194, LR: 2.99887428e-05, AnchorL2: 1.873539e-07, AnchorTerm: 1.873539e-02
+Training:   1%|▏         | 261/20000 [03:31<4:19:51,  1.27it/s]Training:   1%|▏         | 262/20000 [03:32<4:21:05,  1.26it/s]Training:   1%|▏         | 263/20000 [03:33<4:19:11,  1.27it/s]Training:   1%|▏         | 264/20000 [03:33<4:19:04,  1.27it/s]Training:   1%|▏         | 265/20000 [03:34<4:18:12,  1.27it/s]Training:   1%|▏         | 266/20000 [03:35<4:17:15,  1.28it/s]Training:   1%|▏         | 267/20000 [03:36<4:16:35,  1.28it/s]Training:   1%|▏         | 268/20000 [03:37<4:15:43,  1.29it/s]Training:   1%|▏         | 269/20000 [03:37<4:15:51,  1.29it/s]Training:   1%|▏         | 270/20000 [03:38<4:16:00,  1.28it/s]Step: 270/20000, Loss: 1.8259, LR: 2.99878604e-05, AnchorL2: 1.937989e-07, AnchorTerm: 1.937989e-02
+Training:   1%|▏         | 271/20000 [03:39<4:16:03,  1.28it/s]Training:   1%|▏         | 272/20000 [03:40<4:16:51,  1.28it/s]Training:   1%|▏         | 273/20000 [03:40<4:16:59,  1.28it/s]Training:   1%|▏         | 274/20000 [03:41<4:24:48,  1.24it/s]Training:   1%|▏         | 275/20000 [03:42<4:21:32,  1.26it/s]Training:   1%|▏         | 276/20000 [03:43<4:19:46,  1.27it/s]Training:   1%|▏         | 277/20000 [03:44<4:17:50,  1.27it/s]Training:   1%|▏         | 278/20000 [03:44<4:17:12,  1.28it/s]Training:   1%|▏         | 279/20000 [03:45<4:16:44,  1.28it/s]Training:   1%|▏         | 280/20000 [03:46<4:15:42,  1.29it/s]Step: 280/20000, Loss: 1.7555, LR: 2.99869446e-05, AnchorL2: 2.003325e-07, AnchorTerm: 2.003325e-02
+Training:   1%|▏         | 281/20000 [03:47<4:18:33,  1.27it/s]Training:   1%|▏         | 282/20000 [03:48<4:17:04,  1.28it/s]Training:   1%|▏         | 283/20000 [03:48<4:16:32,  1.28it/s]Training:   1%|▏         | 284/20000 [03:49<4:15:59,  1.28it/s]Training:   1%|▏         | 285/20000 [03:50<4:16:16,  1.28it/s]Training:   1%|▏         | 286/20000 [03:51<4:16:43,  1.28it/s]Training:   1%|▏         | 287/20000 [03:51<4:16:01,  1.28it/s]Training:   1%|▏         | 288/20000 [03:52<4:15:20,  1.29it/s]Training:   1%|▏         | 289/20000 [03:53<4:15:12,  1.29it/s]Training:   1%|▏         | 290/20000 [03:54<4:21:51,  1.25it/s]Step: 290/20000, Loss: 1.7032, LR: 2.99859956e-05, AnchorL2: 2.063016e-07, AnchorTerm: 2.063016e-02
+Training:   1%|▏         | 291/20000 [03:55<4:27:45,  1.23it/s]Training:   1%|▏         | 292/20000 [03:55<4:24:03,  1.24it/s]Training:   1%|▏         | 293/20000 [03:56<4:20:57,  1.26it/s]Training:   1%|▏         | 294/20000 [03:57<4:19:12,  1.27it/s]Training:   1%|▏         | 295/20000 [03:58<4:18:02,  1.27it/s]Training:   1%|▏         | 296/20000 [03:59<4:17:15,  1.28it/s]Training:   1%|▏         | 297/20000 [03:59<4:18:53,  1.27it/s]Training:   1%|▏         | 298/20000 [04:00<4:17:37,  1.27it/s]Training:   1%|▏         | 299/20000 [04:01<4:16:41,  1.28it/s]Training:   2%|▏         | 300/20000 [04:02<4:19:14,  1.27it/s]Step: 300/20000, Loss: 1.7247, LR: 2.99850133e-05, AnchorL2: 2.125649e-07, AnchorTerm: 2.125649e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   2%|▏         | 301/20000 [04:03<4:35:57,  1.19it/s]Training:   2%|▏         | 302/20000 [04:03<4:29:22,  1.22it/s]Training:   2%|▏         | 303/20000 [04:04<4:28:07,  1.22it/s]Training:   2%|▏         | 304/20000 [04:05<4:24:12,  1.24it/s]Training:   2%|▏         | 305/20000 [04:06<4:21:39,  1.25it/s]Training:   2%|▏         | 306/20000 [04:07<4:19:40,  1.26it/s]Training:   2%|▏         | 307/20000 [04:07<4:18:43,  1.27it/s]Training:   2%|▏         | 308/20000 [04:08<4:17:42,  1.27it/s]Training:   2%|▏         | 309/20000 [04:09<4:16:31,  1.28it/s]Training:   2%|▏         | 310/20000 [04:10<4:16:02,  1.28it/s]Step: 310/20000, Loss: 1.6590, LR: 2.99839977e-05, AnchorL2: 2.191153e-07, AnchorTerm: 2.191153e-02
+Training:   2%|▏         | 311/20000 [04:11<4:18:36,  1.27it/s]Training:   2%|▏         | 312/20000 [04:11<4:17:39,  1.27it/s]Training:   2%|▏         | 313/20000 [04:12<4:17:05,  1.28it/s]Training:   2%|▏         | 314/20000 [04:13<4:16:27,  1.28it/s]Training:   2%|▏         | 315/20000 [04:14<4:15:50,  1.28it/s]Training:   2%|▏         | 316/20000 [04:14<4:15:27,  1.28it/s]Training:   2%|▏         | 317/20000 [04:15<4:24:15,  1.24it/s]Training:   2%|▏         | 318/20000 [04:16<4:23:42,  1.24it/s]Training:   2%|▏         | 319/20000 [04:17<4:21:09,  1.26it/s]Training:   2%|▏         | 320/20000 [04:18<4:19:56,  1.26it/s]Step: 320/20000, Loss: 1.6481, LR: 2.99829489e-05, AnchorL2: 2.251249e-07, AnchorTerm: 2.251249e-02
+Training:   2%|▏         | 321/20000 [04:18<4:22:19,  1.25it/s]Training:   2%|▏         | 322/20000 [04:19<4:20:35,  1.26it/s]Training:   2%|▏         | 323/20000 [04:20<4:19:48,  1.26it/s]Training:   2%|▏         | 324/20000 [04:21<4:18:05,  1.27it/s]Training:   2%|▏         | 325/20000 [04:22<4:19:05,  1.27it/s]Training:   2%|▏         | 326/20000 [04:22<4:17:34,  1.27it/s]Training:   2%|▏         | 327/20000 [04:23<4:16:08,  1.28it/s]Training:   2%|▏         | 328/20000 [04:24<4:15:29,  1.28it/s]Training:   2%|▏         | 329/20000 [04:25<4:18:04,  1.27it/s]Training:   2%|▏         | 330/20000 [04:26<4:23:03,  1.25it/s]Step: 330/20000, Loss: 1.7252, LR: 2.99818668e-05, AnchorL2: 2.305958e-07, AnchorTerm: 2.305958e-02
+Training:   2%|▏         | 331/20000 [04:26<4:24:45,  1.24it/s]Training:   2%|▏         | 332/20000 [04:27<4:32:21,  1.20it/s]Training:   2%|▏         | 333/20000 [04:28<4:28:36,  1.22it/s]Training:   2%|▏         | 334/20000 [04:29<4:24:02,  1.24it/s]Training:   2%|▏         | 335/20000 [04:30<4:21:21,  1.25it/s]Training:   2%|▏         | 336/20000 [04:30<4:19:28,  1.26it/s]Training:   2%|▏         | 337/20000 [04:31<4:24:06,  1.24it/s]Training:   2%|▏         | 338/20000 [04:32<4:39:57,  1.17it/s]Training:   2%|▏         | 339/20000 [04:33<4:32:25,  1.20it/s]Training:   2%|▏         | 340/20000 [04:34<4:27:24,  1.23it/s]Step: 340/20000, Loss: 1.6390, LR: 2.99807514e-05, AnchorL2: 2.361390e-07, AnchorTerm: 2.361390e-02
+Training:   2%|▏         | 341/20000 [04:35<4:30:41,  1.21it/s]Training:   2%|▏         | 342/20000 [04:35<4:32:56,  1.20it/s]Training:   2%|▏         | 343/20000 [04:36<4:28:13,  1.22it/s]Training:   2%|▏         | 344/20000 [04:37<4:24:28,  1.24it/s]Training:   2%|▏         | 345/20000 [04:38<4:21:06,  1.25it/s]Training:   2%|▏         | 346/20000 [04:39<4:19:17,  1.26it/s]Training:   2%|▏         | 347/20000 [04:39<4:18:24,  1.27it/s]Training:   2%|▏         | 348/20000 [04:40<4:18:23,  1.27it/s]Training:   2%|▏         | 349/20000 [04:41<4:17:28,  1.27it/s]Training:   2%|▏         | 350/20000 [04:42<4:16:44,  1.28it/s]Step: 350/20000, Loss: 1.7004, LR: 2.99796028e-05, AnchorL2: 2.417490e-07, AnchorTerm: 2.417490e-02
+Training:   2%|▏         | 351/20000 [04:43<4:17:43,  1.27it/s]Training:   2%|▏         | 352/20000 [04:43<4:16:19,  1.28it/s]Training:   2%|▏         | 353/20000 [04:44<4:20:03,  1.26it/s]Training:   2%|▏         | 354/20000 [04:45<4:22:54,  1.25it/s]Training:   2%|▏         | 355/20000 [04:46<4:31:34,  1.21it/s]Training:   2%|▏         | 356/20000 [04:47<4:26:22,  1.23it/s]Training:   2%|▏         | 357/20000 [04:47<4:26:09,  1.23it/s]Training:   2%|▏         | 358/20000 [04:48<4:23:10,  1.24it/s]Training:   2%|▏         | 359/20000 [04:49<4:24:50,  1.24it/s]Training:   2%|▏         | 360/20000 [04:50<4:23:20,  1.24it/s]Step: 360/20000, Loss: 1.5835, LR: 2.99784209e-05, AnchorL2: 2.471317e-07, AnchorTerm: 2.471317e-02
+Training:   2%|▏         | 361/20000 [04:51<4:24:16,  1.24it/s]Training:   2%|▏         | 362/20000 [04:51<4:22:44,  1.25it/s]Training:   2%|▏         | 363/20000 [04:52<4:19:52,  1.26it/s]Training:   2%|▏         | 364/20000 [04:53<4:20:33,  1.26it/s]Training:   2%|▏         | 365/20000 [04:54<4:20:53,  1.25it/s]Training:   2%|▏         | 366/20000 [04:55<4:18:21,  1.27it/s]Training:   2%|▏         | 367/20000 [04:55<4:16:46,  1.27it/s]Training:   2%|▏         | 368/20000 [04:56<4:15:23,  1.28it/s]Training:   2%|▏         | 369/20000 [04:57<4:15:01,  1.28it/s]Training:   2%|▏         | 370/20000 [04:58<4:14:14,  1.29it/s]Step: 370/20000, Loss: 1.6500, LR: 2.99772058e-05, AnchorL2: 2.521831e-07, AnchorTerm: 2.521831e-02
+Training:   2%|▏         | 371/20000 [04:58<4:19:31,  1.26it/s]Training:   2%|▏         | 372/20000 [04:59<4:18:38,  1.26it/s]Training:   2%|▏         | 373/20000 [05:00<4:16:50,  1.27it/s]Training:   2%|▏         | 374/20000 [05:01<4:16:36,  1.27it/s]Training:   2%|▏         | 375/20000 [05:02<4:17:22,  1.27it/s]Training:   2%|▏         | 376/20000 [05:02<4:15:53,  1.28it/s]Training:   2%|▏         | 377/20000 [05:03<4:14:55,  1.28it/s]Training:   2%|▏         | 378/20000 [05:04<4:19:24,  1.26it/s]Training:   2%|▏         | 379/20000 [05:05<4:17:54,  1.27it/s]Training:   2%|▏         | 380/20000 [05:06<4:18:55,  1.26it/s]Step: 380/20000, Loss: 1.6530, LR: 2.99759574e-05, AnchorL2: 2.569278e-07, AnchorTerm: 2.569278e-02
+Training:   2%|▏         | 381/20000 [05:06<4:23:56,  1.24it/s]Training:   2%|▏         | 382/20000 [05:07<4:20:44,  1.25it/s]Training:   2%|▏         | 383/20000 [05:08<4:18:42,  1.26it/s]Training:   2%|▏         | 384/20000 [05:09<4:20:44,  1.25it/s]Training:   2%|▏         | 385/20000 [05:10<4:23:38,  1.24it/s]Training:   2%|▏         | 386/20000 [05:10<4:20:43,  1.25it/s]Training:   2%|▏         | 387/20000 [05:11<4:21:55,  1.25it/s]Training:   2%|▏         | 388/20000 [05:12<4:24:37,  1.24it/s]Training:   2%|▏         | 389/20000 [05:13<4:21:15,  1.25it/s]Training:   2%|▏         | 390/20000 [05:14<4:18:47,  1.26it/s]Step: 390/20000, Loss: 1.5178, LR: 2.99746757e-05, AnchorL2: 2.612713e-07, AnchorTerm: 2.612713e-02
+Training:   2%|▏         | 391/20000 [05:14<4:19:34,  1.26it/s]Training:   2%|▏         | 392/20000 [05:15<4:20:45,  1.25it/s]Training:   2%|▏         | 393/20000 [05:16<4:19:06,  1.26it/s]Training:   2%|▏         | 394/20000 [05:17<4:17:12,  1.27it/s]Training:   2%|▏         | 395/20000 [05:17<4:16:11,  1.28it/s]Training:   2%|▏         | 396/20000 [05:18<4:15:15,  1.28it/s]Training:   2%|▏         | 397/20000 [05:19<4:16:29,  1.27it/s]Training:   2%|▏         | 398/20000 [05:20<4:15:15,  1.28it/s]Training:   2%|▏         | 399/20000 [05:21<4:15:08,  1.28it/s]Training:   2%|▏         | 400/20000 [05:21<4:14:49,  1.28it/s]Step: 400/20000, Loss: 1.5256, LR: 2.99733608e-05, AnchorL2: 2.656703e-07, AnchorTerm: 2.656703e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   2%|▏         | 401/20000 [05:22<4:15:03,  1.28it/s]Training:   2%|▏         | 402/20000 [05:23<4:14:57,  1.28it/s]Training:   2%|▏         | 403/20000 [05:24<4:25:36,  1.23it/s]Training:   2%|▏         | 404/20000 [05:25<4:22:07,  1.25it/s]Training:   2%|▏         | 405/20000 [05:25<4:19:26,  1.26it/s]Training:   2%|▏         | 406/20000 [05:26<4:17:31,  1.27it/s]Training:   2%|▏         | 407/20000 [05:27<4:17:09,  1.27it/s]Training:   2%|▏         | 408/20000 [05:28<4:15:24,  1.28it/s]Training:   2%|▏         | 409/20000 [05:29<4:14:41,  1.28it/s]Training:   2%|▏         | 410/20000 [05:29<4:14:18,  1.28it/s]Step: 410/20000, Loss: 1.6268, LR: 2.99720127e-05, AnchorL2: 2.699217e-07, AnchorTerm: 2.699217e-02
+Training:   2%|▏         | 411/20000 [05:30<4:13:59,  1.29it/s]Training:   2%|▏         | 412/20000 [05:31<4:13:59,  1.29it/s]Training:   2%|▏         | 413/20000 [05:32<4:13:52,  1.29it/s]Training:   2%|▏         | 414/20000 [05:32<4:13:32,  1.29it/s]Training:   2%|▏         | 415/20000 [05:33<4:13:21,  1.29it/s]Training:   2%|▏         | 416/20000 [05:34<4:17:50,  1.27it/s]Training:   2%|▏         | 417/20000 [05:35<4:16:49,  1.27it/s]Training:   2%|▏         | 418/20000 [05:36<4:16:24,  1.27it/s]Training:   2%|▏         | 419/20000 [05:36<4:15:17,  1.28it/s]Training:   2%|▏         | 420/20000 [05:37<4:15:32,  1.28it/s]Step: 420/20000, Loss: 1.5270, LR: 2.99706313e-05, AnchorL2: 2.742114e-07, AnchorTerm: 2.742114e-02
+Training:   2%|▏         | 421/20000 [05:38<4:18:05,  1.26it/s]Training:   2%|▏         | 422/20000 [05:39<4:16:52,  1.27it/s]Training:   2%|▏         | 423/20000 [05:39<4:15:10,  1.28it/s]Training:   2%|▏         | 424/20000 [05:40<4:14:37,  1.28it/s]Training:   2%|▏         | 425/20000 [05:41<4:17:24,  1.27it/s]Training:   2%|▏         | 426/20000 [05:42<4:16:02,  1.27it/s]Training:   2%|▏         | 427/20000 [05:43<4:16:19,  1.27it/s]Training:   2%|▏         | 428/20000 [05:43<4:18:59,  1.26it/s]Training:   2%|▏         | 429/20000 [05:44<4:16:32,  1.27it/s]Training:   2%|▏         | 430/20000 [05:45<4:15:52,  1.27it/s]Step: 430/20000, Loss: 1.5825, LR: 2.99692167e-05, AnchorL2: 2.779065e-07, AnchorTerm: 2.779065e-02
+Training:   2%|▏         | 431/20000 [05:46<4:15:49,  1.27it/s]Training:   2%|▏         | 432/20000 [05:47<4:16:40,  1.27it/s]Training:   2%|▏         | 433/20000 [05:47<4:15:27,  1.28it/s]Training:   2%|▏         | 434/20000 [05:48<4:19:00,  1.26it/s]Training:   2%|▏         | 435/20000 [05:49<4:17:06,  1.27it/s]Training:   2%|▏         | 436/20000 [05:50<4:15:46,  1.27it/s]Training:   2%|▏         | 437/20000 [05:50<4:16:15,  1.27it/s]Training:   2%|▏         | 438/20000 [05:51<4:14:57,  1.28it/s]Training:   2%|▏         | 439/20000 [05:52<4:14:21,  1.28it/s]Training:   2%|▏         | 440/20000 [05:53<4:13:44,  1.28it/s]Step: 440/20000, Loss: 1.5937, LR: 2.99677688e-05, AnchorL2: 2.816966e-07, AnchorTerm: 2.816966e-02
+Training:   2%|▏         | 441/20000 [05:54<4:13:33,  1.29it/s]Training:   2%|▏         | 442/20000 [05:54<4:12:59,  1.29it/s]Training:   2%|▏         | 443/20000 [05:55<4:13:35,  1.29it/s]Training:   2%|▏         | 444/20000 [05:56<4:14:34,  1.28it/s]Training:   2%|▏         | 445/20000 [05:57<4:13:48,  1.28it/s]Training:   2%|▏         | 446/20000 [05:57<4:13:12,  1.29it/s]Training:   2%|▏         | 447/20000 [05:58<4:12:53,  1.29it/s]Training:   2%|▏         | 448/20000 [05:59<4:12:34,  1.29it/s]Training:   2%|▏         | 449/20000 [06:00<4:25:37,  1.23it/s]Training:   2%|▏         | 450/20000 [06:01<4:27:46,  1.22it/s]Step: 450/20000, Loss: 1.5457, LR: 2.99662878e-05, AnchorL2: 2.853526e-07, AnchorTerm: 2.853526e-02
+Training:   2%|▏         | 451/20000 [06:02<4:27:41,  1.22it/s]Training:   2%|▏         | 452/20000 [06:02<4:23:00,  1.24it/s]Training:   2%|▏         | 453/20000 [06:03<4:20:21,  1.25it/s]Training:   2%|▏         | 454/20000 [06:04<4:21:39,  1.25it/s]Training:   2%|▏         | 455/20000 [06:05<4:20:21,  1.25it/s]Training:   2%|▏         | 456/20000 [06:06<4:17:39,  1.26it/s]Training:   2%|▏         | 457/20000 [06:06<4:18:46,  1.26it/s]Training:   2%|▏         | 458/20000 [06:07<4:16:19,  1.27it/s]Training:   2%|▏         | 459/20000 [06:08<4:14:46,  1.28it/s]Training:   2%|▏         | 460/20000 [06:09<4:13:59,  1.28it/s]Step: 460/20000, Loss: 1.5614, LR: 2.99647734e-05, AnchorL2: 2.891191e-07, AnchorTerm: 2.891191e-02
+Training:   2%|▏         | 461/20000 [06:09<4:13:46,  1.28it/s]Training:   2%|▏         | 462/20000 [06:10<4:26:54,  1.22it/s]Training:   2%|▏         | 463/20000 [06:11<4:24:33,  1.23it/s]Training:   2%|▏         | 464/20000 [06:12<4:23:51,  1.23it/s]Training:   2%|▏         | 465/20000 [06:13<4:20:43,  1.25it/s]Training:   2%|▏         | 466/20000 [06:13<4:18:09,  1.26it/s]Training:   2%|▏         | 467/20000 [06:14<4:20:09,  1.25it/s]Training:   2%|▏         | 468/20000 [06:15<4:20:47,  1.25it/s]Training:   2%|▏         | 469/20000 [06:16<4:18:34,  1.26it/s]Training:   2%|▏         | 470/20000 [06:17<4:16:11,  1.27it/s]Step: 470/20000, Loss: 1.5789, LR: 2.99632259e-05, AnchorL2: 2.928965e-07, AnchorTerm: 2.928965e-02
+Training:   2%|▏         | 471/20000 [06:17<4:15:28,  1.27it/s]Training:   2%|▏         | 472/20000 [06:18<4:17:39,  1.26it/s]Training:   2%|▏         | 473/20000 [06:19<4:25:14,  1.23it/s]Training:   2%|▏         | 474/20000 [06:20<4:21:05,  1.25it/s]Training:   2%|▏         | 475/20000 [06:21<4:18:15,  1.26it/s]Training:   2%|▏         | 476/20000 [06:21<4:16:25,  1.27it/s]Training:   2%|▏         | 477/20000 [06:22<4:16:44,  1.27it/s]Training:   2%|▏         | 478/20000 [06:23<4:14:55,  1.28it/s]Training:   2%|▏         | 479/20000 [06:24<4:15:14,  1.27it/s]Training:   2%|▏         | 480/20000 [06:25<4:14:04,  1.28it/s]Step: 480/20000, Loss: 1.5679, LR: 2.99616452e-05, AnchorL2: 2.968868e-07, AnchorTerm: 2.968868e-02
+Training:   2%|▏         | 481/20000 [06:25<4:25:50,  1.22it/s]Training:   2%|▏         | 482/20000 [06:26<4:21:35,  1.24it/s]Training:   2%|▏         | 483/20000 [06:27<4:18:22,  1.26it/s]Training:   2%|▏         | 484/20000 [06:28<4:16:20,  1.27it/s]Training:   2%|▏         | 485/20000 [06:29<4:14:42,  1.28it/s]Training:   2%|▏         | 486/20000 [06:29<4:14:05,  1.28it/s]Training:   2%|▏         | 487/20000 [06:30<4:15:36,  1.27it/s]Training:   2%|▏         | 488/20000 [06:31<4:16:31,  1.27it/s]Training:   2%|▏         | 489/20000 [06:32<4:14:49,  1.28it/s]Training:   2%|▏         | 490/20000 [06:32<4:14:44,  1.28it/s]Step: 490/20000, Loss: 1.5271, LR: 2.99600312e-05, AnchorL2: 3.007118e-07, AnchorTerm: 3.007118e-02
+Training:   2%|▏         | 491/20000 [06:33<4:14:30,  1.28it/s]Training:   2%|▏         | 492/20000 [06:34<4:17:30,  1.26it/s]Training:   2%|▏         | 493/20000 [06:35<4:18:31,  1.26it/s]Training:   2%|▏         | 494/20000 [06:36<4:16:30,  1.27it/s]Training:   2%|▏         | 495/20000 [06:36<4:17:44,  1.26it/s]Training:   2%|▏         | 496/20000 [06:37<4:15:36,  1.27it/s]Training:   2%|▏         | 497/20000 [06:38<4:14:20,  1.28it/s]Training:   2%|▏         | 498/20000 [06:39<4:13:08,  1.28it/s]Training:   2%|▏         | 499/20000 [06:40<4:12:47,  1.29it/s]Training:   2%|▎         | 500/20000 [06:40<4:12:13,  1.29it/s]Step: 500/20000, Loss: 1.4616, LR: 2.99583840e-05, AnchorL2: 3.037026e-07, AnchorTerm: 3.037026e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   3%|▎         | 501/20000 [06:41<4:16:26,  1.27it/s]Training:   3%|▎         | 502/20000 [06:42<4:15:05,  1.27it/s]Training:   3%|▎         | 503/20000 [06:43<4:13:59,  1.28it/s]Training:   3%|▎         | 504/20000 [06:43<4:13:55,  1.28it/s]Training:   3%|▎         | 505/20000 [06:44<4:13:14,  1.28it/s]Training:   3%|▎         | 506/20000 [06:45<4:12:48,  1.29it/s]Training:   3%|▎         | 507/20000 [06:46<4:12:11,  1.29it/s]Training:   3%|▎         | 508/20000 [06:47<4:12:13,  1.29it/s]Training:   3%|▎         | 509/20000 [06:47<4:12:31,  1.29it/s]Training:   3%|▎         | 510/20000 [06:48<4:12:23,  1.29it/s]Step: 510/20000, Loss: 1.5541, LR: 2.99567036e-05, AnchorL2: 3.066692e-07, AnchorTerm: 3.066692e-02
+Training:   3%|▎         | 511/20000 [06:49<4:22:24,  1.24it/s]Training:   3%|▎         | 512/20000 [06:50<4:19:18,  1.25it/s]Training:   3%|▎         | 513/20000 [06:51<4:16:37,  1.27it/s]Training:   3%|▎         | 514/20000 [06:51<4:14:59,  1.27it/s]Training:   3%|▎         | 515/20000 [06:52<4:15:13,  1.27it/s]Training:   3%|▎         | 516/20000 [06:53<4:17:43,  1.26it/s]Training:   3%|▎         | 517/20000 [06:54<4:18:00,  1.26it/s]Training:   3%|▎         | 518/20000 [06:54<4:15:47,  1.27it/s]Training:   3%|▎         | 519/20000 [06:55<4:15:38,  1.27it/s]Training:   3%|▎         | 520/20000 [06:56<4:14:27,  1.28it/s]Step: 520/20000, Loss: 1.4923, LR: 2.99549900e-05, AnchorL2: 3.093411e-07, AnchorTerm: 3.093411e-02
+Training:   3%|▎         | 521/20000 [06:57<4:25:19,  1.22it/s]Training:   3%|▎         | 522/20000 [06:58<4:30:26,  1.20it/s]Training:   3%|▎         | 523/20000 [06:59<4:24:29,  1.23it/s]Training:   3%|▎         | 524/20000 [06:59<4:20:18,  1.25it/s]Training:   3%|▎         | 525/20000 [07:00<4:17:36,  1.26it/s]Training:   3%|▎         | 526/20000 [07:01<4:15:44,  1.27it/s]Training:   3%|▎         | 527/20000 [07:02<4:14:06,  1.28it/s]Training:   3%|▎         | 528/20000 [07:02<4:13:09,  1.28it/s]Training:   3%|▎         | 529/20000 [07:03<4:13:05,  1.28it/s]Training:   3%|▎         | 530/20000 [07:04<4:13:28,  1.28it/s]Step: 530/20000, Loss: 1.5346, LR: 2.99532432e-05, AnchorL2: 3.121218e-07, AnchorTerm: 3.121218e-02
+Training:   3%|▎         | 531/20000 [07:05<4:14:13,  1.28it/s]Training:   3%|▎         | 532/20000 [07:06<4:13:20,  1.28it/s]Training:   3%|▎         | 533/20000 [07:06<4:12:50,  1.28it/s]Training:   3%|▎         | 534/20000 [07:07<4:11:27,  1.29it/s]Training:   3%|▎         | 535/20000 [07:08<4:12:19,  1.29it/s]Training:   3%|▎         | 536/20000 [07:09<4:12:00,  1.29it/s]Training:   3%|▎         | 537/20000 [07:09<4:11:42,  1.29it/s]Training:   3%|▎         | 538/20000 [07:10<4:11:30,  1.29it/s]Training:   3%|▎         | 539/20000 [07:11<4:11:38,  1.29it/s]Training:   3%|▎         | 540/20000 [07:12<4:12:34,  1.28it/s]Step: 540/20000, Loss: 1.4790, LR: 2.99514633e-05, AnchorL2: 3.149084e-07, AnchorTerm: 3.149084e-02
+Training:   3%|▎         | 541/20000 [07:13<4:12:13,  1.29it/s]Training:   3%|▎         | 542/20000 [07:13<4:12:13,  1.29it/s]Training:   3%|▎         | 543/20000 [07:14<4:20:32,  1.24it/s]Training:   3%|▎         | 544/20000 [07:15<4:20:59,  1.24it/s]Training:   3%|▎         | 545/20000 [07:16<4:17:34,  1.26it/s]Training:   3%|▎         | 546/20000 [07:17<4:17:07,  1.26it/s]Training:   3%|▎         | 547/20000 [07:17<4:15:59,  1.27it/s]Training:   3%|▎         | 548/20000 [07:18<4:14:04,  1.28it/s]Training:   3%|▎         | 549/20000 [07:19<4:13:18,  1.28it/s]Training:   3%|▎         | 550/20000 [07:20<4:12:25,  1.28it/s]Step: 550/20000, Loss: 1.5138, LR: 2.99496501e-05, AnchorL2: 3.175683e-07, AnchorTerm: 3.175683e-02
+Training:   3%|▎         | 551/20000 [07:20<4:12:26,  1.28it/s]Training:   3%|▎         | 552/20000 [07:21<4:13:57,  1.28it/s]Training:   3%|▎         | 553/20000 [07:22<4:13:10,  1.28it/s]Training:   3%|▎         | 554/20000 [07:23<4:13:16,  1.28it/s]Training:   3%|▎         | 555/20000 [07:24<4:21:11,  1.24it/s]Training:   3%|▎         | 556/20000 [07:24<4:17:57,  1.26it/s]Training:   3%|▎         | 557/20000 [07:25<4:16:56,  1.26it/s]Training:   3%|▎         | 558/20000 [07:26<4:19:09,  1.25it/s]Training:   3%|▎         | 559/20000 [07:27<4:16:02,  1.27it/s]Training:   3%|▎         | 560/20000 [07:28<4:14:14,  1.27it/s]Step: 560/20000, Loss: 1.5309, LR: 2.99478037e-05, AnchorL2: 3.206781e-07, AnchorTerm: 3.206781e-02
+Training:   3%|▎         | 561/20000 [07:28<4:16:53,  1.26it/s]Training:   3%|▎         | 562/20000 [07:29<4:14:48,  1.27it/s]Training:   3%|▎         | 563/20000 [07:30<4:13:00,  1.28it/s]Training:   3%|▎         | 564/20000 [07:31<4:14:47,  1.27it/s]Training:   3%|▎         | 565/20000 [07:31<4:12:55,  1.28it/s]Training:   3%|▎         | 566/20000 [07:32<4:11:47,  1.29it/s]Training:   3%|▎         | 567/20000 [07:33<4:11:02,  1.29it/s]Training:   3%|▎         | 568/20000 [07:34<4:12:34,  1.28it/s]Training:   3%|▎         | 569/20000 [07:35<4:11:47,  1.29it/s]Training:   3%|▎         | 570/20000 [07:35<4:10:48,  1.29it/s]Step: 570/20000, Loss: 1.5764, LR: 2.99459242e-05, AnchorL2: 3.237697e-07, AnchorTerm: 3.237697e-02
+Training:   3%|▎         | 571/20000 [07:36<4:14:40,  1.27it/s]Training:   3%|▎         | 572/20000 [07:37<4:15:19,  1.27it/s]Training:   3%|▎         | 573/20000 [07:38<4:19:40,  1.25it/s]Training:   3%|▎         | 574/20000 [07:39<4:17:27,  1.26it/s]Training:   3%|▎         | 575/20000 [07:39<4:15:23,  1.27it/s]Training:   3%|▎         | 576/20000 [07:40<4:14:26,  1.27it/s]Training:   3%|▎         | 577/20000 [07:41<4:15:24,  1.27it/s]Training:   3%|▎         | 578/20000 [07:42<4:13:29,  1.28it/s]Training:   3%|▎         | 579/20000 [07:42<4:13:14,  1.28it/s]Training:   3%|▎         | 580/20000 [07:43<4:11:49,  1.29it/s]Step: 580/20000, Loss: 1.5243, LR: 2.99440115e-05, AnchorL2: 3.270264e-07, AnchorTerm: 3.270264e-02
+Training:   3%|▎         | 581/20000 [07:44<4:11:46,  1.29it/s]Training:   3%|▎         | 582/20000 [07:45<4:11:07,  1.29it/s]Training:   3%|▎         | 583/20000 [07:46<4:10:40,  1.29it/s]Training:   3%|▎         | 584/20000 [07:46<4:10:29,  1.29it/s]Training:   3%|▎         | 585/20000 [07:47<4:10:46,  1.29it/s]Training:   3%|▎         | 586/20000 [07:48<4:12:08,  1.28it/s]Training:   3%|▎         | 587/20000 [07:49<4:24:58,  1.22it/s]Training:   3%|▎         | 588/20000 [07:50<4:23:48,  1.23it/s]Training:   3%|▎         | 589/20000 [07:50<4:21:27,  1.24it/s]Training:   3%|▎         | 590/20000 [07:51<4:17:53,  1.25it/s]Step: 590/20000, Loss: 1.5181, LR: 2.99420656e-05, AnchorL2: 3.301462e-07, AnchorTerm: 3.301462e-02
+Training:   3%|▎         | 591/20000 [07:52<4:18:41,  1.25it/s]Training:   3%|▎         | 592/20000 [07:53<4:16:19,  1.26it/s]Training:   3%|▎         | 593/20000 [07:54<4:14:07,  1.27it/s]Training:   3%|▎         | 594/20000 [07:54<4:14:15,  1.27it/s]Training:   3%|▎         | 595/20000 [07:55<4:12:42,  1.28it/s]Training:   3%|▎         | 596/20000 [07:56<4:12:00,  1.28it/s]Training:   3%|▎         | 597/20000 [07:57<4:12:11,  1.28it/s]Training:   3%|▎         | 598/20000 [07:57<4:11:38,  1.28it/s]Training:   3%|▎         | 599/20000 [07:58<4:12:27,  1.28it/s]Training:   3%|▎         | 600/20000 [07:59<4:11:46,  1.28it/s]Step: 600/20000, Loss: 1.5043, LR: 2.99400865e-05, AnchorL2: 3.334528e-07, AnchorTerm: 3.334528e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   3%|▎         | 601/20000 [08:00<4:18:50,  1.25it/s]Training:   3%|▎         | 602/20000 [08:01<4:15:44,  1.26it/s]Training:   3%|▎         | 603/20000 [08:01<4:15:25,  1.27it/s]Training:   3%|▎         | 604/20000 [08:02<4:13:36,  1.27it/s]Training:   3%|▎         | 605/20000 [08:03<4:12:48,  1.28it/s]Training:   3%|▎         | 606/20000 [08:04<4:12:00,  1.28it/s]Training:   3%|▎         | 607/20000 [08:05<4:14:15,  1.27it/s]Training:   3%|▎         | 608/20000 [08:05<4:12:57,  1.28it/s]Training:   3%|▎         | 609/20000 [08:06<4:11:54,  1.28it/s]Training:   3%|▎         | 610/20000 [08:07<4:10:35,  1.29it/s]Step: 610/20000, Loss: 1.5224, LR: 2.99380743e-05, AnchorL2: 3.365507e-07, AnchorTerm: 3.365507e-02
+Training:   3%|▎         | 611/20000 [08:08<4:10:14,  1.29it/s]Training:   3%|▎         | 612/20000 [08:08<4:10:16,  1.29it/s]Training:   3%|▎         | 613/20000 [08:09<4:10:13,  1.29it/s]Training:   3%|▎         | 614/20000 [08:10<4:16:22,  1.26it/s]Training:   3%|▎         | 615/20000 [08:11<4:14:44,  1.27it/s]Training:   3%|▎         | 616/20000 [08:12<4:13:25,  1.27it/s]Training:   3%|▎         | 617/20000 [08:12<4:12:01,  1.28it/s]Training:   3%|▎         | 618/20000 [08:13<4:11:25,  1.28it/s]Training:   3%|▎         | 619/20000 [08:14<4:10:46,  1.29it/s]Training:   3%|▎         | 620/20000 [08:15<4:10:20,  1.29it/s]Step: 620/20000, Loss: 1.4980, LR: 2.99360289e-05, AnchorL2: 3.390718e-07, AnchorTerm: 3.390718e-02
+Training:   3%|▎         | 621/20000 [08:15<4:11:27,  1.28it/s]Training:   3%|▎         | 622/20000 [08:16<4:11:45,  1.28it/s]Training:   3%|▎         | 623/20000 [08:17<4:11:22,  1.28it/s]Training:   3%|▎         | 624/20000 [08:18<4:11:56,  1.28it/s]Training:   3%|▎         | 625/20000 [08:19<4:11:15,  1.29it/s]Training:   3%|▎         | 626/20000 [08:19<4:14:21,  1.27it/s]Training:   3%|▎         | 627/20000 [08:20<4:13:01,  1.28it/s]Training:   3%|▎         | 628/20000 [08:21<4:11:46,  1.28it/s]Training:   3%|▎         | 629/20000 [08:22<4:13:31,  1.27it/s]Training:   3%|▎         | 630/20000 [08:22<4:12:41,  1.28it/s]Step: 630/20000, Loss: 1.4742, LR: 2.99339504e-05, AnchorL2: 3.411810e-07, AnchorTerm: 3.411810e-02
+Training:   3%|▎         | 631/20000 [08:23<4:20:40,  1.24it/s]Training:   3%|▎         | 632/20000 [08:24<4:18:36,  1.25it/s]Training:   3%|▎         | 633/20000 [08:25<4:15:44,  1.26it/s]Training:   3%|▎         | 634/20000 [08:26<4:14:15,  1.27it/s]Training:   3%|▎         | 635/20000 [08:26<4:15:39,  1.26it/s]Training:   3%|▎         | 636/20000 [08:27<4:13:46,  1.27it/s]Training:   3%|▎         | 637/20000 [08:28<4:13:20,  1.27it/s]Training:   3%|▎         | 638/20000 [08:29<4:12:15,  1.28it/s]Training:   3%|▎         | 639/20000 [08:30<4:11:27,  1.28it/s]Training:   3%|▎         | 640/20000 [08:30<4:10:44,  1.29it/s]Step: 640/20000, Loss: 1.4463, LR: 2.99318387e-05, AnchorL2: 3.432471e-07, AnchorTerm: 3.432471e-02
+Training:   3%|▎         | 641/20000 [08:31<4:18:49,  1.25it/s]Training:   3%|▎         | 642/20000 [08:32<4:17:25,  1.25it/s]Training:   3%|▎         | 643/20000 [08:33<4:17:04,  1.25it/s]Training:   3%|▎         | 644/20000 [08:34<4:19:05,  1.25it/s]Training:   3%|▎         | 645/20000 [08:34<4:16:08,  1.26it/s]Training:   3%|▎         | 646/20000 [08:35<4:14:50,  1.27it/s]Training:   3%|▎         | 647/20000 [08:36<4:13:39,  1.27it/s]Training:   3%|▎         | 648/20000 [08:37<4:12:13,  1.28it/s]Training:   3%|▎         | 649/20000 [08:37<4:11:08,  1.28it/s]Training:   3%|▎         | 650/20000 [08:38<4:16:12,  1.26it/s]Step: 650/20000, Loss: 1.4176, LR: 2.99296939e-05, AnchorL2: 3.452649e-07, AnchorTerm: 3.452649e-02
+Training:   3%|▎         | 651/20000 [08:39<4:13:43,  1.27it/s]Training:   3%|▎         | 652/20000 [08:40<4:13:22,  1.27it/s]Training:   3%|▎         | 653/20000 [08:41<4:12:37,  1.28it/s]Training:   3%|▎         | 654/20000 [08:41<4:12:09,  1.28it/s]Training:   3%|▎         | 655/20000 [08:42<4:10:48,  1.29it/s]Training:   3%|▎         | 656/20000 [08:43<4:10:30,  1.29it/s]Training:   3%|▎         | 657/20000 [08:44<4:12:01,  1.28it/s]Training:   3%|▎         | 658/20000 [08:45<4:12:38,  1.28it/s]Training:   3%|▎         | 659/20000 [08:45<4:11:39,  1.28it/s]Training:   3%|▎         | 660/20000 [08:46<4:11:23,  1.28it/s]Step: 660/20000, Loss: 1.4756, LR: 2.99275160e-05, AnchorL2: 3.475394e-07, AnchorTerm: 3.475394e-02
+Training:   3%|▎         | 661/20000 [08:47<4:10:33,  1.29it/s]Training:   3%|▎         | 662/20000 [08:48<4:10:23,  1.29it/s]Training:   3%|▎         | 663/20000 [08:48<4:10:59,  1.28it/s]Training:   3%|▎         | 664/20000 [08:49<4:10:53,  1.28it/s]Training:   3%|▎         | 665/20000 [08:50<4:10:23,  1.29it/s]Training:   3%|▎         | 666/20000 [08:51<4:12:34,  1.28it/s]Training:   3%|▎         | 667/20000 [08:52<4:13:38,  1.27it/s]Training:   3%|▎         | 668/20000 [08:52<4:13:03,  1.27it/s]Training:   3%|▎         | 669/20000 [08:53<4:12:51,  1.27it/s]Training:   3%|▎         | 670/20000 [08:54<4:13:17,  1.27it/s]Step: 670/20000, Loss: 1.4134, LR: 2.99253049e-05, AnchorL2: 3.496150e-07, AnchorTerm: 3.496150e-02
+Training:   3%|▎         | 671/20000 [08:55<4:16:41,  1.26it/s]Training:   3%|▎         | 672/20000 [08:56<4:14:44,  1.26it/s]Training:   3%|▎         | 673/20000 [08:56<4:13:39,  1.27it/s]Training:   3%|▎         | 674/20000 [08:57<4:15:33,  1.26it/s]Training:   3%|▎         | 675/20000 [08:58<4:14:10,  1.27it/s]Training:   3%|▎         | 676/20000 [08:59<4:16:00,  1.26it/s]Training:   3%|▎         | 677/20000 [08:59<4:15:07,  1.26it/s]Training:   3%|▎         | 678/20000 [09:00<4:13:45,  1.27it/s]Training:   3%|▎         | 679/20000 [09:01<4:13:03,  1.27it/s]Training:   3%|▎         | 680/20000 [09:02<4:13:13,  1.27it/s]Step: 680/20000, Loss: 1.4871, LR: 2.99230607e-05, AnchorL2: 3.512903e-07, AnchorTerm: 3.512903e-02
+Training:   3%|▎         | 681/20000 [09:03<4:12:22,  1.28it/s]Training:   3%|▎         | 682/20000 [09:03<4:13:02,  1.27it/s]Training:   3%|▎         | 683/20000 [09:04<4:12:28,  1.28it/s]Training:   3%|▎         | 684/20000 [09:05<4:12:15,  1.28it/s]Training:   3%|▎         | 685/20000 [09:06<4:11:51,  1.28it/s]Training:   3%|▎         | 686/20000 [09:07<4:10:46,  1.28it/s]Training:   3%|▎         | 687/20000 [09:07<4:11:37,  1.28it/s]Training:   3%|▎         | 688/20000 [09:08<4:12:39,  1.27it/s]Training:   3%|▎         | 689/20000 [09:09<4:11:08,  1.28it/s]Training:   3%|▎         | 690/20000 [09:10<4:10:19,  1.29it/s]Step: 690/20000, Loss: 1.4982, LR: 2.99207833e-05, AnchorL2: 3.528569e-07, AnchorTerm: 3.528569e-02
+Training:   3%|▎         | 691/20000 [09:11<4:19:53,  1.24it/s]Training:   3%|▎         | 692/20000 [09:11<4:22:47,  1.22it/s]Training:   3%|▎         | 693/20000 [09:12<4:24:13,  1.22it/s]Training:   3%|▎         | 694/20000 [09:13<4:20:40,  1.23it/s]Training:   3%|▎         | 695/20000 [09:14<4:17:12,  1.25it/s]Training:   3%|▎         | 696/20000 [09:15<4:14:32,  1.26it/s]Training:   3%|▎         | 697/20000 [09:15<4:13:09,  1.27it/s]Training:   3%|▎         | 698/20000 [09:16<4:12:29,  1.27it/s]Training:   3%|▎         | 699/20000 [09:17<4:11:24,  1.28it/s]Training:   4%|▎         | 700/20000 [09:18<4:10:46,  1.28it/s]Step: 700/20000, Loss: 1.4811, LR: 2.99184729e-05, AnchorL2: 3.548293e-07, AnchorTerm: 3.548293e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   4%|▎         | 701/20000 [09:18<4:15:03,  1.26it/s]Training:   4%|▎         | 702/20000 [09:19<4:16:11,  1.26it/s]Training:   4%|▎         | 703/20000 [09:20<4:15:57,  1.26it/s]Training:   4%|▎         | 704/20000 [09:21<4:16:09,  1.26it/s]Training:   4%|▎         | 705/20000 [09:22<4:36:39,  1.16it/s]Training:   4%|▎         | 706/20000 [09:23<4:28:48,  1.20it/s]Training:   4%|▎         | 707/20000 [09:23<4:23:11,  1.22it/s]Training:   4%|▎         | 708/20000 [09:24<4:24:09,  1.22it/s]Training:   4%|▎         | 709/20000 [09:25<4:19:07,  1.24it/s]Training:   4%|▎         | 710/20000 [09:26<4:16:13,  1.25it/s]Step: 710/20000, Loss: 1.4831, LR: 2.99161293e-05, AnchorL2: 3.568834e-07, AnchorTerm: 3.568834e-02
+Training:   4%|▎         | 711/20000 [09:27<4:29:02,  1.19it/s]Training:   4%|▎         | 712/20000 [09:27<4:23:04,  1.22it/s]Training:   4%|▎         | 713/20000 [09:28<4:19:24,  1.24it/s]Training:   4%|▎         | 714/20000 [09:29<4:16:53,  1.25it/s]Training:   4%|▎         | 715/20000 [09:30<4:22:09,  1.23it/s]Training:   4%|▎         | 716/20000 [09:31<4:20:37,  1.23it/s]Training:   4%|▎         | 717/20000 [09:31<4:16:51,  1.25it/s]Training:   4%|▎         | 718/20000 [09:32<4:14:23,  1.26it/s]Training:   4%|▎         | 719/20000 [09:33<4:12:57,  1.27it/s]Training:   4%|▎         | 720/20000 [09:34<4:18:23,  1.24it/s]Step: 720/20000, Loss: 1.4620, LR: 2.99137527e-05, AnchorL2: 3.590406e-07, AnchorTerm: 3.590406e-02
+Training:   4%|▎         | 721/20000 [09:35<4:31:42,  1.18it/s]Training:   4%|▎         | 722/20000 [09:36<4:27:15,  1.20it/s]Training:   4%|▎         | 723/20000 [09:36<4:22:32,  1.22it/s]Training:   4%|▎         | 724/20000 [09:37<4:18:16,  1.24it/s]Training:   4%|▎         | 725/20000 [09:38<4:17:02,  1.25it/s]Training:   4%|▎         | 726/20000 [09:39<4:14:43,  1.26it/s]Training:   4%|▎         | 727/20000 [09:39<4:13:10,  1.27it/s]Training:   4%|▎         | 728/20000 [09:40<4:12:16,  1.27it/s]Training:   4%|▎         | 729/20000 [09:41<4:11:21,  1.28it/s]Training:   4%|▎         | 730/20000 [09:42<4:11:53,  1.28it/s]Step: 730/20000, Loss: 1.4376, LR: 2.99113429e-05, AnchorL2: 3.610684e-07, AnchorTerm: 3.610684e-02
+Training:   4%|▎         | 731/20000 [09:43<4:15:07,  1.26it/s]Training:   4%|▎         | 732/20000 [09:43<4:18:17,  1.24it/s]Training:   4%|▎         | 733/20000 [09:44<4:17:05,  1.25it/s]Training:   4%|▎         | 734/20000 [09:45<4:15:16,  1.26it/s]Training:   4%|▎         | 735/20000 [09:46<4:13:38,  1.27it/s]Training:   4%|▎         | 736/20000 [09:47<4:13:56,  1.26it/s]Training:   4%|▎         | 737/20000 [09:47<4:12:31,  1.27it/s]Training:   4%|▎         | 738/20000 [09:48<4:12:19,  1.27it/s]Training:   4%|▎         | 739/20000 [09:49<4:11:27,  1.28it/s]Training:   4%|▎         | 740/20000 [09:50<4:10:38,  1.28it/s]Step: 740/20000, Loss: 1.4649, LR: 2.99089001e-05, AnchorL2: 3.630485e-07, AnchorTerm: 3.630485e-02
+Training:   4%|▎         | 741/20000 [09:51<4:10:49,  1.28it/s]Training:   4%|▎         | 742/20000 [09:51<4:10:22,  1.28it/s]Training:   4%|▎         | 743/20000 [09:52<4:32:25,  1.18it/s]Training:   4%|▎         | 744/20000 [09:53<4:25:22,  1.21it/s]Training:   4%|▎         | 745/20000 [09:54<4:22:54,  1.22it/s]Training:   4%|▎         | 746/20000 [09:55<4:19:13,  1.24it/s]Training:   4%|▎         | 747/20000 [09:55<4:16:07,  1.25it/s]Training:   4%|▎         | 748/20000 [09:56<4:16:16,  1.25it/s]Training:   4%|▎         | 749/20000 [09:57<4:17:38,  1.25it/s]Training:   4%|▍         | 750/20000 [09:58<4:15:10,  1.26it/s]Step: 750/20000, Loss: 1.5124, LR: 2.99064242e-05, AnchorL2: 3.647207e-07, AnchorTerm: 3.647207e-02
+Training:   4%|▍         | 751/20000 [09:59<4:13:19,  1.27it/s]Training:   4%|▍         | 752/20000 [09:59<4:11:45,  1.27it/s]Training:   4%|▍         | 753/20000 [10:00<4:10:45,  1.28it/s]Training:   4%|▍         | 754/20000 [10:01<4:10:26,  1.28it/s]Training:   4%|▍         | 755/20000 [10:02<4:09:56,  1.28it/s]Training:   4%|▍         | 756/20000 [10:02<4:10:04,  1.28it/s]Training:   4%|▍         | 757/20000 [10:03<4:10:07,  1.28it/s]Training:   4%|▍         | 758/20000 [10:04<4:09:39,  1.28it/s]Training:   4%|▍         | 759/20000 [10:05<4:09:43,  1.28it/s]Training:   4%|▍         | 760/20000 [10:06<4:09:31,  1.29it/s]Step: 760/20000, Loss: 1.5175, LR: 2.99039152e-05, AnchorL2: 3.683344e-07, AnchorTerm: 3.683344e-02
+Training:   4%|▍         | 761/20000 [10:06<4:09:31,  1.29it/s]Training:   4%|▍         | 762/20000 [10:07<4:09:39,  1.28it/s]Training:   4%|▍         | 763/20000 [10:08<4:10:16,  1.28it/s]Training:   4%|▍         | 764/20000 [10:09<4:10:31,  1.28it/s]Training:   4%|▍         | 765/20000 [10:10<4:11:33,  1.27it/s]Training:   4%|▍         | 766/20000 [10:10<4:13:37,  1.26it/s]Training:   4%|▍         | 767/20000 [10:11<4:11:46,  1.27it/s]Training:   4%|▍         | 768/20000 [10:12<4:11:12,  1.28it/s]Training:   4%|▍         | 769/20000 [10:13<4:17:10,  1.25it/s]Training:   4%|▍         | 770/20000 [10:14<4:15:16,  1.26it/s]Step: 770/20000, Loss: 1.4848, LR: 2.99013731e-05, AnchorL2: 3.739415e-07, AnchorTerm: 3.739415e-02
+Training:   4%|▍         | 771/20000 [10:14<4:16:53,  1.25it/s]Training:   4%|▍         | 772/20000 [10:15<4:14:37,  1.26it/s]Training:   4%|▍         | 773/20000 [10:16<4:13:07,  1.27it/s]Training:   4%|▍         | 774/20000 [10:17<4:11:47,  1.27it/s]Training:   4%|▍         | 775/20000 [10:17<4:10:31,  1.28it/s]Training:   4%|▍         | 776/20000 [10:18<4:10:07,  1.28it/s]Training:   4%|▍         | 777/20000 [10:19<4:09:37,  1.28it/s]Training:   4%|▍         | 778/20000 [10:20<4:13:30,  1.26it/s]Training:   4%|▍         | 779/20000 [10:21<4:13:42,  1.26it/s]Training:   4%|▍         | 780/20000 [10:21<4:12:07,  1.27it/s]Step: 780/20000, Loss: 1.5224, LR: 2.98987979e-05, AnchorL2: 3.790853e-07, AnchorTerm: 3.790853e-02
+Training:   4%|▍         | 781/20000 [10:22<4:12:32,  1.27it/s]Training:   4%|▍         | 782/20000 [10:23<4:11:54,  1.27it/s]Training:   4%|▍         | 783/20000 [10:24<4:14:56,  1.26it/s]Training:   4%|▍         | 784/20000 [10:25<4:13:26,  1.26it/s]Training:   4%|▍         | 785/20000 [10:25<4:13:26,  1.26it/s]Training:   4%|▍         | 786/20000 [10:26<4:13:45,  1.26it/s]Training:   4%|▍         | 787/20000 [10:27<4:12:20,  1.27it/s]Training:   4%|▍         | 788/20000 [10:28<4:17:19,  1.24it/s]Training:   4%|▍         | 789/20000 [10:29<4:17:00,  1.25it/s]Training:   4%|▍         | 790/20000 [10:29<4:16:41,  1.25it/s]Step: 790/20000, Loss: 1.4664, LR: 2.98961897e-05, AnchorL2: 3.826416e-07, AnchorTerm: 3.826416e-02
+Training:   4%|▍         | 791/20000 [10:30<4:15:15,  1.25it/s]Training:   4%|▍         | 792/20000 [10:31<4:15:41,  1.25it/s]Training:   4%|▍         | 793/20000 [10:32<4:13:17,  1.26it/s]Training:   4%|▍         | 794/20000 [10:33<4:16:06,  1.25it/s]Training:   4%|▍         | 795/20000 [10:33<4:16:19,  1.25it/s]Training:   4%|▍         | 796/20000 [10:34<4:14:45,  1.26it/s]Training:   4%|▍         | 797/20000 [10:35<4:15:42,  1.25it/s]Training:   4%|▍         | 798/20000 [10:36<4:15:58,  1.25it/s]Training:   4%|▍         | 799/20000 [10:37<4:14:13,  1.26it/s]Training:   4%|▍         | 800/20000 [10:37<4:13:06,  1.26it/s]Step: 800/20000, Loss: 1.4453, LR: 2.98935485e-05, AnchorL2: 3.851331e-07, AnchorTerm: 3.851331e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   4%|▍         | 801/20000 [10:38<4:12:11,  1.27it/s]Training:   4%|▍         | 802/20000 [10:39<4:12:17,  1.27it/s]Training:   4%|▍         | 803/20000 [10:40<4:13:09,  1.26it/s]Training:   4%|▍         | 804/20000 [10:40<4:11:49,  1.27it/s]Training:   4%|▍         | 805/20000 [10:41<4:11:01,  1.27it/s]Training:   4%|▍         | 806/20000 [10:42<4:11:38,  1.27it/s]Training:   4%|▍         | 807/20000 [10:43<4:10:56,  1.27it/s]Training:   4%|▍         | 808/20000 [10:44<4:10:49,  1.28it/s]Training:   4%|▍         | 809/20000 [10:44<4:10:30,  1.28it/s]Training:   4%|▍         | 810/20000 [10:45<4:11:08,  1.27it/s]Step: 810/20000, Loss: 1.4880, LR: 2.98908742e-05, AnchorL2: 3.869053e-07, AnchorTerm: 3.869053e-02
+Training:   4%|▍         | 811/20000 [10:46<4:11:57,  1.27it/s]Training:   4%|▍         | 812/20000 [10:47<4:11:18,  1.27it/s]Training:   4%|▍         | 813/20000 [10:48<4:10:53,  1.27it/s]Training:   4%|▍         | 814/20000 [10:48<4:10:20,  1.28it/s]Training:   4%|▍         | 815/20000 [10:49<4:10:02,  1.28it/s]Training:   4%|▍         | 816/20000 [10:50<4:22:13,  1.22it/s]Training:   4%|▍         | 817/20000 [10:51<4:19:17,  1.23it/s]Training:   4%|▍         | 818/20000 [10:52<4:36:20,  1.16it/s]Training:   4%|▍         | 819/20000 [10:53<4:28:15,  1.19it/s]Training:   4%|▍         | 820/20000 [10:53<4:22:02,  1.22it/s]Step: 820/20000, Loss: 1.4945, LR: 2.98881668e-05, AnchorL2: 3.882774e-07, AnchorTerm: 3.882774e-02
+Training:   4%|▍         | 821/20000 [10:54<4:19:33,  1.23it/s]Training:   4%|▍         | 822/20000 [10:55<4:16:37,  1.25it/s]Training:   4%|▍         | 823/20000 [10:56<4:13:50,  1.26it/s]Training:   4%|▍         | 824/20000 [10:56<4:12:55,  1.26it/s]Training:   4%|▍         | 825/20000 [10:57<4:12:18,  1.27it/s]Training:   4%|▍         | 826/20000 [10:58<4:11:45,  1.27it/s]Training:   4%|▍         | 827/20000 [10:59<4:15:50,  1.25it/s]Training:   4%|▍         | 828/20000 [11:00<4:13:59,  1.26it/s]Training:   4%|▍         | 829/20000 [11:00<4:17:18,  1.24it/s]Training:   4%|▍         | 830/20000 [11:01<4:15:53,  1.25it/s]Step: 830/20000, Loss: 1.4884, LR: 2.98854264e-05, AnchorL2: 3.899339e-07, AnchorTerm: 3.899339e-02
+Training:   4%|▍         | 831/20000 [11:02<4:13:40,  1.26it/s]Training:   4%|▍         | 832/20000 [11:03<4:12:43,  1.26it/s]Training:   4%|▍         | 833/20000 [11:04<4:27:44,  1.19it/s]Training:   4%|▍         | 834/20000 [11:05<4:22:07,  1.22it/s]Training:   4%|▍         | 835/20000 [11:05<4:20:32,  1.23it/s]Training:   4%|▍         | 836/20000 [11:06<4:17:01,  1.24it/s]Training:   4%|▍         | 837/20000 [11:07<4:15:05,  1.25it/s]Training:   4%|▍         | 838/20000 [11:08<4:15:05,  1.25it/s]Training:   4%|▍         | 839/20000 [11:08<4:13:20,  1.26it/s]Training:   4%|▍         | 840/20000 [11:09<4:13:10,  1.26it/s]Step: 840/20000, Loss: 1.4186, LR: 2.98826530e-05, AnchorL2: 3.922928e-07, AnchorTerm: 3.922928e-02
+Training:   4%|▍         | 841/20000 [11:10<4:15:58,  1.25it/s]Training:   4%|▍         | 842/20000 [11:11<4:13:55,  1.26it/s]Training:   4%|▍         | 843/20000 [11:12<4:13:59,  1.26it/s]Training:   4%|▍         | 844/20000 [11:12<4:13:53,  1.26it/s]Training:   4%|▍         | 845/20000 [11:13<4:13:03,  1.26it/s]Training:   4%|▍         | 846/20000 [11:14<4:12:27,  1.26it/s]Training:   4%|▍         | 847/20000 [11:15<4:11:17,  1.27it/s]Training:   4%|▍         | 848/20000 [11:16<4:12:21,  1.26it/s]Training:   4%|▍         | 849/20000 [11:16<4:13:32,  1.26it/s]Training:   4%|▍         | 850/20000 [11:17<4:12:49,  1.26it/s]Step: 850/20000, Loss: 1.4976, LR: 2.98798466e-05, AnchorL2: 3.942027e-07, AnchorTerm: 3.942027e-02
+Training:   4%|▍         | 851/20000 [11:18<4:14:25,  1.25it/s]Training:   4%|▍         | 852/20000 [11:19<4:13:26,  1.26it/s]Training:   4%|▍         | 853/20000 [11:20<4:13:03,  1.26it/s]Training:   4%|▍         | 854/20000 [11:20<4:12:18,  1.26it/s]Training:   4%|▍         | 855/20000 [11:21<4:11:48,  1.27it/s]Training:   4%|▍         | 856/20000 [11:22<4:11:11,  1.27it/s]Training:   4%|▍         | 857/20000 [11:23<4:11:22,  1.27it/s]Training:   4%|▍         | 858/20000 [11:24<4:11:25,  1.27it/s]Training:   4%|▍         | 859/20000 [11:24<4:19:26,  1.23it/s]Training:   4%|▍         | 860/20000 [11:25<4:26:19,  1.20it/s]Step: 860/20000, Loss: 1.4591, LR: 2.98770071e-05, AnchorL2: 3.957088e-07, AnchorTerm: 3.957088e-02
+Training:   4%|▍         | 861/20000 [11:26<4:27:33,  1.19it/s]Training:   4%|▍         | 862/20000 [11:27<4:22:21,  1.22it/s]Training:   4%|▍         | 863/20000 [11:28<4:19:01,  1.23it/s]Training:   4%|▍         | 864/20000 [11:28<4:16:33,  1.24it/s]Training:   4%|▍         | 865/20000 [11:29<4:16:14,  1.24it/s]Training:   4%|▍         | 866/20000 [11:30<4:19:55,  1.23it/s]Training:   4%|▍         | 867/20000 [11:31<4:16:50,  1.24it/s]Training:   4%|▍         | 868/20000 [11:32<4:14:53,  1.25it/s]Training:   4%|▍         | 869/20000 [11:32<4:13:50,  1.26it/s]Training:   4%|▍         | 870/20000 [11:33<4:15:38,  1.25it/s]Step: 870/20000, Loss: 1.4180, LR: 2.98741347e-05, AnchorL2: 3.973387e-07, AnchorTerm: 3.973387e-02
+Training:   4%|▍         | 871/20000 [11:34<4:14:12,  1.25it/s]Training:   4%|▍         | 872/20000 [11:35<4:13:29,  1.26it/s]Training:   4%|▍         | 873/20000 [11:36<4:12:34,  1.26it/s]Training:   4%|▍         | 874/20000 [11:36<4:11:44,  1.27it/s]Training:   4%|▍         | 875/20000 [11:37<4:11:41,  1.27it/s]Training:   4%|▍         | 876/20000 [11:38<4:12:41,  1.26it/s]Training:   4%|▍         | 877/20000 [11:39<4:11:51,  1.27it/s]Training:   4%|▍         | 878/20000 [11:40<4:11:26,  1.27it/s]Training:   4%|▍         | 879/20000 [11:40<4:13:21,  1.26it/s]Training:   4%|▍         | 880/20000 [11:41<4:12:45,  1.26it/s]Step: 880/20000, Loss: 1.4862, LR: 2.98712292e-05, AnchorL2: 3.990724e-07, AnchorTerm: 3.990724e-02
+Training:   4%|▍         | 881/20000 [11:42<4:12:18,  1.26it/s]Training:   4%|▍         | 882/20000 [11:43<4:11:17,  1.27it/s]Training:   4%|▍         | 883/20000 [11:44<4:09:25,  1.28it/s]Training:   4%|▍         | 884/20000 [11:44<4:08:54,  1.28it/s]Training:   4%|▍         | 885/20000 [11:45<4:08:24,  1.28it/s]Training:   4%|▍         | 886/20000 [11:46<4:16:46,  1.24it/s]Training:   4%|▍         | 887/20000 [11:47<4:27:47,  1.19it/s]Training:   4%|▍         | 888/20000 [11:48<4:26:21,  1.20it/s]Training:   4%|▍         | 889/20000 [11:48<4:20:17,  1.22it/s]Training:   4%|▍         | 890/20000 [11:49<4:15:49,  1.25it/s]Step: 890/20000, Loss: 1.4968, LR: 2.98682908e-05, AnchorL2: 4.008473e-07, AnchorTerm: 4.008473e-02
+Training:   4%|▍         | 891/20000 [11:50<4:21:34,  1.22it/s]Training:   4%|▍         | 892/20000 [11:51<4:17:11,  1.24it/s]Training:   4%|▍         | 893/20000 [11:52<4:15:40,  1.25it/s]Training:   4%|▍         | 894/20000 [11:52<4:12:46,  1.26it/s]Training:   4%|▍         | 895/20000 [11:53<4:15:57,  1.24it/s]Training:   4%|▍         | 896/20000 [11:54<4:13:19,  1.26it/s]Training:   4%|▍         | 897/20000 [11:55<4:12:16,  1.26it/s]Training:   4%|▍         | 898/20000 [11:56<4:10:47,  1.27it/s]Training:   4%|▍         | 899/20000 [11:56<4:09:03,  1.28it/s]Training:   4%|▍         | 900/20000 [11:57<4:08:16,  1.28it/s]Step: 900/20000, Loss: 1.5493, LR: 2.98653194e-05, AnchorL2: 4.021348e-07, AnchorTerm: 4.021348e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   5%|▍         | 901/20000 [11:58<4:09:41,  1.27it/s]Training:   5%|▍         | 902/20000 [11:59<4:11:10,  1.27it/s]Training:   5%|▍         | 903/20000 [12:00<4:09:30,  1.28it/s]Training:   5%|▍         | 904/20000 [12:00<4:08:27,  1.28it/s]Training:   5%|▍         | 905/20000 [12:01<4:07:59,  1.28it/s]Training:   5%|▍         | 906/20000 [12:02<4:07:28,  1.29it/s]Training:   5%|▍         | 907/20000 [12:03<4:07:29,  1.29it/s]Training:   5%|▍         | 908/20000 [12:03<4:08:45,  1.28it/s]Training:   5%|▍         | 909/20000 [12:04<4:08:00,  1.28it/s]Training:   5%|▍         | 910/20000 [12:05<4:12:06,  1.26it/s]Step: 910/20000, Loss: 1.5052, LR: 2.98623150e-05, AnchorL2: 4.036582e-07, AnchorTerm: 4.036582e-02
+Training:   5%|▍         | 911/20000 [12:06<4:10:38,  1.27it/s]Training:   5%|▍         | 912/20000 [12:07<4:09:15,  1.28it/s]Training:   5%|▍         | 913/20000 [12:07<4:14:52,  1.25it/s]Training:   5%|▍         | 914/20000 [12:08<4:13:57,  1.25it/s]Training:   5%|▍         | 915/20000 [12:09<4:11:28,  1.26it/s]Training:   5%|▍         | 916/20000 [12:10<4:09:55,  1.27it/s]Training:   5%|▍         | 917/20000 [12:11<4:12:19,  1.26it/s]Training:   5%|▍         | 918/20000 [12:11<4:11:55,  1.26it/s]Training:   5%|▍         | 919/20000 [12:12<4:10:40,  1.27it/s]Training:   5%|▍         | 920/20000 [12:13<4:10:19,  1.27it/s]Step: 920/20000, Loss: 1.5113, LR: 2.98592776e-05, AnchorL2: 4.055420e-07, AnchorTerm: 4.055420e-02
+Training:   5%|▍         | 921/20000 [12:14<4:09:46,  1.27it/s]Training:   5%|▍         | 922/20000 [12:14<4:09:51,  1.27it/s]Training:   5%|▍         | 923/20000 [12:15<4:09:38,  1.27it/s]Training:   5%|▍         | 924/20000 [12:16<4:09:45,  1.27it/s]Training:   5%|▍         | 925/20000 [12:17<4:13:18,  1.26it/s]Training:   5%|▍         | 926/20000 [12:18<4:12:03,  1.26it/s]Training:   5%|▍         | 927/20000 [12:18<4:11:25,  1.26it/s]Training:   5%|▍         | 928/20000 [12:19<4:10:41,  1.27it/s]Training:   5%|▍         | 929/20000 [12:20<4:11:14,  1.27it/s]Training:   5%|▍         | 930/20000 [12:21<4:10:36,  1.27it/s]Step: 930/20000, Loss: 1.4091, LR: 2.98562073e-05, AnchorL2: 4.076353e-07, AnchorTerm: 4.076353e-02
+Training:   5%|▍         | 931/20000 [12:22<4:09:50,  1.27it/s]Training:   5%|▍         | 932/20000 [12:22<4:09:19,  1.27it/s]Training:   5%|▍         | 933/20000 [12:23<4:09:10,  1.28it/s]Training:   5%|▍         | 934/20000 [12:24<4:09:05,  1.28it/s]Training:   5%|▍         | 935/20000 [12:25<4:09:30,  1.27it/s]Training:   5%|▍         | 936/20000 [12:26<4:18:14,  1.23it/s]Training:   5%|▍         | 937/20000 [12:26<4:15:42,  1.24it/s]Training:   5%|▍         | 938/20000 [12:27<4:13:50,  1.25it/s]Training:   5%|▍         | 939/20000 [12:28<4:12:37,  1.26it/s]Training:   5%|▍         | 940/20000 [12:29<4:11:37,  1.26it/s]Step: 940/20000, Loss: 1.6141, LR: 2.98531040e-05, AnchorL2: 4.093647e-07, AnchorTerm: 4.093647e-02
+Training:   5%|▍         | 941/20000 [12:30<4:11:00,  1.27it/s]Training:   5%|▍         | 942/20000 [12:30<4:10:50,  1.27it/s]Training:   5%|▍         | 943/20000 [12:31<4:10:37,  1.27it/s]Training:   5%|▍         | 944/20000 [12:32<4:09:31,  1.27it/s]Training:   5%|▍         | 945/20000 [12:33<4:10:39,  1.27it/s]Training:   5%|▍         | 946/20000 [12:33<4:10:18,  1.27it/s]Training:   5%|▍         | 947/20000 [12:34<4:09:47,  1.27it/s]Training:   5%|▍         | 948/20000 [12:35<4:09:40,  1.27it/s]Training:   5%|▍         | 949/20000 [12:36<4:09:17,  1.27it/s]Training:   5%|▍         | 950/20000 [12:37<4:09:16,  1.27it/s]Step: 950/20000, Loss: 1.4702, LR: 2.98499677e-05, AnchorL2: 4.111491e-07, AnchorTerm: 4.111491e-02
+Training:   5%|▍         | 951/20000 [12:37<4:09:29,  1.27it/s]Training:   5%|▍         | 952/20000 [12:38<4:09:31,  1.27it/s]Training:   5%|▍         | 953/20000 [12:39<4:09:20,  1.27it/s]Training:   5%|▍         | 954/20000 [12:40<4:09:44,  1.27it/s]Training:   5%|▍         | 955/20000 [12:41<4:09:20,  1.27it/s]Training:   5%|▍         | 956/20000 [12:41<4:09:59,  1.27it/s]Training:   5%|▍         | 957/20000 [12:42<4:09:56,  1.27it/s]Training:   5%|▍         | 958/20000 [12:43<4:09:53,  1.27it/s]Training:   5%|▍         | 959/20000 [12:44<4:11:02,  1.26it/s]Training:   5%|▍         | 960/20000 [12:44<4:10:16,  1.27it/s]Step: 960/20000, Loss: 1.4757, LR: 2.98467986e-05, AnchorL2: 4.125697e-07, AnchorTerm: 4.125697e-02
+Training:   5%|▍         | 961/20000 [12:45<4:18:47,  1.23it/s]Training:   5%|▍         | 962/20000 [12:46<4:22:33,  1.21it/s]Training:   5%|▍         | 963/20000 [12:47<4:21:32,  1.21it/s]Training:   5%|▍         | 964/20000 [12:48<4:24:08,  1.20it/s]Training:   5%|▍         | 965/20000 [12:49<4:19:29,  1.22it/s]Training:   5%|▍         | 966/20000 [12:49<4:17:16,  1.23it/s]Training:   5%|▍         | 967/20000 [12:50<4:15:13,  1.24it/s]Training:   5%|▍         | 968/20000 [12:51<4:12:59,  1.25it/s]Training:   5%|▍         | 969/20000 [12:52<4:15:28,  1.24it/s]Training:   5%|▍         | 970/20000 [12:53<4:13:50,  1.25it/s]Step: 970/20000, Loss: 1.4815, LR: 2.98435964e-05, AnchorL2: 4.138574e-07, AnchorTerm: 4.138574e-02
+Training:   5%|▍         | 971/20000 [12:53<4:16:01,  1.24it/s]Training:   5%|▍         | 972/20000 [12:54<4:13:48,  1.25it/s]Training:   5%|▍         | 973/20000 [12:55<4:14:49,  1.24it/s]Training:   5%|▍         | 974/20000 [12:56<4:12:53,  1.25it/s]Training:   5%|▍         | 975/20000 [12:57<4:12:04,  1.26it/s]Training:   5%|▍         | 976/20000 [12:57<4:11:13,  1.26it/s]Training:   5%|▍         | 977/20000 [12:58<4:10:51,  1.26it/s]Training:   5%|▍         | 978/20000 [12:59<4:12:25,  1.26it/s]Training:   5%|▍         | 979/20000 [13:00<4:11:35,  1.26it/s]Training:   5%|▍         | 980/20000 [13:01<4:11:03,  1.26it/s]Step: 980/20000, Loss: 1.4227, LR: 2.98403614e-05, AnchorL2: 4.148379e-07, AnchorTerm: 4.148379e-02
+Training:   5%|▍         | 981/20000 [13:01<4:12:12,  1.26it/s]Training:   5%|▍         | 982/20000 [13:02<4:11:14,  1.26it/s]Training:   5%|▍         | 983/20000 [13:03<4:14:22,  1.25it/s]Training:   5%|▍         | 984/20000 [13:04<4:13:58,  1.25it/s]Training:   5%|▍         | 985/20000 [13:05<4:12:15,  1.26it/s]Training:   5%|▍         | 986/20000 [13:05<4:10:45,  1.26it/s]Training:   5%|▍         | 987/20000 [13:06<4:10:19,  1.27it/s]Training:   5%|▍         | 988/20000 [13:07<4:09:41,  1.27it/s]Training:   5%|▍         | 989/20000 [13:08<4:09:36,  1.27it/s]Training:   5%|▍         | 990/20000 [13:09<4:09:17,  1.27it/s]Step: 990/20000, Loss: 1.4320, LR: 2.98370935e-05, AnchorL2: 4.159816e-07, AnchorTerm: 4.159816e-02
+Training:   5%|▍         | 991/20000 [13:09<4:13:32,  1.25it/s]Training:   5%|▍         | 992/20000 [13:10<4:12:14,  1.26it/s]Training:   5%|▍         | 993/20000 [13:11<4:12:06,  1.26it/s]Training:   5%|▍         | 994/20000 [13:12<4:11:44,  1.26it/s]Training:   5%|▍         | 995/20000 [13:13<4:10:46,  1.26it/s]Training:   5%|▍         | 996/20000 [13:13<4:10:01,  1.27it/s]Training:   5%|▍         | 997/20000 [13:14<4:08:56,  1.27it/s]Training:   5%|▍         | 998/20000 [13:15<4:08:54,  1.27it/s]Training:   5%|▍         | 999/20000 [13:16<4:08:47,  1.27it/s]Training:   5%|▌         | 1000/20000 [13:16<4:11:04,  1.26it/s]Step: 1000/20000, Loss: 1.4955, LR: 2.98337926e-05, AnchorL2: 4.169720e-07, AnchorTerm: 4.169720e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 57324.00 MB
+GPU 0 max memory allocated: 55816.63 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+/home/wjl86/miniconda3/lib/python3.13/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+
+Running validation at step 1000...
+Teacher-forced eval: using 500/335012 validation sequences (requested 500, seed=1189938911, world_size=4).
+
+Evaluating:   0%|          | 0/8 [00:00<?, ?it/s][A
+Evaluating:  12%|█▎        | 1/8 [00:00<00:05,  1.38it/s][A
+Evaluating:  25%|██▌       | 2/8 [00:01<00:03,  1.56it/s][A
+Evaluating:  38%|███▊      | 3/8 [00:01<00:03,  1.63it/s][A
+Evaluating:  50%|█████     | 4/8 [00:02<00:02,  1.67it/s][A
+Evaluating:  62%|██████▎   | 5/8 [00:03<00:01,  1.69it/s][A
+Evaluating:  75%|███████▌  | 6/8 [00:03<00:01,  1.66it/s][A
+Evaluating:  88%|████████▊ | 7/8 [00:04<00:00,  1.68it/s][A
+Evaluating: 100%|██████████| 8/8 [00:04<00:00,  1.73it/s][A
+                                                         [AAutoregressive eval: using 100/335012 validation sequences (requested 100, seed=2032933053, world_size=4).
+
+Autoregressive eval:   0%|          | 0/2 [00:00<?, ?it/s][A
+Autoregressive eval:  50%|█████     | 1/2 [00:12<00:12, 12.61s/it][A
+Autoregressive eval: 100%|██████████| 2/2 [00:25<00:00, 12.71s/it][A
+                                                                  [AValidation Loss: 1.4166 (onset 1.7584, duration 1.7305, pitch 0.7619), Teacher-Forced Pitch Accuracy: 99.75%, Autoregressive Accuracy: pitch 74.68%, onset 12.30%, duration 28.99%
+/home/wjl86/miniconda3/lib/python3.13/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+Training:   5%|▌         | 1001/20000 [13:54<61:41:54, 11.69s/it]Training:   5%|▌         | 1002/20000 [13:55<44:54:03,  8.51s/it]Training:   5%|▌         | 1003/20000 [13:56<33:07:47,  6.28s/it]Training:   5%|▌         | 1004/20000 [13:57<24:53:17,  4.72s/it]Training:   5%|▌         | 1005/20000 [13:58<19:08:09,  3.63s/it]Training:   5%|▌         | 1006/20000 [13:59<15:06:04,  2.86s/it]Training:   5%|▌         | 1007/20000 [14:00<12:17:07,  2.33s/it]Training:   5%|▌         | 1008/20000 [14:01<10:17:37,  1.95s/it]Training:   5%|▌         | 1009/20000 [14:02<8:54:41,  1.69s/it] Training:   5%|▌         | 1010/20000 [14:03<7:57:44,  1.51s/it]Step: 1010/20000, Loss: 1.4811, LR: 2.98304588e-05, AnchorL2: 4.178308e-07, AnchorTerm: 4.178308e-02
+Training:   5%|▌         | 1011/20000 [14:04<7:17:01,  1.38s/it]Training:   5%|▌         | 1012/20000 [14:05<6:49:29,  1.29s/it]Training:   5%|▌         | 1013/20000 [14:07<6:30:12,  1.23s/it]Training:   5%|▌         | 1014/20000 [14:08<6:15:56,  1.19s/it]Training:   5%|▌         | 1015/20000 [14:09<6:06:33,  1.16s/it]Training:   5%|▌         | 1016/20000 [14:10<5:59:31,  1.14s/it]Training:   5%|▌         | 1017/20000 [14:11<5:55:17,  1.12s/it]Training:   5%|▌         | 1018/20000 [14:12<5:50:26,  1.11s/it]Training:   5%|▌         | 1019/20000 [14:13<5:45:48,  1.09s/it]Training:   5%|▌         | 1020/20000 [14:14<5:44:22,  1.09s/it]Step: 1020/20000, Loss: 1.4266, LR: 2.98270922e-05, AnchorL2: 4.189929e-07, AnchorTerm: 4.189929e-02
+Training:   5%|▌         | 1021/20000 [14:15<5:42:21,  1.08s/it]Training:   5%|▌         | 1022/20000 [14:16<5:40:44,  1.08s/it]Training:   5%|▌         | 1023/20000 [14:17<5:38:46,  1.07s/it]Training:   5%|▌         | 1024/20000 [14:18<5:38:36,  1.07s/it]Training:   5%|▌         | 1025/20000 [14:19<5:38:28,  1.07s/it]Training:   5%|▌         | 1026/20000 [14:20<5:37:23,  1.07s/it]Training:   5%|▌         | 1027/20000 [14:22<5:37:16,  1.07s/it]Training:   5%|▌         | 1028/20000 [14:23<5:36:37,  1.06s/it]Training:   5%|▌         | 1029/20000 [14:24<5:36:28,  1.06s/it]Training:   5%|▌         | 1030/20000 [14:25<5:36:17,  1.06s/it]Step: 1030/20000, Loss: 1.4468, LR: 2.98236927e-05, AnchorL2: 4.204662e-07, AnchorTerm: 4.204662e-02
+Training:   5%|▌         | 1031/20000 [14:26<5:36:03,  1.06s/it]Training:   5%|▌         | 1032/20000 [14:27<5:35:48,  1.06s/it]Training:   5%|▌         | 1033/20000 [14:28<5:35:51,  1.06s/it]Training:   5%|▌         | 1034/20000 [14:29<5:35:38,  1.06s/it]Training:   5%|▌         | 1035/20000 [14:30<5:35:32,  1.06s/it]Training:   5%|▌         | 1036/20000 [14:31<5:35:22,  1.06s/it]Training:   5%|▌         | 1037/20000 [14:32<5:35:24,  1.06s/it]Training:   5%|▌         | 1038/20000 [14:33<5:35:36,  1.06s/it]Training:   5%|▌         | 1039/20000 [14:34<5:35:56,  1.06s/it]Training:   5%|▌         | 1040/20000 [14:35<5:35:46,  1.06s/it]Step: 1040/20000, Loss: 1.4774, LR: 2.98202602e-05, AnchorL2: 4.218836e-07, AnchorTerm: 4.218836e-02
+Training:   5%|▌         | 1041/20000 [14:36<5:36:43,  1.07s/it]Training:   5%|▌         | 1042/20000 [14:38<5:36:31,  1.07s/it]Training:   5%|▌         | 1043/20000 [14:39<5:36:20,  1.06s/it]Training:   5%|▌         | 1044/20000 [14:40<5:36:24,  1.06s/it]Training:   5%|▌         | 1045/20000 [14:41<5:36:06,  1.06s/it]Training:   5%|▌         | 1046/20000 [14:42<5:36:01,  1.06s/it]Training:   5%|▌         | 1047/20000 [14:43<5:35:49,  1.06s/it]Training:   5%|▌         | 1048/20000 [14:44<5:35:30,  1.06s/it]Training:   5%|▌         | 1049/20000 [14:45<5:35:47,  1.06s/it]Training:   5%|▌         | 1050/20000 [14:46<5:35:54,  1.06s/it]Step: 1050/20000, Loss: 1.4579, LR: 2.98167950e-05, AnchorL2: 4.228218e-07, AnchorTerm: 4.228218e-02
+Training:   5%|▌         | 1051/20000 [14:47<5:35:43,  1.06s/it]Training:   5%|▌         | 1052/20000 [14:48<5:35:43,  1.06s/it]Training:   5%|▌         | 1053/20000 [14:49<5:36:02,  1.06s/it]Training:   5%|▌         | 1054/20000 [14:50<5:35:28,  1.06s/it]Training:   5%|▌         | 1055/20000 [14:51<5:35:20,  1.06s/it]Training:   5%|▌         | 1056/20000 [14:52<5:35:38,  1.06s/it]Training:   5%|▌         | 1057/20000 [14:53<5:35:19,  1.06s/it]Training:   5%|▌         | 1058/20000 [14:55<5:35:17,  1.06s/it]Training:   5%|▌         | 1059/20000 [14:56<5:35:05,  1.06s/it]Training:   5%|▌         | 1060/20000 [14:57<5:35:07,  1.06s/it]Step: 1060/20000, Loss: 1.4325, LR: 2.98132968e-05, AnchorL2: 4.236405e-07, AnchorTerm: 4.236405e-02
+Training:   5%|▌         | 1061/20000 [14:58<5:35:15,  1.06s/it]Training:   5%|▌         | 1062/20000 [14:59<5:35:03,  1.06s/it]Training:   5%|▌         | 1063/20000 [15:00<5:34:31,  1.06s/it]Training:   5%|▌         | 1064/20000 [15:01<5:34:27,  1.06s/it]Training:   5%|▌         | 1065/20000 [15:02<5:34:35,  1.06s/it]Training:   5%|▌         | 1066/20000 [15:03<5:29:45,  1.04s/it]Training:   5%|▌         | 1067/20000 [15:04<5:28:52,  1.04s/it]Training:   5%|▌         | 1068/20000 [15:05<5:24:34,  1.03s/it]Training:   5%|▌         | 1069/20000 [15:06<5:17:28,  1.01s/it]Training:   5%|▌         | 1070/20000 [15:07<5:23:16,  1.02s/it]Step: 1070/20000, Loss: 1.5285, LR: 2.98097659e-05, AnchorL2: 4.248007e-07, AnchorTerm: 4.248007e-02
+Training:   5%|▌         | 1071/20000 [15:08<5:23:56,  1.03s/it]Training:   5%|▌         | 1072/20000 [15:09<5:23:34,  1.03s/it]Training:   5%|▌         | 1073/20000 [15:10<5:15:47,  1.00s/it]Training:   5%|▌         | 1074/20000 [15:11<5:16:35,  1.00s/it]Training:   5%|▌         | 1075/20000 [15:12<5:22:29,  1.02s/it]Training:   5%|▌         | 1076/20000 [15:13<5:24:32,  1.03s/it]Training:   5%|▌         | 1077/20000 [15:14<5:19:36,  1.01s/it]Training:   5%|▌         | 1078/20000 [15:15<5:22:56,  1.02s/it]Training:   5%|▌         | 1079/20000 [15:16<5:26:15,  1.03s/it]Training:   5%|▌         | 1080/20000 [15:17<5:29:09,  1.04s/it]Step: 1080/20000, Loss: 1.4332, LR: 2.98062020e-05, AnchorL2: 4.263437e-07, AnchorTerm: 4.263437e-02
+Training:   5%|▌         | 1081/20000 [15:18<5:30:23,  1.05s/it]Training:   5%|▌         | 1082/20000 [15:19<5:30:35,  1.05s/it]Training:   5%|▌         | 1083/20000 [15:20<5:28:35,  1.04s/it]Training:   5%|▌         | 1084/20000 [15:21<5:25:41,  1.03s/it]Training:   5%|▌         | 1085/20000 [15:22<5:26:19,  1.04s/it]Training:   5%|▌         | 1086/20000 [15:23<5:25:06,  1.03s/it]Training:   5%|▌         | 1087/20000 [15:24<5:24:27,  1.03s/it]Training:   5%|▌         | 1088/20000 [15:25<5:19:45,  1.01s/it]Training:   5%|▌         | 1089/20000 [15:27<5:23:55,  1.03s/it]Training:   5%|▌         | 1090/20000 [15:28<5:24:30,  1.03s/it]Step: 1090/20000, Loss: 1.4023, LR: 2.98026054e-05, AnchorL2: 4.279283e-07, AnchorTerm: 4.279283e-02
+Training:   5%|▌         | 1091/20000 [15:29<5:26:05,  1.03s/it]Training:   5%|▌         | 1092/20000 [15:30<5:25:16,  1.03s/it]Training:   5%|▌         | 1093/20000 [15:31<5:21:14,  1.02s/it]Training:   5%|▌         | 1094/20000 [15:32<5:15:24,  1.00s/it]Training:   5%|▌         | 1095/20000 [15:33<5:14:56,  1.00it/s]Training:   5%|▌         | 1096/20000 [15:34<5:17:58,  1.01s/it]Training:   5%|▌         | 1097/20000 [15:35<5:16:00,  1.00s/it]Training:   5%|▌         | 1098/20000 [15:36<5:17:46,  1.01s/it]Training:   5%|▌         | 1099/20000 [15:37<5:21:14,  1.02s/it]Training:   6%|▌         | 1100/20000 [15:38<5:25:13,  1.03s/it]Step: 1100/20000, Loss: 1.4372, LR: 2.97989759e-05, AnchorL2: 4.290543e-07, AnchorTerm: 4.290543e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 59880.00 MB
+GPU 0 max memory allocated: 55825.52 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   6%|▌         | 1101/20000 [15:39<5:18:58,  1.01s/it]Training:   6%|▌         | 1102/20000 [15:40<5:22:24,  1.02s/it]Training:   6%|▌         | 1103/20000 [15:41<5:23:12,  1.03s/it]Training:   6%|▌         | 1104/20000 [15:42<5:22:30,  1.02s/it]Training:   6%|▌         | 1105/20000 [15:43<5:24:46,  1.03s/it]Training:   6%|▌         | 1106/20000 [15:44<5:21:54,  1.02s/it]Training:   6%|▌         | 1107/20000 [15:45<5:19:37,  1.02s/it]Training:   6%|▌         | 1108/20000 [15:46<5:16:10,  1.00s/it]Training:   6%|▌         | 1109/20000 [15:47<5:17:06,  1.01s/it]Training:   6%|▌         | 1110/20000 [15:48<5:18:34,  1.01s/it]Step: 1110/20000, Loss: 1.4855, LR: 2.97953136e-05, AnchorL2: 4.313034e-07, AnchorTerm: 4.313034e-02
+Training:   6%|▌         | 1111/20000 [15:49<5:21:23,  1.02s/it]Training:   6%|▌         | 1112/20000 [15:50<5:19:56,  1.02s/it]Training:   6%|▌         | 1113/20000 [15:51<5:21:41,  1.02s/it]Training:   6%|▌         | 1114/20000 [15:52<5:19:22,  1.01s/it]Training:   6%|▌         | 1115/20000 [15:53<5:21:33,  1.02s/it]Training:   6%|▌         | 1116/20000 [15:54<5:16:36,  1.01s/it]Training:   6%|▌         | 1117/20000 [15:55<5:22:02,  1.02s/it]Training:   6%|▌         | 1118/20000 [15:56<5:23:26,  1.03s/it]Training:   6%|▌         | 1119/20000 [15:57<5:27:09,  1.04s/it]Training:   6%|▌         | 1120/20000 [15:58<5:26:40,  1.04s/it]Step: 1120/20000, Loss: 1.4271, LR: 2.97916185e-05, AnchorL2: 4.330514e-07, AnchorTerm: 4.330514e-02
+Training:   6%|▌         | 1121/20000 [15:59<5:28:31,  1.04s/it]Training:   6%|▌         | 1122/20000 [16:00<5:24:03,  1.03s/it]Training:   6%|▌         | 1123/20000 [16:01<5:18:43,  1.01s/it]Training:   6%|▌         | 1124/20000 [16:02<5:22:12,  1.02s/it]Training:   6%|▌         | 1125/20000 [16:03<5:18:27,  1.01s/it]Training:   6%|▌         | 1126/20000 [16:04<5:18:59,  1.01s/it]Training:   6%|▌         | 1127/20000 [16:05<5:16:18,  1.01s/it]Training:   6%|▌         | 1128/20000 [16:06<5:16:25,  1.01s/it]Training:   6%|▌         | 1129/20000 [16:07<5:17:34,  1.01s/it]Training:   6%|▌         | 1130/20000 [16:08<5:19:54,  1.02s/it]Step: 1130/20000, Loss: 1.4125, LR: 2.97878906e-05, AnchorL2: 4.343912e-07, AnchorTerm: 4.343912e-02
+Training:   6%|▌         | 1131/20000 [16:09<5:21:54,  1.02s/it]Training:   6%|▌         | 1132/20000 [16:10<5:20:08,  1.02s/it]Training:   6%|▌         | 1133/20000 [16:11<5:22:42,  1.03s/it]Training:   6%|▌         | 1134/20000 [16:12<5:19:44,  1.02s/it]Training:   6%|▌         | 1135/20000 [16:13<5:19:58,  1.02s/it]Training:   6%|▌         | 1136/20000 [16:14<5:16:16,  1.01s/it]Training:   6%|▌         | 1137/20000 [16:15<5:16:45,  1.01s/it]Training:   6%|▌         | 1138/20000 [16:16<5:17:29,  1.01s/it]Training:   6%|▌         | 1139/20000 [16:17<5:16:16,  1.01s/it]Training:   6%|▌         | 1140/20000 [16:18<5:17:34,  1.01s/it]Step: 1140/20000, Loss: 1.4337, LR: 2.97841299e-05, AnchorL2: 4.358307e-07, AnchorTerm: 4.358307e-02
+Training:   6%|▌         | 1141/20000 [16:19<5:12:28,  1.01it/s]Training:   6%|▌         | 1142/20000 [16:20<5:13:15,  1.00it/s]Training:   6%|▌         | 1143/20000 [16:21<5:13:54,  1.00it/s]Training:   6%|▌         | 1144/20000 [16:22<5:14:37,  1.00s/it]Training:   6%|▌         | 1145/20000 [16:23<5:16:57,  1.01s/it]Training:   6%|▌         | 1146/20000 [16:24<5:17:38,  1.01s/it]Training:   6%|▌         | 1147/20000 [16:25<5:14:21,  1.00s/it]Training:   6%|▌         | 1148/20000 [16:26<5:13:04,  1.00it/s]Training:   6%|▌         | 1149/20000 [16:27<5:16:07,  1.01s/it]Training:   6%|▌         | 1150/20000 [16:28<5:17:43,  1.01s/it]Step: 1150/20000, Loss: 1.5072, LR: 2.97803365e-05, AnchorL2: 4.375051e-07, AnchorTerm: 4.375051e-02
+Training:   6%|▌         | 1151/20000 [16:29<5:19:47,  1.02s/it]Training:   6%|▌         | 1152/20000 [16:31<5:24:10,  1.03s/it]Training:   6%|▌         | 1153/20000 [16:32<5:18:27,  1.01s/it]Training:   6%|▌         | 1154/20000 [16:33<5:18:46,  1.01s/it]Training:   6%|▌         | 1155/20000 [16:34<5:17:11,  1.01s/it]Training:   6%|▌         | 1156/20000 [16:35<5:18:01,  1.01s/it]Training:   6%|▌         | 1157/20000 [16:36<5:13:39,  1.00it/s]Training:   6%|▌         | 1158/20000 [16:37<5:13:54,  1.00it/s]Training:   6%|▌         | 1159/20000 [16:38<5:16:10,  1.01s/it]Training:   6%|▌         | 1160/20000 [16:39<5:14:58,  1.00s/it]Step: 1160/20000, Loss: 1.4465, LR: 2.97765103e-05, AnchorL2: 4.390915e-07, AnchorTerm: 4.390915e-02
+Training:   6%|▌         | 1161/20000 [16:40<5:16:06,  1.01s/it]Training:   6%|▌         | 1162/20000 [16:41<5:17:08,  1.01s/it]Training:   6%|▌         | 1163/20000 [16:42<5:16:40,  1.01s/it]Training:   6%|▌         | 1164/20000 [16:43<5:15:42,  1.01s/it]Training:   6%|▌         | 1165/20000 [16:44<5:14:52,  1.00s/it]Training:   6%|▌         | 1166/20000 [16:45<5:09:46,  1.01it/s]Training:   6%|▌         | 1167/20000 [16:46<5:11:05,  1.01it/s]Training:   6%|▌         | 1168/20000 [16:47<5:13:20,  1.00it/s]Training:   6%|▌         | 1169/20000 [16:48<5:11:06,  1.01it/s]Training:   6%|▌         | 1170/20000 [16:49<5:12:23,  1.00it/s]Step: 1170/20000, Loss: 1.4453, LR: 2.97726513e-05, AnchorL2: 4.407926e-07, AnchorTerm: 4.407926e-02
+Training:   6%|▌         | 1171/20000 [16:50<5:13:33,  1.00it/s]Training:   6%|▌         | 1172/20000 [16:51<5:16:41,  1.01s/it]Training:   6%|▌         | 1173/20000 [16:52<5:20:02,  1.02s/it]Training:   6%|▌         | 1174/20000 [16:53<5:11:24,  1.01it/s]Training:   6%|▌         | 1175/20000 [16:54<5:12:09,  1.01it/s]Training:   6%|▌         | 1176/20000 [16:55<5:12:13,  1.00it/s]Training:   6%|▌         | 1177/20000 [16:55<5:09:39,  1.01it/s]Training:   6%|▌         | 1178/20000 [16:56<5:10:22,  1.01it/s]Training:   6%|▌         | 1179/20000 [16:57<5:09:15,  1.01it/s]Training:   6%|▌         | 1180/20000 [16:59<5:14:56,  1.00s/it]Step: 1180/20000, Loss: 1.4145, LR: 2.97687596e-05, AnchorL2: 4.426629e-07, AnchorTerm: 4.426629e-02
+Training:   6%|▌         | 1181/20000 [17:00<5:16:28,  1.01s/it]Training:   6%|▌         | 1182/20000 [17:01<5:17:24,  1.01s/it]Training:   6%|▌         | 1183/20000 [17:02<5:18:16,  1.01s/it]Training:   6%|▌         | 1184/20000 [17:03<5:18:26,  1.02s/it]Training:   6%|▌         | 1185/20000 [17:04<5:20:07,  1.02s/it]Training:   6%|▌         | 1186/20000 [17:05<5:17:01,  1.01s/it]Training:   6%|▌         | 1187/20000 [17:06<5:14:56,  1.00s/it]Training:   6%|▌         | 1188/20000 [17:07<5:07:44,  1.02it/s]Training:   6%|▌         | 1189/20000 [17:08<5:13:09,  1.00it/s]Training:   6%|▌         | 1190/20000 [17:09<5:12:16,  1.00it/s]Step: 1190/20000, Loss: 1.4735, LR: 2.97648351e-05, AnchorL2: 4.441738e-07, AnchorTerm: 4.441738e-02
+Training:   6%|▌         | 1191/20000 [17:10<5:14:46,  1.00s/it]Training:   6%|▌         | 1192/20000 [17:11<5:17:23,  1.01s/it]Training:   6%|▌         | 1193/20000 [17:12<5:13:50,  1.00s/it]Training:   6%|▌         | 1194/20000 [17:13<5:16:18,  1.01s/it]Training:   6%|▌         | 1195/20000 [17:14<5:16:36,  1.01s/it]Training:   6%|▌         | 1196/20000 [17:15<5:13:11,  1.00it/s]Training:   6%|▌         | 1197/20000 [17:16<5:14:28,  1.00s/it]Training:   6%|▌         | 1198/20000 [17:17<5:17:03,  1.01s/it]Training:   6%|▌         | 1199/20000 [17:18<5:17:52,  1.01s/it]Training:   6%|▌         | 1200/20000 [17:19<5:17:26,  1.01s/it]Step: 1200/20000, Loss: 1.4438, LR: 2.97608779e-05, AnchorL2: 4.454301e-07, AnchorTerm: 4.454301e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 59880.00 MB
+GPU 0 max memory allocated: 55825.52 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   6%|▌         | 1201/20000 [17:20<5:17:16,  1.01s/it]Training:   6%|▌         | 1202/20000 [17:21<5:16:07,  1.01s/it]Training:   6%|▌         | 1203/20000 [17:22<5:16:24,  1.01s/it]Training:   6%|▌         | 1204/20000 [17:23<5:10:35,  1.01it/s]Training:   6%|▌         | 1205/20000 [17:24<5:10:10,  1.01it/s]Training:   6%|▌         | 1206/20000 [17:25<5:10:08,  1.01it/s]Training:   6%|▌         | 1207/20000 [17:26<5:13:21,  1.00s/it]Training:   6%|▌         | 1208/20000 [17:27<5:14:32,  1.00s/it]Training:   6%|▌         | 1209/20000 [17:28<5:14:30,  1.00s/it]Training:   6%|▌         | 1210/20000 [17:29<5:16:34,  1.01s/it]Step: 1210/20000, Loss: 1.4614, LR: 2.97568880e-05, AnchorL2: 4.464178e-07, AnchorTerm: 4.464178e-02
+Training:   6%|▌         | 1211/20000 [17:30<5:20:11,  1.02s/it]Training:   6%|▌         | 1212/20000 [17:31<5:19:43,  1.02s/it]Training:   6%|▌         | 1213/20000 [17:32<5:21:36,  1.03s/it]Training:   6%|▌         | 1214/20000 [17:33<5:20:40,  1.02s/it]Training:   6%|▌         | 1215/20000 [17:34<5:18:39,  1.02s/it]Training:   6%|▌         | 1216/20000 [17:35<5:14:02,  1.00s/it]Training:   6%|▌         | 1217/20000 [17:36<5:14:09,  1.00s/it]Training:   6%|▌         | 1218/20000 [17:37<5:15:11,  1.01s/it]Training:   6%|▌         | 1219/20000 [17:38<5:15:54,  1.01s/it]Training:   6%|▌         | 1220/20000 [17:39<5:16:57,  1.01s/it]Step: 1220/20000, Loss: 1.4210, LR: 2.97528653e-05, AnchorL2: 4.473152e-07, AnchorTerm: 4.473152e-02
+Training:   6%|▌         | 1221/20000 [17:40<5:18:40,  1.02s/it]Training:   6%|▌         | 1222/20000 [17:41<5:22:01,  1.03s/it]Training:   6%|▌         | 1223/20000 [17:42<5:19:46,  1.02s/it]Training:   6%|▌         | 1224/20000 [17:43<5:18:20,  1.02s/it]Training:   6%|▌         | 1225/20000 [17:44<5:11:00,  1.01it/s]Training:   6%|▌         | 1226/20000 [17:45<5:13:26,  1.00s/it]Training:   6%|▌         | 1227/20000 [17:46<5:06:43,  1.02it/s]Training:   6%|▌         | 1228/20000 [17:47<5:05:21,  1.02it/s]Training:   6%|▌         | 1229/20000 [17:48<5:09:36,  1.01it/s]Training:   6%|▌         | 1230/20000 [17:49<5:08:37,  1.01it/s]Step: 1230/20000, Loss: 1.4900, LR: 2.97488100e-05, AnchorL2: 4.483605e-07, AnchorTerm: 4.483605e-02
+Training:   6%|▌         | 1231/20000 [17:50<5:11:10,  1.01it/s]Training:   6%|▌         | 1232/20000 [17:51<5:10:24,  1.01it/s]Training:   6%|▌         | 1233/20000 [17:52<5:13:02,  1.00s/it]Training:   6%|▌         | 1234/20000 [17:53<5:11:26,  1.00it/s]Training:   6%|▌         | 1235/20000 [17:54<5:09:25,  1.01it/s]Training:   6%|▌         | 1236/20000 [17:55<5:08:25,  1.01it/s]Training:   6%|▌         | 1237/20000 [17:56<5:09:51,  1.01it/s]Training:   6%|▌         | 1238/20000 [17:57<5:09:46,  1.01it/s]Training:   6%|▌         | 1239/20000 [17:58<5:10:45,  1.01it/s]Training:   6%|▌         | 1240/20000 [17:59<5:11:22,  1.00it/s]Step: 1240/20000, Loss: 1.4450, LR: 2.97447220e-05, AnchorL2: 4.493340e-07, AnchorTerm: 4.493340e-02
+Training:   6%|▌         | 1241/20000 [18:00<5:16:22,  1.01s/it]Training:   6%|▌         | 1242/20000 [18:01<5:16:07,  1.01s/it]Training:   6%|▌         | 1243/20000 [18:02<5:15:26,  1.01s/it]Training:   6%|▌         | 1244/20000 [18:03<5:14:50,  1.01s/it]Training:   6%|▌         | 1245/20000 [18:04<5:11:40,  1.00it/s]Training:   6%|▌         | 1246/20000 [18:05<5:11:56,  1.00it/s]Training:   6%|▌         | 1247/20000 [18:06<5:06:42,  1.02it/s]Training:   6%|▌         | 1248/20000 [18:07<5:05:06,  1.02it/s]Training:   6%|▌         | 1249/20000 [18:08<4:59:24,  1.04it/s]Training:   6%|▋         | 1250/20000 [18:09<5:05:03,  1.02it/s]Step: 1250/20000, Loss: 1.4251, LR: 2.97406013e-05, AnchorL2: 4.504629e-07, AnchorTerm: 4.504629e-02
+Training:   6%|▋         | 1251/20000 [18:10<5:10:14,  1.01it/s]Training:   6%|▋         | 1252/20000 [18:11<5:08:52,  1.01it/s]Training:   6%|▋         | 1253/20000 [18:12<5:10:15,  1.01it/s]Training:   6%|▋         | 1254/20000 [18:13<5:06:46,  1.02it/s]Training:   6%|▋         | 1255/20000 [18:14<5:07:43,  1.02it/s]Training:   6%|▋         | 1256/20000 [18:15<5:06:34,  1.02it/s]Training:   6%|▋         | 1257/20000 [18:16<5:03:37,  1.03it/s]Training:   6%|▋         | 1258/20000 [18:16<5:01:32,  1.04it/s]Training:   6%|▋         | 1259/20000 [18:17<5:01:18,  1.04it/s]Training:   6%|▋         | 1260/20000 [18:18<5:06:13,  1.02it/s]Step: 1260/20000, Loss: 1.4984, LR: 2.97364479e-05, AnchorL2: 4.526672e-07, AnchorTerm: 4.526672e-02
+Training:   6%|▋         | 1261/20000 [18:19<5:11:21,  1.00it/s]Training:   6%|▋         | 1262/20000 [18:20<5:13:15,  1.00s/it]Training:   6%|▋         | 1263/20000 [18:21<5:13:23,  1.00s/it]Training:   6%|▋         | 1264/20000 [18:23<5:13:32,  1.00s/it]Training:   6%|▋         | 1265/20000 [18:24<5:14:48,  1.01s/it]Training:   6%|▋         | 1266/20000 [18:24<5:06:15,  1.02it/s]Training:   6%|▋         | 1267/20000 [18:25<5:09:30,  1.01it/s]Training:   6%|▋         | 1268/20000 [18:26<5:08:00,  1.01it/s]Training:   6%|▋         | 1269/20000 [18:27<5:10:19,  1.01it/s]Training:   6%|▋         | 1270/20000 [18:28<5:12:01,  1.00it/s]Step: 1270/20000, Loss: 1.4412, LR: 2.97322619e-05, AnchorL2: 4.552002e-07, AnchorTerm: 4.552002e-02
+Training:   6%|▋         | 1271/20000 [18:30<5:16:47,  1.01s/it]Training:   6%|▋         | 1272/20000 [18:31<5:20:37,  1.03s/it]Training:   6%|▋         | 1273/20000 [18:32<5:15:49,  1.01s/it]Training:   6%|▋         | 1274/20000 [18:33<5:11:22,  1.00it/s]Training:   6%|▋         | 1275/20000 [18:34<5:12:39,  1.00s/it]Training:   6%|▋         | 1276/20000 [18:35<5:12:26,  1.00s/it]Training:   6%|▋         | 1277/20000 [18:36<5:11:53,  1.00it/s]Training:   6%|▋         | 1278/20000 [18:37<5:13:21,  1.00s/it]Training:   6%|▋         | 1279/20000 [18:38<5:12:34,  1.00s/it]Training:   6%|▋         | 1280/20000 [18:38<5:09:47,  1.01it/s]Step: 1280/20000, Loss: 1.3910, LR: 2.97280432e-05, AnchorL2: 4.576224e-07, AnchorTerm: 4.576224e-02
+Training:   6%|▋         | 1281/20000 [18:39<5:10:53,  1.00it/s]Training:   6%|▋         | 1282/20000 [18:41<5:12:56,  1.00s/it]Training:   6%|▋         | 1283/20000 [18:42<5:14:26,  1.01s/it]Training:   6%|▋         | 1284/20000 [18:43<5:13:56,  1.01s/it]Training:   6%|▋         | 1285/20000 [18:44<5:14:56,  1.01s/it]Training:   6%|▋         | 1286/20000 [18:45<5:15:30,  1.01s/it]Training:   6%|▋         | 1287/20000 [18:46<5:16:02,  1.01s/it]Training:   6%|▋         | 1288/20000 [18:47<5:17:20,  1.02s/it]Training:   6%|▋         | 1289/20000 [18:48<5:18:58,  1.02s/it]Training:   6%|▋         | 1290/20000 [18:49<5:17:18,  1.02s/it]Step: 1290/20000, Loss: 1.4960, LR: 2.97237919e-05, AnchorL2: 4.590976e-07, AnchorTerm: 4.590976e-02
+Training:   6%|▋         | 1291/20000 [18:50<5:19:40,  1.03s/it]Training:   6%|▋         | 1292/20000 [18:51<5:18:53,  1.02s/it]Training:   6%|▋         | 1293/20000 [18:52<5:15:13,  1.01s/it]Training:   6%|▋         | 1294/20000 [18:53<5:15:27,  1.01s/it]Training:   6%|▋         | 1295/20000 [18:54<5:16:56,  1.02s/it]Training:   6%|▋         | 1296/20000 [18:55<5:16:22,  1.01s/it]Training:   6%|▋         | 1297/20000 [18:56<5:18:30,  1.02s/it]Training:   6%|▋         | 1298/20000 [18:57<5:19:12,  1.02s/it]Training:   6%|▋         | 1299/20000 [18:58<5:18:07,  1.02s/it]Training:   6%|▋         | 1300/20000 [18:59<5:14:06,  1.01s/it]Step: 1300/20000, Loss: 1.4517, LR: 2.97195079e-05, AnchorL2: 4.601287e-07, AnchorTerm: 4.601287e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 59880.00 MB
+GPU 0 max memory allocated: 55825.52 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   7%|▋         | 1301/20000 [19:00<5:14:26,  1.01s/it]Training:   7%|▋         | 1302/20000 [19:01<5:13:47,  1.01s/it]Training:   7%|▋         | 1303/20000 [19:02<5:07:37,  1.01it/s]Training:   7%|▋         | 1304/20000 [19:03<5:12:14,  1.00s/it]Training:   7%|▋         | 1305/20000 [19:04<5:15:35,  1.01s/it]Training:   7%|▋         | 1306/20000 [19:05<5:14:28,  1.01s/it]Training:   7%|▋         | 1307/20000 [19:06<5:11:58,  1.00s/it]Training:   7%|▋         | 1308/20000 [19:07<5:16:56,  1.02s/it]Training:   7%|▋         | 1309/20000 [19:08<5:15:47,  1.01s/it]Training:   7%|▋         | 1310/20000 [19:09<5:12:28,  1.00s/it]Step: 1310/20000, Loss: 1.5002, LR: 2.97151914e-05, AnchorL2: 4.606938e-07, AnchorTerm: 4.606938e-02
+Training:   7%|▋         | 1311/20000 [19:10<5:08:49,  1.01it/s]Training:   7%|▋         | 1312/20000 [19:11<5:10:19,  1.00it/s]Training:   7%|▋         | 1313/20000 [19:12<5:13:05,  1.01s/it]Training:   7%|▋         | 1314/20000 [19:13<5:11:29,  1.00s/it]Training:   7%|▋         | 1315/20000 [19:14<5:05:21,  1.02it/s]Training:   7%|▋         | 1316/20000 [19:15<5:08:36,  1.01it/s]Training:   7%|▋         | 1317/20000 [19:16<5:09:34,  1.01it/s]Training:   7%|▋         | 1318/20000 [19:17<5:11:54,  1.00s/it]Training:   7%|▋         | 1319/20000 [19:18<5:15:23,  1.01s/it]Training:   7%|▋         | 1320/20000 [19:19<5:17:24,  1.02s/it]Step: 1320/20000, Loss: 1.4451, LR: 2.97108422e-05, AnchorL2: 4.610843e-07, AnchorTerm: 4.610843e-02
+Training:   7%|▋         | 1321/20000 [19:20<5:14:07,  1.01s/it]Training:   7%|▋         | 1322/20000 [19:21<5:12:10,  1.00s/it]Training:   7%|▋         | 1323/20000 [19:22<5:15:37,  1.01s/it]Training:   7%|▋         | 1324/20000 [19:23<5:15:02,  1.01s/it]Training:   7%|▋         | 1325/20000 [19:24<5:17:20,  1.02s/it]Training:   7%|▋         | 1326/20000 [19:25<5:18:40,  1.02s/it]Training:   7%|▋         | 1327/20000 [19:26<5:16:06,  1.02s/it]Training:   7%|▋         | 1328/20000 [19:27<5:12:47,  1.01s/it]Training:   7%|▋         | 1329/20000 [19:28<5:13:45,  1.01s/it]Training:   7%|▋         | 1330/20000 [19:29<5:15:51,  1.02s/it]Step: 1330/20000, Loss: 1.4273, LR: 2.97064604e-05, AnchorL2: 4.619507e-07, AnchorTerm: 4.619507e-02
+Training:   7%|▋         | 1331/20000 [19:30<5:15:56,  1.02s/it]Training:   7%|▋         | 1332/20000 [19:31<5:16:45,  1.02s/it]Training:   7%|▋         | 1333/20000 [19:32<5:14:40,  1.01s/it]Training:   7%|▋         | 1334/20000 [19:33<5:10:36,  1.00it/s]Training:   7%|▋         | 1335/20000 [19:34<5:12:35,  1.00s/it]Training:   7%|▋         | 1336/20000 [19:35<5:11:10,  1.00s/it]Training:   7%|▋         | 1337/20000 [19:36<5:08:44,  1.01it/s]Training:   7%|▋         | 1338/20000 [19:37<5:05:37,  1.02it/s]Training:   7%|▋         | 1339/20000 [19:38<5:04:04,  1.02it/s]Training:   7%|▋         | 1340/20000 [19:39<5:00:02,  1.04it/s]Step: 1340/20000, Loss: 1.3823, LR: 2.97020461e-05, AnchorL2: 4.634377e-07, AnchorTerm: 4.634377e-02
+Training:   7%|▋         | 1341/20000 [19:40<5:03:16,  1.03it/s]Training:   7%|▋         | 1342/20000 [19:41<5:06:29,  1.01it/s]Training:   7%|▋         | 1343/20000 [19:42<5:08:19,  1.01it/s]Training:   7%|▋         | 1344/20000 [19:43<5:07:28,  1.01it/s]Training:   7%|▋         | 1345/20000 [19:44<5:03:50,  1.02it/s]Training:   7%|▋         | 1346/20000 [19:45<5:04:49,  1.02it/s]Training:   7%|▋         | 1347/20000 [19:46<5:10:40,  1.00it/s]Training:   7%|▋         | 1348/20000 [19:47<5:14:18,  1.01s/it]Training:   7%|▋         | 1349/20000 [19:48<5:12:42,  1.01s/it]Training:   7%|▋         | 1350/20000 [19:49<5:16:04,  1.02s/it]Step: 1350/20000, Loss: 1.4707, LR: 2.96975992e-05, AnchorL2: 4.646145e-07, AnchorTerm: 4.646145e-02
+Training:   7%|▋         | 1351/20000 [19:50<5:13:36,  1.01s/it]Training:   7%|▋         | 1352/20000 [19:51<5:13:58,  1.01s/it]Training:   7%|▋         | 1353/20000 [19:52<5:15:15,  1.01s/it]Training:   7%|▋         | 1354/20000 [19:53<5:15:06,  1.01s/it]Training:   7%|▋         | 1355/20000 [19:54<5:10:58,  1.00s/it]Training:   7%|▋         | 1356/20000 [19:55<5:06:07,  1.02it/s]Training:   7%|▋         | 1357/20000 [19:56<5:07:07,  1.01it/s]Training:   7%|▋         | 1358/20000 [19:57<5:10:20,  1.00it/s]Training:   7%|▋         | 1359/20000 [19:58<5:14:30,  1.01s/it]Training:   7%|▋         | 1360/20000 [19:59<5:14:28,  1.01s/it]Step: 1360/20000, Loss: 1.4651, LR: 2.96931197e-05, AnchorL2: 4.652815e-07, AnchorTerm: 4.652815e-02
+Training:   7%|▋         | 1361/20000 [20:00<5:15:00,  1.01s/it]Training:   7%|▋         | 1362/20000 [20:01<5:14:30,  1.01s/it]Training:   7%|▋         | 1363/20000 [20:02<5:15:47,  1.02s/it]Training:   7%|▋         | 1364/20000 [20:03<5:16:50,  1.02s/it]Training:   7%|▋         | 1365/20000 [20:04<5:13:49,  1.01s/it]Training:   7%|▋         | 1366/20000 [20:05<5:14:27,  1.01s/it]Training:   7%|▋         | 1367/20000 [20:06<5:15:03,  1.01s/it]Training:   7%|▋         | 1368/20000 [20:07<5:17:34,  1.02s/it]Training:   7%|▋         | 1369/20000 [20:08<5:16:04,  1.02s/it]Training:   7%|▋         | 1370/20000 [20:09<5:13:10,  1.01s/it]Step: 1370/20000, Loss: 1.3692, LR: 2.96886076e-05, AnchorL2: 4.657123e-07, AnchorTerm: 4.657123e-02
+Training:   7%|▋         | 1371/20000 [20:10<5:11:42,  1.00s/it]Training:   7%|▋         | 1372/20000 [20:11<5:11:58,  1.00s/it]Training:   7%|▋         | 1373/20000 [20:12<5:14:55,  1.01s/it]Training:   7%|▋         | 1374/20000 [20:13<5:13:54,  1.01s/it]Training:   7%|▋         | 1375/20000 [20:14<5:13:25,  1.01s/it]Training:   7%|▋         | 1376/20000 [20:15<5:12:00,  1.01s/it]Training:   7%|▋         | 1377/20000 [20:16<5:09:28,  1.00it/s]Training:   7%|▋         | 1378/20000 [20:17<5:09:48,  1.00it/s]Training:   7%|▋         | 1379/20000 [20:18<5:09:40,  1.00it/s]Training:   7%|▋         | 1380/20000 [20:19<5:09:17,  1.00it/s]Step: 1380/20000, Loss: 1.4192, LR: 2.96840630e-05, AnchorL2: 4.662673e-07, AnchorTerm: 4.662673e-02
+Training:   7%|▋         | 1381/20000 [20:20<5:12:28,  1.01s/it]Training:   7%|▋         | 1382/20000 [20:21<5:12:55,  1.01s/it]Training:   7%|▋         | 1383/20000 [20:22<5:16:52,  1.02s/it]Training:   7%|▋         | 1384/20000 [20:23<5:18:25,  1.03s/it]Training:   7%|▋         | 1385/20000 [20:24<5:12:58,  1.01s/it]Training:   7%|▋         | 1386/20000 [20:25<5:08:47,  1.00it/s]Training:   7%|▋         | 1387/20000 [20:26<5:10:21,  1.00s/it]Training:   7%|▋         | 1388/20000 [20:27<5:05:03,  1.02it/s]Training:   7%|▋         | 1389/20000 [20:28<5:06:01,  1.01it/s]Training:   7%|▋         | 1390/20000 [20:29<5:08:33,  1.01it/s]Step: 1390/20000, Loss: 1.4554, LR: 2.96794859e-05, AnchorL2: 4.670482e-07, AnchorTerm: 4.670482e-02
+Training:   7%|▋         | 1391/20000 [20:30<5:11:34,  1.00s/it]Training:   7%|▋         | 1392/20000 [20:31<5:10:27,  1.00s/it]Training:   7%|▋         | 1393/20000 [20:32<5:09:59,  1.00it/s]Training:   7%|▋         | 1394/20000 [20:33<5:10:30,  1.00s/it]Training:   7%|▋         | 1395/20000 [20:34<5:13:43,  1.01s/it]Training:   7%|▋         | 1396/20000 [20:35<5:15:30,  1.02s/it]Training:   7%|▋         | 1397/20000 [20:36<5:14:04,  1.01s/it]Training:   7%|▋         | 1398/20000 [20:37<5:11:41,  1.01s/it]Training:   7%|▋         | 1399/20000 [20:38<5:11:58,  1.01s/it]Training:   7%|▋         | 1400/20000 [20:39<5:11:44,  1.01s/it]Step: 1400/20000, Loss: 1.4374, LR: 2.96748763e-05, AnchorL2: 4.686233e-07, AnchorTerm: 4.686233e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 59880.00 MB
+GPU 0 max memory allocated: 55825.52 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   7%|▋         | 1401/20000 [20:40<5:12:29,  1.01s/it]Training:   7%|▋         | 1402/20000 [20:41<5:12:26,  1.01s/it]Training:   7%|▋         | 1403/20000 [20:42<5:10:21,  1.00s/it]Training:   7%|▋         | 1404/20000 [20:43<5:06:41,  1.01it/s]Training:   7%|▋         | 1405/20000 [20:44<5:09:56,  1.00s/it]Training:   7%|▋         | 1406/20000 [20:45<5:13:42,  1.01s/it]Training:   7%|▋         | 1407/20000 [20:46<5:12:43,  1.01s/it]Training:   7%|▋         | 1408/20000 [20:47<5:11:58,  1.01s/it]Training:   7%|▋         | 1409/20000 [20:48<5:03:00,  1.02it/s]Training:   7%|▋         | 1410/20000 [20:49<5:01:32,  1.03it/s]Step: 1410/20000, Loss: 1.4459, LR: 2.96702341e-05, AnchorL2: 4.714128e-07, AnchorTerm: 4.714128e-02
+Training:   7%|▋         | 1411/20000 [20:50<5:02:12,  1.03it/s]Training:   7%|▋         | 1412/20000 [20:51<5:05:53,  1.01it/s]Training:   7%|▋         | 1413/20000 [20:52<5:09:13,  1.00it/s]Training:   7%|▋         | 1414/20000 [20:53<5:02:55,  1.02it/s]Training:   7%|▋         | 1415/20000 [20:54<4:58:49,  1.04it/s]Training:   7%|▋         | 1416/20000 [20:55<5:03:18,  1.02it/s]Training:   7%|▋         | 1417/20000 [20:56<5:06:01,  1.01it/s]Training:   7%|▋         | 1418/20000 [20:57<5:08:33,  1.00it/s]Training:   7%|▋         | 1419/20000 [20:58<5:04:52,  1.02it/s]Training:   7%|▋         | 1420/20000 [20:59<5:04:47,  1.02it/s]Step: 1420/20000, Loss: 1.4593, LR: 2.96655595e-05, AnchorL2: 4.736283e-07, AnchorTerm: 4.736283e-02
+Training:   7%|▋         | 1421/20000 [21:00<5:06:37,  1.01it/s]Training:   7%|▋         | 1422/20000 [21:01<5:09:06,  1.00it/s]Training:   7%|▋         | 1423/20000 [21:02<5:11:48,  1.01s/it]Training:   7%|▋         | 1424/20000 [21:03<5:10:15,  1.00s/it]Training:   7%|▋         | 1425/20000 [21:04<5:15:19,  1.02s/it]Training:   7%|▋         | 1426/20000 [21:05<5:17:02,  1.02s/it]Training:   7%|▋         | 1427/20000 [21:06<5:17:12,  1.02s/it]Training:   7%|▋         | 1428/20000 [21:07<5:11:52,  1.01s/it]Training:   7%|▋         | 1429/20000 [21:08<5:09:53,  1.00s/it]Training:   7%|▋         | 1430/20000 [21:09<5:12:13,  1.01s/it]Step: 1430/20000, Loss: 1.4322, LR: 2.96608524e-05, AnchorL2: 4.747986e-07, AnchorTerm: 4.747986e-02
+Training:   7%|▋         | 1431/20000 [21:10<5:14:35,  1.02s/it]Training:   7%|▋         | 1432/20000 [21:11<5:09:01,  1.00it/s]Training:   7%|▋         | 1433/20000 [21:12<5:11:21,  1.01s/it]Training:   7%|▋         | 1434/20000 [21:13<5:13:49,  1.01s/it]Training:   7%|▋         | 1435/20000 [21:14<5:16:03,  1.02s/it]Training:   7%|▋         | 1436/20000 [21:15<5:13:39,  1.01s/it]Training:   7%|▋         | 1437/20000 [21:16<5:11:23,  1.01s/it]Training:   7%|▋         | 1438/20000 [21:17<5:12:37,  1.01s/it]Training:   7%|▋         | 1439/20000 [21:18<5:08:53,  1.00it/s]Training:   7%|▋         | 1440/20000 [21:19<5:11:53,  1.01s/it]Step: 1440/20000, Loss: 1.4616, LR: 2.96561128e-05, AnchorL2: 4.759561e-07, AnchorTerm: 4.759561e-02
+Training:   7%|▋         | 1441/20000 [21:20<5:10:37,  1.00s/it]Training:   7%|▋         | 1442/20000 [21:21<5:11:35,  1.01s/it]Training:   7%|▋         | 1443/20000 [21:22<5:07:41,  1.01it/s]Training:   7%|▋         | 1444/20000 [21:23<5:11:36,  1.01s/it]Training:   7%|▋         | 1445/20000 [21:24<5:09:46,  1.00s/it]Training:   7%|▋         | 1446/20000 [21:25<5:09:55,  1.00s/it]Training:   7%|▋         | 1447/20000 [21:26<5:11:44,  1.01s/it]Training:   7%|▋         | 1448/20000 [21:27<5:05:18,  1.01it/s]Training:   7%|▋         | 1449/20000 [21:28<5:07:56,  1.00it/s]Training:   7%|▋         | 1450/20000 [21:29<5:10:57,  1.01s/it]Step: 1450/20000, Loss: 1.4057, LR: 2.96513407e-05, AnchorL2: 4.769564e-07, AnchorTerm: 4.769564e-02
+Training:   7%|▋         | 1451/20000 [21:30<5:11:13,  1.01s/it]Training:   7%|▋         | 1452/20000 [21:31<5:07:46,  1.00it/s]Training:   7%|▋         | 1453/20000 [21:32<5:12:01,  1.01s/it]Training:   7%|▋         | 1454/20000 [21:33<5:12:59,  1.01s/it]Training:   7%|▋         | 1455/20000 [21:34<5:14:14,  1.02s/it]Training:   7%|▋         | 1456/20000 [21:35<5:13:15,  1.01s/it]Training:   7%|▋         | 1457/20000 [21:36<5:11:27,  1.01s/it]Training:   7%|▋         | 1458/20000 [21:37<5:06:36,  1.01it/s]Training:   7%|▋         | 1459/20000 [21:38<5:03:41,  1.02it/s]Training:   7%|▋         | 1460/20000 [21:39<5:09:21,  1.00s/it]Step: 1460/20000, Loss: 1.4214, LR: 2.96465362e-05, AnchorL2: 4.775863e-07, AnchorTerm: 4.775863e-02
+Training:   7%|▋         | 1461/20000 [21:40<5:13:50,  1.02s/it]Training:   7%|▋         | 1462/20000 [21:41<5:09:34,  1.00s/it]Training:   7%|▋         | 1463/20000 [21:42<5:11:40,  1.01s/it]Training:   7%|▋         | 1464/20000 [21:43<5:11:17,  1.01s/it]Training:   7%|▋         | 1465/20000 [21:44<5:13:07,  1.01s/it]Training:   7%|▋         | 1466/20000 [21:45<5:16:24,  1.02s/it]Training:   7%|▋         | 1467/20000 [21:46<5:10:30,  1.01s/it]Training:   7%|▋         | 1468/20000 [21:47<5:12:52,  1.01s/it]Training:   7%|▋         | 1469/20000 [21:48<5:16:35,  1.03s/it]Training:   7%|▋         | 1470/20000 [21:49<5:07:05,  1.01it/s]Step: 1470/20000, Loss: 1.4355, LR: 2.96416993e-05, AnchorL2: 4.778839e-07, AnchorTerm: 4.778839e-02
+Training:   7%|▋         | 1471/20000 [21:50<5:03:14,  1.02it/s]Training:   7%|▋         | 1472/20000 [21:51<5:07:10,  1.01it/s]Training:   7%|▋         | 1473/20000 [21:52<5:05:51,  1.01it/s]Training:   7%|▋         | 1474/20000 [21:53<5:01:38,  1.02it/s]Training:   7%|▋         | 1475/20000 [21:54<5:04:55,  1.01it/s]Training:   7%|▋         | 1476/20000 [21:55<5:11:01,  1.01s/it]Training:   7%|▋         | 1477/20000 [21:56<5:09:09,  1.00s/it]Training:   7%|▋         | 1478/20000 [21:57<5:12:34,  1.01s/it]Training:   7%|▋         | 1479/20000 [21:58<5:11:58,  1.01s/it]Training:   7%|▋         | 1480/20000 [21:59<5:13:32,  1.02s/it]Step: 1480/20000, Loss: 1.4361, LR: 2.96368299e-05, AnchorL2: 4.779393e-07, AnchorTerm: 4.779393e-02
+Training:   7%|▋         | 1481/20000 [22:00<5:14:51,  1.02s/it]Training:   7%|▋         | 1482/20000 [22:01<5:14:16,  1.02s/it]Training:   7%|▋         | 1483/20000 [22:02<5:14:34,  1.02s/it]Training:   7%|▋         | 1484/20000 [22:03<5:09:42,  1.00s/it]Training:   7%|▋         | 1485/20000 [22:04<5:03:00,  1.02it/s]Training:   7%|▋         | 1486/20000 [22:05<5:05:28,  1.01it/s]Training:   7%|▋         | 1487/20000 [22:06<5:07:46,  1.00it/s]Training:   7%|▋         | 1488/20000 [22:07<5:08:06,  1.00it/s]Training:   7%|▋         | 1489/20000 [22:08<4:59:48,  1.03it/s]Training:   7%|▋         | 1490/20000 [22:09<5:02:10,  1.02it/s]Step: 1490/20000, Loss: 1.4066, LR: 2.96319281e-05, AnchorL2: 4.782909e-07, AnchorTerm: 4.782909e-02
+Training:   7%|▋         | 1491/20000 [22:10<5:06:00,  1.01it/s]Training:   7%|▋         | 1492/20000 [22:11<5:08:00,  1.00it/s]Training:   7%|▋         | 1493/20000 [22:12<5:06:19,  1.01it/s]Training:   7%|▋         | 1494/20000 [22:13<5:08:01,  1.00it/s]Training:   7%|▋         | 1495/20000 [22:14<5:05:06,  1.01it/s]Training:   7%|▋         | 1496/20000 [22:15<5:06:46,  1.01it/s]Training:   7%|▋         | 1497/20000 [22:16<5:05:25,  1.01it/s]Training:   7%|▋         | 1498/20000 [22:17<5:08:43,  1.00s/it]Training:   7%|▋         | 1499/20000 [22:18<5:11:29,  1.01s/it]Training:   8%|▊         | 1500/20000 [22:19<5:10:19,  1.01s/it]Step: 1500/20000, Loss: 1.4189, LR: 2.96269939e-05, AnchorL2: 4.786154e-07, AnchorTerm: 4.786154e-02
+GPU 0 memory allocated: 10328.65 MB
+GPU 0 memory reserved: 59880.00 MB
+GPU 0 max memory allocated: 55825.52 MB
+GPU 1 memory allocated: 0.00 MB
+GPU 1 memory reserved: 0.00 MB
+GPU 1 max memory allocated: 0.00 MB
+GPU 2 memory allocated: 0.00 MB
+GPU 2 memory reserved: 0.00 MB
+GPU 2 max memory allocated: 0.00 MB
+GPU 3 memory allocated: 0.00 MB
+GPU 3 memory reserved: 0.00 MB
+GPU 3 max memory allocated: 0.00 MB
+Training:   8%|▊         | 1501/20000 [22:20<5:11:06,  1.01s/it]Training:   8%|▊         | 1502/20000 [22:21<5:11:58,  1.01s/it]Training:   8%|▊         | 1503/20000 [22:22<5:11:38,  1.01s/it]Training:   8%|▊         | 1504/20000 [22:23<5:10:34,  1.01s/it]Training:   8%|▊         | 1505/20000 [22:24<5:10:10,  1.01s/it]Training:   8%|▊         | 1506/20000 [22:25<5:11:40,  1.01s/it]Training:   8%|▊         | 1507/20000 [22:26<5:09:41,  1.00s/it]Training:   8%|▊         | 1508/20000 [22:27<5:11:57,  1.01s/it]Training:   8%|▊         | 1509/20000 [22:28<5:11:28,  1.01s/it]Training:   8%|▊         | 1510/20000 [22:29<5:07:48,  1.00it/s]Step: 1510/20000, Loss: 1.4029, LR: 2.96220273e-05, AnchorL2: 4.791296e-07, AnchorTerm: 4.791296e-02
+[2026-07-05T14:09:49.016] error: *** JOB 745057 ON nlplarge-compute-01 CANCELLED AT 2026-07-05T14:09:49 DUE TO PREEMPTION ***
