@@ -17,7 +17,9 @@ Run directly: ``python tokenize-asap-sliding.py``
 """
 
 import argparse
+import functools
 import os
+from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
@@ -27,6 +29,7 @@ from anticipation.config import *
 from anticipation.vocab import *
 from anticipation.asap_aligned_stream import (
     STREAM_CACHE_DIR,
+    TARGET_BEAT_INTERVAL,
     build_performance_anchored_stream,
 )
 from anticipation.packed_sequence import (
@@ -118,7 +121,12 @@ def _encode_score_triplet(time_units, dur_units, pitch_token, overflow):
     ]
 
 
-def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
+def tokenize_sliding_windows(
+    filegroup,
+    prefix_controls=PREFIX_CONTROLS,
+    target_beat_interval=TARGET_BEAT_INTERVAL,
+    cache_dir=STREAM_CACHE_DIR,
+):
     """
     Tokenize a single performance-score pair, extracting all possible packed sequences
     using a sliding window approach.
@@ -126,8 +134,9 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
     Matches the exact interleaving logic from tokenize-asap-openings.py but applied at
     multiple starting positions.
 
-    Score times are ENFORCED to have exactly 0.5 seconds between beats (TARGET_BEAT_INTERVAL=0.5).
-    This means beat[0]->0.0s, beat[1]->0.5s, beat[2]->1.0s, etc., regardless of original tempo.
+    Score times are ENFORCED to have exactly ``target_beat_interval`` seconds between
+    beats. This means beat[0]->0.0s, beat[1]->target_beat_interval s, etc., regardless
+    of original tempo.
 
     Performance/control times are normalized to start at 0 but keep original tempo.
     Score times are first beat-normalized globally, then shifted to a window-local
@@ -136,6 +145,11 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
     Args:
         filegroup: Tuple of (perf_midi, score_midi, perf_beats, score_beats)
         prefix_controls: Number of control notes in the prefix (default PREFIX_CONTROLS)
+        target_beat_interval: seconds between adjacent normalized score beats
+        cache_dir: aligned-stream cache directory (must be dedicated per distinct
+            target_beat_interval -- the cache filename is keyed only on the
+            performance MIDI path, not the beat interval, so reusing the default
+            0.5s cache dir here would silently overwrite its cached alignments)
 
     Returns:
         Dict with:
@@ -149,7 +163,11 @@ def tokenize_sliding_windows(filegroup, prefix_controls=PREFIX_CONTROLS):
     piece_id = file1
 
     try:
-        aligned_items = build_performance_anchored_stream(file1, file2, file3, file4)
+        aligned_items = build_performance_anchored_stream(
+            file1, file2, file3, file4,
+            target_beat_interval=target_beat_interval,
+            cache_dir=cache_dir,
+        )
 
         # Drop performance notes with no aligned score note: they are simply absent
         # from the interleaving (no dummy placeholders), so every control triplet in
@@ -328,9 +346,11 @@ def format_failure_warning(piece_id, failure_reason):
     return f"WARNING: {piece_id}: tokenization produced no sequences - {failure_reason}"
 
 
-def process_single_piece(filegroup):
+def process_single_piece(filegroup, target_beat_interval=TARGET_BEAT_INTERVAL, cache_dir=STREAM_CACHE_DIR):
     """Worker function for multiprocessing. Returns a dict from tokenize_sliding_windows()."""
-    return tokenize_sliding_windows(filegroup)
+    return tokenize_sliding_windows(
+        filegroup, target_beat_interval=target_beat_interval, cache_dir=cache_dir
+    )
 
 
 def load_valid_filegroups():
@@ -358,6 +378,54 @@ def load_valid_filegroups():
     return datafiles, score_keys, piece_names
 
 
+def read_split_manifest(path):
+    """Read a train/validation/test manifest (as written by make_paper_split.py):
+    `=== TRAIN/VALIDATION/TEST PERFORMANCES ===` section headers followed by one
+    `./<rel perf path>` per line. Returns {rel_perf_path: 'train'|'validation'|'test'}."""
+    section_for_header = {
+        "TRAIN": "train", "VALIDATION": "validation", "VAL": "validation", "TEST": "test",
+    }
+    mapping = {}
+    current = None
+    with open(path) as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("===") and line.endswith("==="):
+                word = line.strip("= ").split()[0].upper()
+                current = section_for_header.get(word)
+                if current is None:
+                    raise ValueError(f"Unknown split section header: {line!r}")
+                continue
+            if current is None:
+                raise ValueError(f"Manifest entry before any section header: {line!r}")
+            rel = line[2:] if line.startswith("./") else line
+            mapping[rel] = current
+    return mapping
+
+
+def split_by_manifest(datafiles, score_keys, piece_names, manifest):
+    """Partition pieces into train/validation/test using an explicit per-performance
+    manifest ({rel_perf_path: split}). Performances absent from the manifest are
+    dropped entirely (the reference papers exclude them). Returns a dict of
+    split -> (pairs, piece_names) plus the list of dropped performance names."""
+    buckets = {"train": ([], []), "validation": ([], []), "test": ([], [])}
+    dropped = []
+    for filegroup, piece_name in zip(datafiles, piece_names):
+        split = manifest.get(piece_name)
+        if split is None:
+            dropped.append(piece_name)
+            continue
+        buckets[split][0].append(filegroup)
+        buckets[split][1].append(piece_name)
+    unknown = set(manifest) - set(piece_names)
+    if unknown:
+        print(f"WARNING: {len(unknown)} manifest performances not found among valid "
+              f"ASAP pieces (e.g. {sorted(unknown)[:3]})")
+    return buckets, dropped
+
+
 def split_by_score(datafiles, score_keys, piece_names, test_frac=TEST_FRACTION, seed=SPLIT_SEED):
     """Split pieces into train/test by unique score to avoid data leakage."""
     rng = np.random.default_rng(seed)
@@ -379,9 +447,10 @@ def split_by_score(datafiles, score_keys, piece_names, test_frac=TEST_FRACTION, 
     return train_pairs, test_pairs, train_piece_names, test_piece_names
 
 
-def write_split_file(datafiles, train_pairs, test_pairs, train_piece_names, test_piece_names):
-    print(f"Writing split information to {SPLIT_FILE}...")
-    with open(SPLIT_FILE, 'w') as f:
+def write_split_file(datafiles, train_pairs, test_pairs, train_piece_names, test_piece_names,
+                      split_file=SPLIT_FILE):
+    print(f"Writing split information to {split_file}...")
+    with open(split_file, 'w') as f:
         f.write(f"# Train/Test Split (seed={SPLIT_SEED}, test_frac={TEST_FRACTION})\n")
         f.write(
             f"# Total pieces: {len(datafiles)} "
@@ -398,10 +467,11 @@ def write_split_file(datafiles, train_pairs, test_pairs, train_piece_names, test
         f.write("\n=== TEST PIECES ===\n")
         for piece_name in sorted(test_piece_names):
             f.write(f"./{piece_name}\n")
-    print(f"Split file written: {SPLIT_FILE}\n")
+    print(f"Split file written: {split_file}\n")
 
 
-def tokenize_split(pairs, output_path, desc, workers=NUM_WORKERS):
+def tokenize_split(pairs, output_path, desc, workers=NUM_WORKERS,
+                    target_beat_interval=TARGET_BEAT_INTERVAL, cache_dir=STREAM_CACHE_DIR):
     """Tokenize a list of pieces in parallel, streaming results to output_path.
 
     Returns (num_sequences, num_pieces_success, num_pieces_failed).
@@ -411,10 +481,13 @@ def tokenize_split(pairs, output_path, desc, workers=NUM_WORKERS):
     pieces_failed = 0
     unmatched_dropped_total = 0
 
+    worker_fn = functools.partial(
+        process_single_piece, target_beat_interval=target_beat_interval, cache_dir=cache_dir
+    )
     with open(output_path, 'w') as out_file:
         with Pool(processes=workers) as pool:
             with tqdm(total=len(pairs), desc=desc, unit='piece') as pbar:
-                for result in pool.imap_unordered(process_single_piece, pairs):
+                for result in pool.imap_unordered(worker_fn, pairs):
                     if result["pickup_warning"] is not None:
                         tqdm.write(format_pickup_warning(result["pickup_warning"]))
                     if result.get("overflow_warning") is not None:
@@ -480,6 +553,39 @@ def parse_args():
         default=NUM_WORKERS,
         help=f"Number of parallel worker processes (default: {NUM_WORKERS}).",
     )
+    parser.add_argument(
+        "--beat-interval",
+        type=float,
+        default=TARGET_BEAT_INTERVAL,
+        help=f"Seconds between adjacent normalized score beats (default: {TARGET_BEAT_INTERVAL}).",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=str(STREAM_CACHE_DIR),
+        help=(
+            "Aligned-stream cache directory (default: %(default)s). MUST be overridden "
+            "to a dedicated directory when --beat-interval differs from the default: the "
+            "cache filename is keyed only on the performance MIDI path, not the beat "
+            "interval, so reusing the default cache dir at a different beat interval "
+            "silently overwrites its cached alignments in place."
+        ),
+    )
+    parser.add_argument("--train-output", type=str, default=TRAIN_OUTPUT,
+                         help=f"Train sequences output path (default: {TRAIN_OUTPUT}).")
+    parser.add_argument("--test-output", type=str, default=TEST_OUTPUT,
+                         help=f"Test sequences output path (default: {TEST_OUTPUT}).")
+    parser.add_argument("--val-output", type=str, default=None,
+                         help="Validation sequences output path. Only used with "
+                              "--split-input (a 3-way manifest); the built-in seed "
+                              "split is train/test only.")
+    parser.add_argument("--split-input", type=str, default=None,
+                         help="Read train/validation/test membership from this manifest "
+                              "(as written by make_paper_split.py) instead of the built-in "
+                              "seed-based split. Performances not listed are dropped.")
+    parser.add_argument("--split-file", type=str, default=SPLIT_FILE,
+                         help=f"Split manifest output path (default: {SPLIT_FILE}). "
+                              "Ignored when --split-input is given.")
     return parser.parse_args()
 
 
@@ -487,62 +593,92 @@ def main():
     args = parse_args()
     if args.workers < 1:
         raise ValueError("--workers must be >= 1")
+    if args.beat_interval != TARGET_BEAT_INTERVAL and str(args.cache_dir) == str(STREAM_CACHE_DIR):
+        raise ValueError(
+            f"--beat-interval {args.beat_interval} differs from the default "
+            f"{TARGET_BEAT_INTERVAL} but --cache-dir was left at the default "
+            f"({STREAM_CACHE_DIR}) -- this would overwrite the default beat interval's "
+            "cached alignments in place. Pass a dedicated --cache-dir."
+        )
+    cache_dir = Path(args.cache_dir)
 
     print("Tokenization configuration:")
     print(f"  Workers: {args.workers}")
+    print(f"  Beat interval: {args.beat_interval}s")
     print(f"  Context size: {CONTEXT_SIZE}")
     print(f"  Serialized length: {PACKED_BODY_LENGTH}")
     print(f"  Prefix controls: {PREFIX_CONTROLS} (fixed)")
     print("  Strategy: Sliding window over all piece positions")
     print("  Output format: space-separated tokens (one sequence per line)")
-    print(f"  Aligned-stream cache: {STREAM_CACHE_DIR}")
+    print(f"  Aligned-stream cache: {cache_dir}")
     print()
 
     datafiles, score_keys, piece_names = load_valid_filegroups()
-    train_pairs, test_pairs, train_piece_names, test_piece_names = split_by_score(
-        datafiles, score_keys, piece_names
-    )
-    print(f"Train: {len(train_pairs)} pieces")
-    print(f"Test: {len(test_pairs)} pieces\n")
 
-    write_split_file(datafiles, train_pairs, test_pairs, train_piece_names, test_piece_names)
+    # `splits` is a list of (name, pairs, piece_names, output_path) to tokenize.
+    if args.split_input:
+        manifest = read_split_manifest(args.split_input)
+        buckets, dropped = split_by_manifest(datafiles, score_keys, piece_names, manifest)
+        if args.val_output is None:
+            raise ValueError("--split-input requires --val-output (the manifest is 3-way).")
+        print(f"Using explicit split manifest: {args.split_input}")
+        print(f"  Train: {len(buckets['train'][0])} pieces")
+        print(f"  Validation: {len(buckets['validation'][0])} pieces")
+        print(f"  Test: {len(buckets['test'][0])} pieces")
+        print(f"  Dropped (not in manifest): {len(dropped)} pieces\n")
+        splits = [
+            ("Train", buckets["train"][0], buckets["train"][1], args.train_output),
+            ("Validation", buckets["validation"][0], buckets["validation"][1], args.val_output),
+            ("Test", buckets["test"][0], buckets["test"][1], args.test_output),
+        ]
+    else:
+        train_pairs, test_pairs, train_piece_names, test_piece_names = split_by_score(
+            datafiles, score_keys, piece_names
+        )
+        print(f"Train: {len(train_pairs)} pieces")
+        print(f"Test: {len(test_pairs)} pieces\n")
+        write_split_file(datafiles, train_pairs, test_pairs, train_piece_names,
+                         test_piece_names, split_file=args.split_file)
+        splits = [
+            ("Train", train_pairs, train_piece_names, args.train_output),
+            ("Test", test_pairs, test_piece_names, args.test_output),
+        ]
 
     os.makedirs('data', exist_ok=True)
 
-    print("Processing training set...")
-    train_total, train_success, train_failed = tokenize_split(
-        train_pairs, TRAIN_OUTPUT, 'Train', workers=args.workers
-    )
-    print(f"Train: {train_total} sequences from {train_success} pieces, {train_failed} pieces failed")
-
-    print("\nProcessing test set...")
-    test_total, test_success, test_failed = tokenize_split(
-        test_pairs, TEST_OUTPUT, 'Test', workers=args.workers
-    )
-    print(f"Test: {test_total} sequences from {test_success} pieces, {test_failed} pieces failed")
+    results = {}
+    for name, pairs, _names, out_path in splits:
+        print(f"Processing {name.lower()} set...")
+        total, success, failed = tokenize_split(
+            pairs, out_path, name, workers=args.workers,
+            target_beat_interval=args.beat_interval, cache_dir=cache_dir,
+        )
+        print(f"{name}: {total} sequences from {success} pieces, {failed} pieces failed")
+        results[name] = (total, success, failed, len(pairs), out_path)
 
     print("\n" + "=" * 80)
     print("VERIFICATION")
     print("=" * 80)
-    if train_total > 0:
-        verify_first_sequence(TRAIN_OUTPUT)
+    if results["Train"][0] > 0:
+        verify_first_sequence(args.train_output)
     else:
         print("No sequences generated!")
 
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"Training sequences: {train_total} from {train_success}/{len(train_pairs)} pieces")
-    if train_success > 0:
-        print(f"  Average sequences per piece: {train_total / train_success:.1f}")
-    print(f"Test sequences: {test_total} from {test_success}/{len(test_pairs)} pieces")
-    if test_success > 0:
-        print(f"  Average sequences per piece: {test_total / test_success:.1f}")
-    print(f"Total sequences: {train_total + test_total}")
+    grand_total = 0
+    for name, (total, success, _failed, n_pairs, out_path) in results.items():
+        grand_total += total
+        print(f"{name} sequences: {total} from {success}/{n_pairs} pieces")
+        if success > 0:
+            print(f"  Average sequences per piece: {total / success:.1f}")
+    print(f"Total sequences: {grand_total}")
     print("\nOutput files:")
-    print(f"  {TRAIN_OUTPUT}")
-    print(f"  {TEST_OUTPUT}")
-    print(f"  {SPLIT_FILE}")
+    for name, (_total, _success, _failed, _n_pairs, out_path) in results.items():
+        print(f"  {out_path}")
+    if not args.split_input:
+        print(f"  {args.split_file}")
     print("\nTokenization complete!")
 
 

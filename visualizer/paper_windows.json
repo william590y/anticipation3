@@ -1,0 +1,172 @@
+{
+  "windows": [
+    {
+      "key": "val-01",
+      "split": "validation",
+      "line_index": 217143,
+      "piece": "Chopin/Etudes_op_10/12/HuNY03M.mid",
+      "work": "Chopin/Etudes_op_10/12"
+    },
+    {
+      "key": "val-02",
+      "split": "validation",
+      "line_index": 159081,
+      "piece": "Beethoven/Piano_Sonatas/21-1_no_repeat/Tetzloff05M.mid",
+      "work": "Beethoven/Piano_Sonatas/21-1_no_repeat"
+    },
+    {
+      "key": "val-03",
+      "split": "validation",
+      "line_index": 145897,
+      "piece": "Beethoven/Piano_Sonatas/26-1/Huang02.mid",
+      "work": "Beethoven/Piano_Sonatas/26-1"
+    },
+    {
+      "key": "val-04",
+      "split": "validation",
+      "line_index": 14122,
+      "piece": "Beethoven/Piano_Sonatas/16-1/Khmara01.mid",
+      "work": "Beethoven/Piano_Sonatas/16-1"
+    },
+    {
+      "key": "val-05",
+      "split": "validation",
+      "line_index": 262984,
+      "piece": "Beethoven/Piano_Sonatas/29-4/ChowK05M.mid",
+      "work": "Beethoven/Piano_Sonatas/29-4"
+    },
+    {
+      "key": "val-06",
+      "split": "validation",
+      "line_index": 173558,
+      "piece": "Beethoven/Piano_Sonatas/26-1_no_repeat/Tysman01.mid",
+      "work": "Beethoven/Piano_Sonatas/26-1_no_repeat"
+    },
+    {
+      "key": "val-07",
+      "split": "validation",
+      "line_index": 265965,
+      "piece": "Schubert/Impromptu_op.90_D.899/3/Sham06.mid",
+      "work": "Schubert/Impromptu_op.90_D.899/3"
+    },
+    {
+      "key": "val-08",
+      "split": "validation",
+      "line_index": 248564,
+      "piece": "Chopin/Sonata_2/2nd_no_repeat/Knoll10.mid",
+      "work": "Chopin/Sonata_2/2nd_no_repeat"
+    },
+    {
+      "key": "val-09",
+      "split": "validation",
+      "line_index": 9350,
+      "piece": "Bach/Fugue/bwv_873/Lisiecki13M.mid",
+      "work": "Bach/Fugue/bwv_873"
+    },
+    {
+      "key": "val-10",
+      "split": "validation",
+      "line_index": 2704,
+      "piece": "Bach/Fugue/bwv_889/LiuY01M.mid",
+      "work": "Bach/Fugue/bwv_889"
+    },
+    {
+      "key": "val-11",
+      "split": "validation",
+      "line_index": 10074,
+      "piece": "Beethoven/Piano_Sonatas/11-2/MaximovI04.mid",
+      "work": "Beethoven/Piano_Sonatas/11-2"
+    },
+    {
+      "key": "val-12",
+      "split": "validation",
+      "line_index": 5508,
+      "piece": "Bach/Fugue/bwv_858/Zhang01M.mid",
+      "work": "Bach/Fugue/bwv_858"
+    },
+    {
+      "key": "test-01",
+      "split": "test",
+      "line_index": 47517,
+      "piece": "Chopin/Ballades/1/McNamara02.mid",
+      "work": "Chopin/Ballades/1"
+    },
+    {
+      "key": "test-02",
+      "split": "test",
+      "line_index": 32195,
+      "piece": "Rachmaninoff/Preludes_op_23/4/WuuE07M.mid",
+      "work": "Rachmaninoff/Preludes_op_23/4"
+    },
+    {
+      "key": "test-03",
+      "split": "test",
+      "line_index": 173390,
+      "piece": "Schubert/Impromptu_op.90_D.899/1/Jin05M.mid",
+      "work": "Schubert/Impromptu_op.90_D.899/1"
+    },
+    {
+      "key": "test-04",
+      "split": "test",
+      "line_index": 117656,
+      "piece": "Ravel/Gaspard_de_la_Nuit/1_Ondine/Ladid03.mid",
+      "work": "Ravel/Gaspard_de_la_Nuit/1_Ondine"
+    },
+    {
+      "key": "test-05",
+      "split": "test",
+      "line_index": 128323,
+      "piece": "Prokofiev/Toccata/Teo05.mid",
+      "work": "Prokofiev/Toccata"
+    },
+    {
+      "key": "test-06",
+      "split": "test",
+      "line_index": 1746,
+      "piece": "Haydn/Keyboard_Sonatas/31-1/SCHU02.mid",
+      "work": "Haydn/Keyboard_Sonatas/31-1"
+    },
+    {
+      "key": "test-07",
+      "split": "test",
+      "line_index": 106271,
+      "piece": "Scriabin/Etudes_op_8/11/Shi03.mid",
+      "work": "Scriabin/Etudes_op_8/11"
+    },
+    {
+      "key": "test-08",
+      "split": "test",
+      "line_index": 150262,
+      "piece": "Schumann/Arabeske/Min09M.mid",
+      "work": "Schumann/Arabeske"
+    },
+    {
+      "key": "test-09",
+      "split": "test",
+      "line_index": 23248,
+      "piece": "Mozart/Piano_Sonatas/12-1/MunA03M.mid",
+      "work": "Mozart/Piano_Sonatas/12-1"
+    },
+    {
+      "key": "test-10",
+      "split": "test",
+      "line_index": 24277,
+      "piece": "Beethoven/Piano_Sonatas/10-1/Hou02M.mid",
+      "work": "Beethoven/Piano_Sonatas/10-1"
+    },
+    {
+      "key": "test-11",
+      "split": "test",
+      "line_index": 15345,
+      "piece": "Liszt/Annees_de_pelerinage_2/1_Gondoliera/LeungM08M.mid",
+      "work": "Liszt/Annees_de_pelerinage_2/1_Gondoliera"
+    },
+    {
+      "key": "test-12",
+      "split": "test",
+      "line_index": 7667,
+      "piece": "Debussy/Images_Book_1/1_Reflets_dans_lEau/Kleisen11M.mid",
+      "work": "Debussy/Images_Book_1/1_Reflets_dans_lEau"
+    }
+  ]
+}

@@ -30,10 +30,23 @@
               color: var(--muted); margin: 0; padding: 8px 12px 0; display: flex; gap: 10px; align-items: baseline;}
   .panel h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; }
   .rollwrap { overflow-x: auto; }
+  .engraved-sheet { background: #fdfcf8; color: #111; border-radius: 8px; margin: 8px 12px 12px;
+                    padding: 10px 14px; overflow-x: auto; min-height: 56px; }
+  .engraved-sheet svg { max-width: 100%; height: auto; }
   svg { display: block; }
   #candinfo { padding: 10px 14px; font-size: 12px; }
   #candinfo table { border-collapse: collapse; width: 100%; }
   #candinfo th, #candinfo td { text-align: left; padding: 3px 10px 3px 0; color: var(--text); }
+  /* Wrapper so an over-wide table scrolls inside the pane instead of spilling
+     past the viewport edge. */
+  #f1Wrap { overflow-x: auto; }
+  #f1Table, #f1PieceTable { border-collapse: collapse; width: 100%; font-size: 11px;
+             white-space: nowrap; }
+  #f1Table th, #f1PieceTable th { text-align: right; padding: 2px 0 2px 6px; font-weight: 500; opacity: .7; }
+  #f1Table td, #f1PieceTable td { text-align: right; padding: 2px 0 2px 6px; font-variant-numeric: tabular-nums; }
+  #f1Table td.mdl, #f1PieceTable td.mdl { text-align: left; opacity: .8; padding-left: 0; width: 1%; }
+  #f1Table td.unavail, #f1PieceTable td.unavail { opacity: .35; }
+  #f1Note { overflow-wrap: anywhere; }
   #candinfo th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--grid); }
   #candinfo .bar { height: 8px; background: var(--cand); border-radius: 3px; display: inline-block; vertical-align: middle; }
   #candinfo tr.cand-row { cursor: pointer; }
@@ -69,29 +82,85 @@
             background: rgba(20,22,26,0.94); border: 1px solid var(--grid); border-radius: 6px;
             padding: 5px 8px; font-size: 11px; color: var(--text); white-space: nowrap; }
 
-  #rankPane { position: fixed; right: 8px; top: 120px; bottom: 80px; width: 46px;
+  #rankPane { position: fixed; right: 8px; top: 320px; bottom: 80px; width: 46px;
               display: none; flex-direction: column; align-items: center; gap: 6px;
               background: var(--panel); border: 1px solid var(--grid); border-radius: 10px;
               padding: 10px 4px; z-index: 6; }
   #rankPane .lbl { font-size: 10px; text-align: center; line-height: 1.2; }
   #rankSlider { writing-mode: vertical-lr; direction: rtl; flex: 1; width: 22px; }
   #rankVal { font-size: 12px; color: var(--sel); font-weight: 600; }
+
+  /* Width must fit the F1 table's four columns ("ours (LoRA)" + three "100.0%"
+     cells); the pane is anchored to the right edge, so anything wider than this
+     overflows off-screen rather than into the page. max-width keeps it usable on
+     a narrow viewport, where the table scrolls instead of being clipped. */
+  #accPane { position: fixed; right: 8px; top: 128px; width: 248px;
+             max-width: calc(100vw - 16px);
+             max-height: calc(100vh - 140px);
+             overflow-y: auto;
+             background: var(--panel); border: 1px solid var(--grid); border-radius: 10px;
+             padding: 8px 8px; z-index: 6; font-size: 11px; }
+  #accPane.heat-open { max-height: calc(100vh - 140px - 210px); }
+  #accPane .row { display: flex; justify-content: space-between; margin-top: 3px; }
+  #accPane b { color: var(--sel); }
+  #accPane b.gt-higher { color: var(--miss); }
+  #accPane b.gen-higher { color: var(--gt); }
+  #accPane hr { border: none; border-top: 1px solid var(--grid); margin: 7px 0 5px; }
+  #accPane .unavail { color: var(--muted); font-style: italic; }
+
+  /* Vertical log-entropy color scale — bottom-right, above the sequence dock. */
+  #entropyScalePane { position: fixed; right: 8px; bottom: 86px; top: auto; width: 72px;
+                      display: none; flex-direction: column; align-items: center; gap: 4px;
+                      background: var(--panel); border: 1px solid var(--grid); border-radius: 10px;
+                      padding: 8px 6px 10px; z-index: 7; font-size: 10px; color: var(--muted); }
+  #entropyScalePane.rgb-mode { width: 118px; align-items: stretch; }
+  #entropyScalePane .ttl { text-align: center; line-height: 1.25; color: var(--muted); }
+  #entropyScalePane .ttl b { color: var(--text); font-weight: 600; }
+  #entropyScaleBody { position: relative; width: 100%; height: 160px; margin-top: 2px; }
+  #entropyScalePane.rgb-mode #entropyScaleBody { display: none; }
+  #entropyScaleBar { position: absolute; left: 4px; top: 0; bottom: 0; width: 14px;
+                     border-radius: 3px; border: 1px solid var(--grid);
+                     background: linear-gradient(180deg, #b40426 0%, #f7e55c 35%, #1bd0d5 65%, #3b4cc0 100%); }
+  #entropyScaleTicks { position: absolute; left: 22px; right: 0; top: 0; bottom: 0; }
+  #entropyScaleTicks .tick { position: absolute; left: 0; right: 0; transform: translateY(-50%);
+                             font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #entropyScaleTicks .tick::before { content: ''; position: absolute; left: -8px; top: 50%;
+                                     width: 6px; height: 1px; background: var(--grid); }
+  #entropyScaleNote { text-align: center; font-size: 9px; line-height: 1.3; margin-top: 2px; }
+  #entropyRgbLegend { display: none; flex-direction: column; gap: 6px; margin-top: 4px; font-size: 10px; }
+  #entropyScalePane.rgb-mode #entropyRgbLegend { display: flex; }
+  #entropyRgbLegend .rgb-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  #entropyRgbLegend .rgb-swatch { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 auto;
+                                 border: 1px solid var(--grid); }
+  #entropyRgbLegend .rgb-lbl { flex: 1; color: var(--muted); }
+  #entropyRgbLegend .rgb-range { font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>Score Infilling Visualizer</h1>
-  <span class="lbl">validation window</span>
+  <span class="lbl">window</span>
   <select id="exampleSel"></select>
   <span class="lbl">stream</span>
   <select id="streamSel" title="Unfiltered = raw performance including notes the aligner dropped (performer mistakes)">
     <option value="raw" selected>unfiltered (raw)</option>
     <option value="filtered">filtered (model input)</option>
   </select>
+  <label class="key" title="Drop in the ground-truth score note for the window's first slot instead of the model's own guess, then let the rest of the rollout respond autoregressively">
+    <input type="checkbox" id="seedGt"> seed first note (GT)
+  </label>
+  <label class="key" title="Switch between the base fine-tuned checkpoint and the LoRA-adapted checkpoint">
+    <input type="checkbox" id="useLora"> LoRA
+  </label>
+  <label class="key" id="beamNLabel" title="Beam width for our model's constrained score-token beam search (1 = greedy). Missing widths fall back to greedy. Paper models are unaffected.">
+    n beams <input type="range" id="beamN" min="1" max="10" step="1" value="1" style="vertical-align:middle">
+    <span id="beamNVal" style="min-width:18px; display:inline-block">1</span>
+  </label>
   <span class="lbl">view</span>
-  <select id="viewMode" title="Switch between piano-roll and staff-style sheet display">
+  <select id="viewMode" title="Switch between piano-roll, staff-style, and engraved sheet display">
     <option value="piano" selected>piano roll</option>
     <option value="sheet">sheet music</option>
+    <option value="engraved">sheet music (engraved)</option>
   </select>
   <label class="key" title="Horizontal time scale for the score and performance displays">
     t-scale <input type="range" id="timeScale" min="45" max="220" step="5" value="90" style="vertical-align:middle">
@@ -104,6 +173,25 @@
   </label>
   <label class="key"><input type="checkbox" id="showGt" checked> <span class="swatch" style="background:var(--gt)"></span> ground-truth score</label>
   <label class="key"><input type="checkbox" id="showPred" checked> <span class="swatch" style="background:var(--pred)"></span> predicted score (AR rollout)</label>
+  <label class="key" title="Color each predicted triplet by log-entropy. Channel: onset / duration / pitch / all (Σ), or RGB (R=onset, G=pitch, B=duration; each channel normalized within the window).">
+    <input type="checkbox" id="entropyHeat"> color pred by log-entropy
+  </label>
+  <span class="lbl" id="entropyChanLbl" style="display:none">channel</span>
+  <select id="entropyChan" style="display:none" title="Which score-token entropy drives the heatmap">
+    <option value="triplet" selected>all (Σ)</option>
+    <option value="time">onset</option>
+    <option value="dur">duration</option>
+    <option value="pitch">pitch</option>
+    <option value="rgb">RGB (R=onset, G=pitch, B=dur)</option>
+  </select>
+  <label class="key" id="entropyMonoLbl" style="display:none"
+         title="Red log-entropy ramp (scalar channels only): low entropy = dark/deep red, high = bright red. Disabled in RGB mode.">
+    <input type="checkbox" id="entropyMono"> monochrome
+  </label>
+  <span id="entropyLegend" class="key" style="display:none" title="Predicted-note log-entropy heatmap">
+    <span class="swatch" id="entropyLegendSwatch" style="background:linear-gradient(90deg,#3b4cc0,#f7e55c,#b40426); width:48px"></span>
+    <span class="lbl">low → high</span>
+  </span>
   <span class="lbl">audio</span>
   <button type="button" id="playPerf" title="Play conditioning performance (current stream)">play performance</button>
   <button type="button" id="playGt" title="Play ground-truth score">play ground truth</button>
@@ -119,9 +207,28 @@
 
 <div id="staleWarn"></div>
 
-<div class="panel">
+<div class="panel" id="scorePanel">
   <h2>Score <span class="hint">(0.5 s beat grid — GT vs the model's autoregressive rollout; a selected performance note shows its own slot's candidate distribution, conditioned on the rollout so far)</span></h2>
   <div class="rollwrap"><svg id="scoreRoll"></svg></div>
+</div>
+
+<div class="panel" id="engravedPanel" style="display:none">
+  <h2>Score — real sheet music <span class="hint" id="engravedRealHint"></span></h2>
+  <div id="engravedReal" class="engraved-sheet"></div>
+  <h2 style="margin-top:14px">Predicted score — engraved rollout <span class="hint" id="engravedPredHint">(the selected AR rollout snapped to a 1/12-beat grid, typeset in the piece's real meter and key with barlines on the real downbeat phase; falls back to exact-grid 4/4 when no meter mapping exists)</span></h2>
+  <div id="engravedPred" class="engraved-sheet"></div>
+</div>
+
+<div class="panel" id="paper1Panel">
+  <h2>Paper 1 — Zeng+ (ICLR 2026) <span class="hint">(joint APT/EPR, released weights — GT vs its transcription of this window)</span></h2>
+  <div class="rollwrap"><svg id="paper1Roll"></svg></div>
+  <div class="lbl" id="paper1Note" style="padding:0 10px 8px"></div>
+</div>
+
+<div class="panel" id="paper2Panel">
+  <h2>Paper 2 — Beyer &amp; Dai (ISMIR 2024) <span class="hint">(MIDI2ScoreTransformer, released weights — GT vs its transcription of this window)</span></h2>
+  <div class="rollwrap"><svg id="paper2Roll"></svg></div>
+  <div class="lbl" id="paper2Note" style="padding:0 10px 8px"></div>
 </div>
 
 <div class="panel">
@@ -145,13 +252,64 @@
     <span class="key"><span class="swatch" style="background:var(--pred)"></span> onset perplexity</span>
     <span class="key"><span class="swatch" style="background:var(--perf)"></span> duration perplexity</span>
     <span class="key"><span class="swatch" style="background:var(--cand)"></span> pitch perplexity</span>
-    <span class="lbl">(log y-axis; lower is more confident)</span>
+    <span class="lbl">(log y-axis; lower is more confident; sequence PPL gen vs GT is in the right-hand panel)</span>
   </div>
   <div id="pplWrap"><svg id="pplChart"></svg></div>
   <div id="pplEmpty">Perplexity trace unavailable — regenerate <code>data.js</code> with the latest <code>precompute_visualizer.py</code>.</div>
 </div>
 
 <div id="pplTip"></div>
+
+<div id="accPane">
+  <div class="lbl">rollout accuracy</div>
+  <div class="row"><span>onset</span><b id="accOnset">–</b></div>
+  <div class="row"><span>dur</span><b id="accDur">–</b></div>
+  <div class="row"><span>pitch</span><b id="accPitch">–</b></div>
+  <div class="lbl" id="accCount" style="margin-top:5px"></div>
+  <hr>
+  <div class="lbl" title="Sequence perplexity under the selected model: exp(mean NLL) over score onset/duration/pitch tokens. Generated = the AR rollout's own score stream; ground truth = teacher-forced GT score stream. Same performance controls in both walks. Lower is more probable under the model.">seq PPL (model)</div>
+  <div class="row"><span>generated</span><b id="pplGen">–</b></div>
+  <div class="row"><span>ground truth</span><b id="pplGt">–</b></div>
+  <div class="lbl" id="pplSeqNote" style="margin-top:5px"></div>
+  <hr>
+  <div class="lbl" title="Macro-mean note-level F1 across all pieces shared by the three models, using unfiltered performance input and no GT seeding. Three matching criteria: onset+pitch exact, onset+pitch+duration exact, and onset+pitch with a +-1 bin onset tolerance. 'Ours' follows the LoRA toggle.">Mean F1 vs GT (all pieces)</div>
+  <div id="f1Wrap">
+  <table id="f1Table">
+    <thead><tr><th></th><th title="pitch and onset must match exactly">on+pit</th><th title="pitch, onset and duration must all match exactly">+dur</th><th title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
+    <tbody>
+      <tr><td class="mdl" id="f1NameOurs">ours</td><td id="f1OursA">–</td><td id="f1OursB">–</td><td id="f1OursC">–</td></tr>
+      <tr><td class="mdl">paper 1</td><td id="f1P1A">–</td><td id="f1P1B">–</td><td id="f1P1C">–</td></tr>
+      <tr><td class="mdl">paper 2</td><td id="f1P2A">–</td><td id="f1P2B">–</td><td id="f1P2C">–</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="lbl" id="f1Note" style="margin-top:5px"></div>
+  <div class="lbl" style="margin-top:8px" title="Note-level F1 for the piece of the currently selected window, same unfiltered unseeded protocol as the mean table. Windows from the same piece are averaged. 'Ours' follows the LoRA toggle.">This piece F1</div>
+  <div id="f1PieceWrap">
+  <table id="f1PieceTable">
+    <thead><tr><th></th><th title="pitch and onset must match exactly">on+pit</th><th title="pitch, onset and duration must all match exactly">+dur</th><th title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
+    <tbody>
+      <tr><td class="mdl" id="f1PieceNameOurs">ours</td><td id="f1PieceOursA">–</td><td id="f1PieceOursB">–</td><td id="f1PieceOursC">–</td></tr>
+      <tr><td class="mdl">paper 1</td><td id="f1PieceP1A">–</td><td id="f1PieceP1B">–</td><td id="f1PieceP1C">–</td></tr>
+      <tr><td class="mdl">paper 2</td><td id="f1PieceP2A">–</td><td id="f1PieceP2B">–</td><td id="f1PieceP2C">–</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div id="entropyScalePane" aria-hidden="true">
+  <div class="ttl">log-entropy<br><b id="entropyScaleChan">all</b></div>
+  <div id="entropyScaleBody">
+    <div id="entropyScaleBar"></div>
+    <div id="entropyScaleTicks"></div>
+  </div>
+  <div id="entropyRgbLegend">
+    <div class="rgb-row"><span class="rgb-swatch" style="background:#ff4040"></span><span class="rgb-lbl">R onset</span><span class="rgb-range" id="entropyRgbR">–</span></div>
+    <div class="rgb-row"><span class="rgb-swatch" style="background:#40ff40"></span><span class="rgb-lbl">G pitch</span><span class="rgb-range" id="entropyRgbG">–</span></div>
+    <div class="rgb-row"><span class="rgb-swatch" style="background:#4040ff"></span><span class="rgb-lbl">B dur</span><span class="rgb-range" id="entropyRgbB">–</span></div>
+  </div>
+  <div class="lbl" id="entropyScaleNote">nats (log H)</div>
+</div>
 
 <div id="rankPane">
   <span class="lbl">rank<br>(by prob)</span>
@@ -161,23 +319,30 @@
 
 <div id="empty" style="display:none">No data loaded — run <code>precompute_visualizer.py</code> to generate <code>data.js</code> next to this file.</div>
 
-<script src="data.js?v=20260706f9"></script>
+<script src="osmd.min.js"></script>
+<script src="sheet_xml.js?v=20260719a1"></script>
+<script src="scores_xml.js?v=20260719a1"></script>
+<script src="data.js?v=202608111619"></script>
 <script>
 (() => {
   const DATA = window.VISUALIZER_DATA;
+  const activeScores = window.VISUALIZER_SCORES;
+  const beatSeconds = 0.5;
   if (!DATA || !DATA.examples || !Object.keys(DATA.examples).length) {
     document.getElementById('empty').style.display = 'block';
     return;
   }
+  // Plain-integer keys would otherwise be reordered ascending by JS's own
+  // key-enumeration rules, breaking "new windows appended after old ones" --
+  // example_order (when present) is the authoritative dropdown/display order.
+  const orderedIds = DATA.example_order || Object.keys(DATA.examples);
 
   const NS = 'http://www.w3.org/2000/svg';
   const PITCH_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
   const pname = p => p == null ? 'REST' : PITCH_NAMES[p % 12] + (Math.floor(p / 12) - 1);
   const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
-  function normalizeRawBranches(example) {
-    const rawRollout = example?.rollouts?.raw;
-    const rawNotes = example?.raw_notes;
+  function normalizeRawBranchesOf(rawRollout, rawNotes) {
     if (!rawRollout?.branches || !rawNotes) return;
     const normalized = {};
     Object.values(rawRollout.branches).forEach(branch => {
@@ -192,10 +357,17 @@
     rawRollout.branches = normalized;
   }
 
+  function normalizeRawBranches(example) {
+    normalizeRawBranchesOf(example?.rollouts?.raw, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts?.raw_seeded, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_lora?.raw, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_lora?.raw_seeded, example?.raw_notes);
+  }
+
   Object.values(DATA.examples).forEach(normalizeRawBranches);
 
   const sel = document.getElementById('exampleSel');
-  for (const id of Object.keys(DATA.examples)) {
+  for (const id of orderedIds) {
     const o = document.createElement('option');
     const piece = DATA.examples[id].piece;
     o.value = id;
@@ -204,19 +376,25 @@
   }
 
   const staleWarn = document.getElementById('staleWarn');
-  const firstEx = DATA.examples[Object.keys(DATA.examples)[0]];
+  const firstEx = DATA.examples[orderedIds[0]];
   const hasDualRollouts = ex => ex?.rollouts?.filtered && ex?.rollouts?.raw;
-  if ((DATA.format !== 2 && DATA.format !== 3) || DATA.logits_conditioning !== 'autoregressive_rollout') {
+  if ((DATA.format < 2 || DATA.format > 4) || DATA.logits_conditioning !== 'autoregressive_rollout') {
     staleWarn.style.display = 'block';
     staleWarn.innerHTML =
-      '<b>Stale data.js</b> — regenerate with <code>precompute_visualizer.py</code> (format 3). ' +
-      'Hard-refresh (Ctrl+Shift+R). Format 3 adds separate filtered/raw AR rollouts; ' +
-      'format 2 only toggles the performance display, not the orange predictions.';
+      '<b>Stale data.js</b> — regenerate with <code>precompute_visualizer.py</code> (format 4). ' +
+      'Hard-refresh (Ctrl+Shift+R). Format 4 adds GT-seeded rollouts; format 3 adds separate ' +
+      'filtered/raw AR rollouts; format 2 only toggles the performance display.';
   } else if (DATA.format === 2) {
     staleWarn.style.display = 'block';
     staleWarn.innerHTML =
       '<b>Format-2 data</b> — stream toggle only changes the performance panel. ' +
-      'Re-run precompute for format 3 to switch orange predictions between filtered/raw.';
+      'Re-run precompute for format 4 to switch orange predictions between filtered/raw and use ' +
+      'the seed-first-note toggle.';
+  } else if (DATA.format === 3) {
+    staleWarn.style.display = 'block';
+    staleWarn.innerHTML =
+      '<b>Format-3 data</b> — no GT-seeded rollouts. Re-run precompute for format 4 to use the ' +
+      '"seed first note (GT)" toggle.';
   }
 
   let ex = null;
@@ -239,14 +417,161 @@
     return viewModeSel.value === 'sheet';
   }
 
+  function isEngravedMode() {
+    return viewModeSel.value === 'engraved';
+  }
+
+  function loraRequested() {
+    return document.getElementById('useLora').checked;
+  }
+
+  function rolloutsRoot() {
+    return (loraRequested() && ex?.rollouts_lora) ? ex.rollouts_lora : ex?.rollouts;
+  }
+
   function usingRawRollout() {
-    return streamSel.value === 'raw' && ex?.rollouts?.raw;
+    return streamSel.value === 'raw' && !!rolloutsRoot()?.raw;
+  }
+
+  function seedRequested() {
+    return document.getElementById('seedGt').checked;
+  }
+
+  function beamWidth() {
+    const el = document.getElementById('beamN');
+    return el ? (parseInt(el.value, 10) || 1) : 1;
+  }
+
+  function availableBeamWidths(base) {
+    if (!base || !base.beams) return [];
+    return Object.keys(base.beams)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => Number.isFinite(n) && n >= 1 && base.beams[String(n)] && Array.isArray(base.beams[String(n)].pred_score))
+      .sort((a, b) => a - b);
+  }
+
+  /** Metrics that must track the notes currently on screen (not greedy leftovers). */
+  const BEAM_SYNCED_METRICS = [
+    'perplexity',
+    'sequence_perplexity',
+    'entropy',
+    'log_entropy',
+  ];
+
+  /** Copy decode-specific metrics from a beam entry, or clear them if absent. */
+  function beamMetricOverlay(entry) {
+    const overlay = {};
+    for (const key of BEAM_SYNCED_METRICS) {
+      overlay[key] = entry && entry[key] != null ? entry[key] : null;
+    }
+    return overlay;
+  }
+
+  /** Resolve which pred_score / PPL to show for the selected beam width. */
+  function resolveBeamRollout(base, bw) {
+    // beam=1 is constrained greedy (stored as top-level pred_score + AR perplexity)
+    if (bw === 1) {
+      return { pred_score: base.pred_score, beam_width: 1, beam_status: 'greedy' };
+    }
+    const beamEntry = base.beams && base.beams[String(bw)];
+    if (beamEntry && Array.isArray(beamEntry.pred_score)) {
+      return Object.assign(
+        {
+          pred_score: beamEntry.pred_score,
+          beam_width: bw,
+          beam_status: 'beam',
+        },
+        // Prefer beam-scored PPL/entropy; never keep greedy curves for a different sequence.
+        beamMetricOverlay(beamEntry),
+      );
+    }
+    // Missing precomputed width — show greedy notes; metrics stay on the greedy path.
+    return {
+      pred_score: base.pred_score,
+      beam_width: bw,
+      beam_status: 'missing',
+    };
+  }
+
+  function baseRollout() {
+    const roots = rolloutsRoot();
+    if (usingRawRollout()) {
+      if (seedRequested() && roots.raw_seeded) return roots.raw_seeded;
+      return roots.raw;
+    }
+    if (roots?.filtered) {
+      if (seedRequested() && roots.filtered_seeded) return roots.filtered_seeded;
+      return roots.filtered;
+    }
+    return { pred_score: ex.pred_score, branches: ex.branches };
   }
 
   function currentRollout() {
-    if (usingRawRollout()) return ex.rollouts.raw;
-    if (ex?.rollouts?.filtered) return ex.rollouts.filtered;
-    return { pred_score: ex.pred_score, branches: ex.branches };
+    const base = baseRollout();
+    if (!base) return base;
+    const resolved = resolveBeamRollout(base, beamWidth());
+    return Object.assign({}, base, resolved);
+  }
+
+  function beamStatusNote(rollout) {
+    if (!rollout) return '';
+    if (rollout.beam_status === 'greedy') return 'beam 1 = greedy';
+    if (rollout.beam_status === 'missing') {
+      return `beam ${rollout.beam_width} not precomputed — showing greedy`;
+    }
+    if (rollout.beam_status === 'beam' && rollout.perplexity == null) {
+      return `beam ${rollout.beam_width} (PPL pending)`;
+    }
+    return `beam ${rollout.beam_width}`;
+  }
+
+  function updateBeamSlider() {
+    const slider = document.getElementById('beamN');
+    const valEl = document.getElementById('beamNVal');
+    const labelEl = document.getElementById('beamNLabel');
+    if (!slider) return;
+    // Keep 1–10 selectable; beam=1 is always greedy, other widths use beams[] when present.
+    const prev = parseInt(slider.value, 10);
+    slider.min = '1';
+    slider.max = '10';
+    slider.disabled = false;
+    if (Number.isFinite(prev) && prev >= 1 && prev <= 10) {
+      slider.value = String(prev);
+    } else {
+      slider.value = '1';
+    }
+    const base = baseRollout();
+    const available = availableBeamWidths(base);
+    const bw = parseInt(slider.value, 10) || 1;
+    const resolved = base ? resolveBeamRollout(base, bw) : null;
+    const availStr = available.length ? available.join(', ') : 'none';
+    let title =
+      `Beam width (1–10). 1 = constrained greedy. Precomputed beams for this rollout: ${availStr}.`;
+    if (resolved && resolved.beam_status === 'missing') {
+      title += ` Beam ${bw} not precomputed — showing greedy.`;
+    }
+    slider.title = title;
+    if (labelEl) labelEl.title = title;
+    if (valEl) valEl.textContent = String(slider.value);
+  }
+
+  function updateSeedToggle() {
+    const seedGt = document.getElementById('seedGt');
+    const roots = rolloutsRoot();
+    const available = usingRawRollout() ? !!roots?.raw_seeded : !!roots?.filtered_seeded;
+    seedGt.disabled = !available;
+    seedGt.title = available
+      ? "Drop in the ground-truth score note for the window's first slot instead of the model's own guess"
+      : 'GT-seeded rollout unavailable for this example/stream — re-run precompute for format 4';
+  }
+
+  function updateLoraToggle() {
+    const useLora = document.getElementById('useLora');
+    const available = !!ex?.rollouts_lora;
+    useLora.disabled = !available;
+    useLora.title = available
+      ? 'Switch between the base fine-tuned checkpoint and the LoRA-adapted checkpoint'
+      : `LoRA rollout unavailable — re-run precompute with --lora-checkpoint (checkpoint used: ${DATA.lora_checkpoint || 'none'})`;
   }
 
   function noteSelectionKey(n) {
@@ -301,15 +626,214 @@
     }
   }
 
+  // Macro-mean note-level F1 over pieces shared by all three models. Use only the
+  // unseeded raw rollout: it has the same meaning for every model and avoids
+  // letting the currently selected stream/window change a corpus-level result.
+  // When a future dataset contains multiple windows from one piece, average those
+  // windows first so every piece still receives equal weight. "ours" follows the
+  // Base/LoRA toggle; the two paper rows are fixed.
+  const F1_CELLS = {
+    ours:   ['f1OursA', 'f1OursB', 'f1OursC'],
+    paper1: ['f1P1A', 'f1P1B', 'f1P1C'],
+    paper2: ['f1P2A', 'f1P2B', 'f1P2C'],
+  };
+  const F1_PIECE_CELLS = {
+    ours:   ['f1PieceOursA', 'f1PieceOursB', 'f1PieceOursC'],
+    paper1: ['f1PieceP1A', 'f1PieceP1B', 'f1PieceP1C'],
+    paper2: ['f1PieceP2A', 'f1PieceP2B', 'f1PieceP2C'],
+  };
+  const F1_KEYS = ['onset_pitch', 'onset_pitch_dur', 'onset_pitch_tol1'];
+
+  function setF1Row(which, f1, cells = F1_CELLS) {
+    cells[which].forEach((id, i) => {
+      const cell = document.getElementById(id);
+      if (!cell) return;
+      const v = f1 && f1[F1_KEYS[i]];
+      cell.textContent = v ? (v.f1 * 100).toFixed(1) + '%' : '–';
+      cell.classList.toggle('unavail', !v);
+    });
+  }
+
+  function f1ByPiece(rolloutForExample) {
+    const out = new Map();
+    for (const [id, example] of Object.entries(DATA.examples)) {
+      const f1 = rolloutForExample(example)?.f1;
+      if (!f1) continue;
+      const piece = example.piece || id;
+      if (!out.has(piece)) out.set(piece, []);
+      out.get(piece).push(f1);
+    }
+    return out;
+  }
+
+  function pieceMeanF1(windows) {
+    const result = {};
+    for (const key of F1_KEYS) {
+      const values = (windows || []).map(f1 => f1[key]?.f1).filter(Number.isFinite);
+      if (values.length)
+        result[key] = { f1: values.reduce((sum, value) => sum + value, 0) / values.length };
+    }
+    return result;
+  }
+
+  function macroMeanF1(byPiece, pieces) {
+    const result = {};
+    for (const key of F1_KEYS) {
+      const pieceMeans = [];
+      for (const piece of pieces) {
+        const mean = pieceMeanF1(byPiece.get(piece) || [])[key];
+        if (mean) pieceMeans.push(mean.f1);
+      }
+      if (pieceMeans.length)
+        result[key] = { f1: pieceMeans.reduce((sum, value) => sum + value, 0) / pieceMeans.length };
+    }
+    return result;
+  }
+
+  function updateF1Panel() {
+    const oursLabel = loraRequested() ? 'ours (LoRA)' : 'ours (FT)';
+    for (const id of ['f1NameOurs', 'f1PieceNameOurs']) {
+      const nameCell = document.getElementById(id);
+      if (nameCell) nameCell.textContent = oursLabel;
+    }
+
+    const oursGroup = loraRequested() ? 'rollouts_lora' : 'rollouts';
+    const groups = {
+      ours: f1ByPiece(example => example[oursGroup]?.raw),
+      // Each paper model transcribes the original full performance MIDI. Its one
+      // result is stored under `filtered` only because it has no raw/seed variants.
+      paper1: f1ByPiece(example => example.rollouts_paper1?.filtered),
+      paper2: f1ByPiece(example => example.rollouts_paper2?.filtered),
+    };
+    let common = new Set(groups.ours.keys());
+    for (const byPiece of [groups.paper1, groups.paper2])
+      common = new Set([...common].filter(piece => byPiece.has(piece)));
+    // Stable piece order: follow example_order, then any leftover.
+    const seen = new Set();
+    const pieces = [];
+    for (const id of orderedIds) {
+      const piece = DATA.examples[id]?.piece || id;
+      if (common.has(piece) && !seen.has(piece)) {
+        seen.add(piece);
+        pieces.push(piece);
+      }
+    }
+    for (const piece of common) {
+      if (!seen.has(piece)) pieces.push(piece);
+    }
+
+    setF1Row('ours', macroMeanF1(groups.ours, pieces));
+    setF1Row('paper1', macroMeanF1(groups.paper1, pieces));
+    setF1Row('paper2', macroMeanF1(groups.paper2, pieces));
+
+    const note = document.getElementById('f1Note');
+    if (note) {
+      const allPieces = new Set(Object.entries(DATA.examples).map(([id, example]) => example.piece || id));
+      note.textContent = pieces.length
+        ? `macro-average · unfiltered, unseeded · n=${pieces.length}/${allPieces.size} pieces`
+        : 'no pieces have F1 for all three models';
+      note.classList.toggle('unavail', !pieces.length || pieces.length < allPieces.size);
+    }
+
+    const curPiece = ex ? (ex.piece || sel.value) : null;
+    for (const which of ['ours', 'paper1', 'paper2']) {
+      const f1 = curPiece
+        ? pieceMeanF1(groups[which].get(curPiece) || [])
+        : {};
+      setF1Row(which, f1, F1_PIECE_CELLS);
+    }
+  }
+
+  function fmtSeqPpl(v) {
+    if (v == null || !isFinite(v)) return '–';
+    if (v >= 100) return v.toFixed(1);
+    if (v >= 10) return v.toFixed(2);
+    return v.toFixed(3);
+  }
+
+  function updateSequencePpl() {
+    const pplGen = document.getElementById('pplGen');
+    const pplGt = document.getElementById('pplGt');
+    const note = document.getElementById('pplSeqNote');
+    pplGen.classList.remove('gt-higher', 'gen-higher');
+    pplGt.classList.remove('gt-higher', 'gen-higher');
+    const rollout = currentRollout();
+    const seq = rollout?.sequence_perplexity;
+    if (!seq || seq.generated == null || seq.ground_truth == null) {
+      pplGen.textContent = pplGt.textContent = '–';
+      note.textContent = rollout?.beam_status === 'beam'
+        ? 'beam PPL not scored yet (compute_sequence_ppl.py)'
+        : 'run compute_sequence_ppl.py';
+      return;
+    }
+    pplGen.textContent = fmtSeqPpl(seq.generated);
+    pplGt.textContent = fmtSeqPpl(seq.ground_truth);
+    if (seq.ground_truth > seq.generated) {
+      pplGt.classList.add('gt-higher');
+      const ratio = seq.ratio_gt_over_gen != null
+        ? ` (${seq.ratio_gt_over_gen.toFixed(2)}× gen)`
+        : '';
+      note.textContent = `GT higher PPL${ratio}`;
+    } else if (seq.ground_truth < seq.generated) {
+      pplGen.classList.add('gen-higher');
+      note.textContent = 'generated higher PPL';
+    } else {
+      note.textContent = 'equal sequence PPL';
+    }
+  }
+
+  function updateAccuracy() {
+    const accOnset = document.getElementById('accOnset');
+    const accDur = document.getElementById('accDur');
+    const accPitch = document.getElementById('accPitch');
+    const accCount = document.getElementById('accCount');
+    if (!ex) {
+      accOnset.textContent = accDur.textContent = accPitch.textContent = '–';
+      accCount.textContent = '';
+      updateSequencePpl();
+      updateF1Panel();
+      return;
+    }
+    const rollout = currentRollout();
+    let total = 0, onsetC = 0, durC = 0, pitchC = 0;
+    Object.values(rollout.branches || {}).forEach(b => {
+      if (b.gt_slot == null) return;
+      const gt = ex.gt_score[b.gt_slot];
+      const pred = rollout.pred_score[b.slot];
+      if (!gt || !pred) return;
+      total++;
+      if (pred.t === gt.t) onsetC++;
+      if (pred.d === gt.d) durC++;
+      if (pred.p === gt.p) pitchC++;
+    });
+    updateSequencePpl();
+    updateF1Panel();
+    if (!total) {
+      accOnset.textContent = accDur.textContent = accPitch.textContent = '–';
+      accCount.textContent = 'no scored slots';
+      return;
+    }
+    accOnset.textContent = (100 * onsetC / total).toFixed(1) + '%';
+    accDur.textContent = (100 * durC / total).toFixed(1) + '%';
+    accPitch.textContent = (100 * pitchC / total).toFixed(1) + '%';
+    accCount.textContent = `${total} scored slots`;
+  }
+
   function updateMeta() {
     if (!ex) return;
     const stream = streamSel.value === 'raw' && ex.raw_notes ? 'unfiltered' : 'filtered';
     const notes = currentPerfNotes();
     const mistakes = notes.filter(n => n.j == null).length;
+    const modelDesc = loraRequested() && ex.rollouts_lora
+      ? `LoRA (${DATA.lora_checkpoint || 'unknown'})`
+      : DATA.checkpoint;
+    const rollout = currentRollout();
     metaEl.textContent =
-      `checkpoint: ${DATA.checkpoint}  ·  stream: ${stream} (${notes.length} notes` +
+      `checkpoint: ${modelDesc}  ·  stream: ${stream} (${notes.length} notes` +
       `${mistakes ? `, ${mistakes} unmatched` : ''})  ·  rollout: ${usingRawRollout() ? 'raw controls' : 'filtered controls'}` +
-      `  ·  view: ${isSheetMode() ? 'sheet' : 'piano'} @ ${pxps}px/s` +
+      `${seedRequested() ? ' (GT-seeded)' : ''}` +
+      `  ·  ${beamStatusNote(rollout)}` +
+      `  ·  view: ${isEngravedMode() ? 'engraved' : isSheetMode() ? 'sheet' : 'piano'} @ ${pxps}px/s` +
       `${hasDualRollouts(ex) ? '' : ' (re-run precompute for dual rollouts)'}`;
   }
 
@@ -582,19 +1106,366 @@
   let scoreSpan = null;
   let gtEls = {}, predEls = {}, candLayer = null;
 
+  // --- engraved sheet view (OSMD) ---
+  let osmdReal = null, osmdPred = null;
+  let engravedRealKey = null, engravedPredKey = null;
+
+  function mkOsmd(container) {
+    return new opensheetmusicdisplay.OpenSheetMusicDisplay(container, {
+      autoResize: false, backend: 'svg', drawTitle: false, drawPartNames: false,
+    });
+  }
+
+  async function renderEngraved() {
+    const realDiv = document.getElementById('engravedReal');
+    const predDiv = document.getElementById('engravedPred');
+    const realHint = document.getElementById('engravedRealHint');
+    if (typeof opensheetmusicdisplay === 'undefined') {
+      realDiv.textContent = 'osmd.min.js not found next to visualizer.html — engraved view unavailable.';
+      predDiv.textContent = '';
+      return;
+    }
+    const wid = sel.value;
+
+    // real ASAP MusicXML for this window's measure span (active sidecar for the
+    // real-score sidecar: scores_xml.js)
+    const entry = activeScores?.windows?.[wid] || null;
+    if (entry) {
+      realHint.textContent = `(measures ${entry.measure_from}–${entry.measure_to} of the actual ASAP xml_score.musicxml)`;
+      if (engravedRealKey !== wid) {
+        engravedRealKey = wid;
+        try {
+          if (!osmdReal) osmdReal = mkOsmd(realDiv);
+          await osmdReal.load(entry.xml);
+          osmdReal.render();
+        } catch (err) {
+          osmdReal = null; engravedRealKey = null;
+          realDiv.textContent = 'engraving failed: ' + err.message;
+        }
+      }
+    } else {
+      osmdReal = null; engravedRealKey = null;
+      realHint.textContent = '';
+      realDiv.textContent = activeScores
+        ? 'No real-XML mapping for this window (skipped by precompute_scores_xml.py — see its log).'
+        : 'scores_xml.js not found — run visualizer/precompute_scores_xml.py to enable the real sheet view.';
+    }
+
+    // predicted rollout, typeset on the exact token grid
+    const rollout = currentRollout();
+    const predKey = [wid, streamSel.value, seedRequested(), loraRequested()].join('|');
+    if (engravedPredKey !== predKey) {
+      engravedPredKey = predKey;
+      const xml = (typeof tripletsToMusicXML === 'function' && rollout)
+        ? tripletsToMusicXML(rollout.pred_score.filter(Boolean), beatSeconds, entry ? entry.meter : null)
+        : null;
+      if (xml) {
+        try {
+          if (!osmdPred) osmdPred = mkOsmd(predDiv);
+          await osmdPred.load(xml);
+          osmdPred.render();
+        } catch (err) {
+          osmdPred = null; engravedPredKey = null;
+          predDiv.textContent = 'engraving failed: ' + err.message;
+        }
+      } else {
+        predDiv.textContent = 'No rollout available to engrave.';
+      }
+    }
+  }
+
+  // Render one external paper model's transcription of this window against the
+  // GT, in the same piano-roll idiom as the main score panel. These models emit a
+  // plain score (no per-slot candidate distribution and no stream/seed variants),
+  // so the panel is GT outline + predicted notes only.
+  function drawPaperPanel(which) {
+    const panel = document.getElementById(`${which}Panel`);
+    const svg = document.getElementById(`${which}Roll`);
+    const note = document.getElementById(`${which}Note`);
+    if (!panel || !svg) return;
+    if (isEngravedMode()) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+
+    const block = ex && ex[`rollouts_${which}`];
+    const variant = streamSel.value === 'raw' ? 'raw' : 'filtered';
+    const roll = block && (block[variant] || block.filtered);
+    const gt = (ex?.gt_score || []).filter(Boolean);
+    const pred = (roll?.pred_score || []).filter(Boolean);
+
+    svg.innerHTML = '';
+    if (!roll || !pred.length) {
+      note.textContent = block ? 'no transcription for this window' : 'not computed';
+      note.classList.add('unavail');
+      svg.setAttribute('height', 0);
+      return;
+    }
+    // Every window is drawn -- there is no span guard, and the only scaling
+    // applied is quarters -> bins from the time signature. When the result still
+    // spans a different length than the ground truth that IS the model's output
+    // (typically a re-notation at different note values), so label it rather than
+    // hide it: hiding makes a re-notation indistinguishable from a failure.
+    const scaleOff = roll.span_ok === false;
+    note.textContent = scaleOff
+      ? `⚠ time scale disagrees: spans ${roll.span_ratio}× the ground truth`
+      : '';
+    note.classList.toggle('unavail', scaleOff);
+
+    const span = noteSpan([...gt, ...pred]);
+    const dims = mkSvg(svg, span);
+    drawGrid(svg, span, dims, beatSeconds);
+    for (const n of pred)
+      rect(svg, xOf(n.t), noteY(span, n.p), noteW(n.d), noteH(), css('--pred'));
+    for (const n of gt) {
+      const e = rect(svg, xOf(n.t), noteY(span, n.p), noteW(n.d), noteH(), 'none');
+      setBaseStroke(e, css('--gt'), 1.5);
+    }
+  }
+
+  function entropyHeatEnabled() {
+    return document.getElementById('entropyHeat').checked;
+  }
+
+  function entropyChannel() {
+    return document.getElementById('entropyChan').value || 'triplet';
+  }
+
+  function entropyMonoEnabled() {
+    return document.getElementById('entropyMono').checked;
+  }
+
+  function entropyChannelLabel(chan) {
+    return ({
+      triplet: 'all (Σ)',
+      time: 'onset',
+      dur: 'duration',
+      pitch: 'pitch',
+      rgb: 'RGB',
+    })[chan] || chan;
+  }
+
+  // Scalar log-entropy color (t in [0,1]). Default: cool→warm. Monochrome: dark→bright red
+  // (low entropy = deep red, high = bright red) so uncertain notes read brighter on the dark UI.
+  function entropyColor(t, mono) {
+    const x = Math.max(0, Math.min(1, t));
+    if (mono) {
+      // Floor at 40 so low-entropy notes stay visible on the dark piano-roll.
+      const r = Math.round(40 + 215 * x);
+      return `rgb(${r},0,0)`;
+    }
+    const stops = [
+      [0.00, [59, 76, 192]],
+      [0.35, [27, 208, 213]],
+      [0.65, [247, 229, 92]],
+      [1.00, [180, 4, 38]],
+    ];
+    let i = 0;
+    while (i < stops.length - 2 && x > stops[i + 1][0]) i++;
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[i + 1];
+    const u = (x - t0) / Math.max(t1 - t0, 1e-9);
+    const r = Math.round(c0[0] + (c1[0] - c0[0]) * u);
+    const g = Math.round(c0[1] + (c1[1] - c0[1]) * u);
+    const b = Math.round(c0[2] + (c1[2] - c0[2]) * u);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  const ENTROPY_SCALE_WARM = 'linear-gradient(180deg, #b40426 0%, #f7e55c 35%, #1bd0d5 65%, #3b4cc0 100%)';
+  const ENTROPY_SCALE_MONO = 'linear-gradient(180deg, #ff0000 0%, #280000 100%)';
+  const ENTROPY_LEGEND_WARM = 'linear-gradient(90deg,#3b4cc0,#f7e55c,#b40426)';
+  const ENTROPY_LEGEND_MONO = 'linear-gradient(90deg,#280000,#ff0000)';
+
+  function logEntropyArray(rollout, chan) {
+    const block = rollout?.log_entropy;
+    if (!block) return null;
+    return block[chan] || null;
+  }
+
+  function slotLogEntropy(rollout, slot, chan) {
+    const arr = logEntropyArray(rollout, chan);
+    if (!arr || slot == null || slot < 0 || slot >= arr.length) return null;
+    const v = arr[slot];
+    return (v == null || !isFinite(v)) ? null : v;
+  }
+
+  function entropyHeatRange(rollout, chan) {
+    const arr = logEntropyArray(rollout, chan);
+    if (!arr) return null;
+    const vals = arr.filter(v => v != null && isFinite(v));
+    if (!vals.length) return null;
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi <= lo) hi = lo + 1e-6;
+    return { lo, hi };
+  }
+
+  function entropyRgbRanges(rollout) {
+    const time = entropyHeatRange(rollout, 'time');
+    const dur = entropyHeatRange(rollout, 'dur');
+    const pitch = entropyHeatRange(rollout, 'pitch');
+    if (!time || !dur || !pitch) return null;
+    return { time, dur, pitch };
+  }
+
+  function norm01(v, range) {
+    if (v == null || !range) return null;
+    return Math.max(0, Math.min(1, (v - range.lo) / (range.hi - range.lo)));
+  }
+
+  // R = onset log-entropy, G = pitch, B = duration (each normalized in-window).
+  function entropyRgbColor(rollout, slot, ranges) {
+    const rN = norm01(slotLogEntropy(rollout, slot, 'time'), ranges.time);
+    const gN = norm01(slotLogEntropy(rollout, slot, 'pitch'), ranges.pitch);
+    const bN = norm01(slotLogEntropy(rollout, slot, 'dur'), ranges.dur);
+    if (rN == null || gN == null || bN == null) return null;
+    // Keep a floor so near-zero entropy doesn't go fully black.
+    const lift = 32;
+    const span = 255 - lift;
+    const r = Math.round(lift + span * rN);
+    const g = Math.round(lift + span * gN);
+    const b = Math.round(lift + span * bN);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function fmtLogEntropyTick(v) {
+    if (!isFinite(v)) return '–';
+    if (Math.abs(v) >= 10) return v.toFixed(1);
+    if (Math.abs(v) >= 1) return v.toFixed(2);
+    return v.toFixed(2);
+  }
+
+  function fmtRange(range) {
+    if (!range) return '–';
+    return `${fmtLogEntropyTick(range.lo)}…${fmtLogEntropyTick(range.hi)}`;
+  }
+
+  function updateEntropyScale(heatOn, chan, heatRange, rgbRanges) {
+    const pane = document.getElementById('entropyScalePane');
+    const ticks = document.getElementById('entropyScaleTicks');
+    const chanEl = document.getElementById('entropyScaleChan');
+    const noteEl = document.getElementById('entropyScaleNote');
+    const chanLbl = document.getElementById('entropyChanLbl');
+    const chanSel = document.getElementById('entropyChan');
+    const monoLbl = document.getElementById('entropyMonoLbl');
+    const monoCb = document.getElementById('entropyMono');
+    const legend = document.getElementById('entropyLegend');
+    const legendSwatch = document.getElementById('entropyLegendSwatch');
+    const scaleBar = document.getElementById('entropyScaleBar');
+    const accPane = document.getElementById('accPane');
+    const isRgb = chan === 'rgb';
+    const mono = !isRgb && entropyMonoEnabled();
+
+    chanLbl.style.display = heatOn ? '' : 'none';
+    chanSel.style.display = heatOn ? '' : 'none';
+    // Monochrome only applies to scalar channels; hide in RGB (and when heat is off).
+    const showMono = heatOn && !isRgb;
+    monoLbl.style.display = showMono ? '' : 'none';
+    monoCb.disabled = !showMono;
+    accPane.classList.toggle('heat-open', heatOn);
+    pane.classList.toggle('rgb-mode', heatOn && isRgb);
+
+    if (!heatOn) {
+      pane.style.display = 'none';
+      pane.setAttribute('aria-hidden', 'true');
+      legend.style.display = 'none';
+      return;
+    }
+
+    legend.style.display = '';
+    chanEl.textContent = entropyChannelLabel(chan);
+
+    if (isRgb) {
+      legendSwatch.style.background = 'linear-gradient(90deg,#ff4040,#40ff40,#4040ff)';
+      legend.querySelector('.lbl').textContent = 'R onset · G pitch · B dur';
+      noteEl.textContent = 'log H nats / channel';
+      pane.style.display = 'flex';
+      pane.setAttribute('aria-hidden', 'false');
+      ticks.innerHTML = '';
+      if (!rgbRanges) {
+        document.getElementById('entropyRgbR').textContent = '–';
+        document.getElementById('entropyRgbG').textContent = '–';
+        document.getElementById('entropyRgbB').textContent = '–';
+        noteEl.textContent = 'no entropy data';
+        return;
+      }
+      document.getElementById('entropyRgbR').textContent = fmtRange(rgbRanges.time);
+      document.getElementById('entropyRgbG').textContent = fmtRange(rgbRanges.pitch);
+      document.getElementById('entropyRgbB').textContent = fmtRange(rgbRanges.dur);
+      return;
+    }
+
+    legendSwatch.style.background = mono ? ENTROPY_LEGEND_MONO : ENTROPY_LEGEND_WARM;
+    scaleBar.style.background = mono ? ENTROPY_SCALE_MONO : ENTROPY_SCALE_WARM;
+    if (!heatRange) {
+      pane.style.display = 'flex';
+      pane.setAttribute('aria-hidden', 'false');
+      ticks.innerHTML = '';
+      noteEl.textContent = 'no entropy data';
+      legend.querySelector('.lbl').textContent = 'no data';
+      return;
+    }
+
+    pane.style.display = 'flex';
+    pane.setAttribute('aria-hidden', 'false');
+    legend.querySelector('.lbl').textContent = 'low → high';
+    noteEl.textContent = chan === 'triplet' ? 'log(Σ H) nats' : 'log H nats';
+
+    const { lo, hi } = heatRange;
+    const nTicks = 5;
+    const parts = [];
+    for (let i = 0; i < nTicks; i++) {
+      const u = i / (nTicks - 1); // 0 at top (high), 1 at bottom (low)
+      const v = hi - u * (hi - lo);
+      const topPct = (u * 100).toFixed(2);
+      parts.push(
+        `<div class="tick" style="top:${topPct}%">${fmtLogEntropyTick(v)}</div>`
+      );
+    }
+    ticks.innerHTML = parts.join('');
+  }
+
   function drawScore() {
+    drawPaperPanel('paper1');
+    drawPaperPanel('paper2');
+    const engraved = isEngravedMode();
+    document.getElementById('scorePanel').style.display = engraved ? 'none' : '';
+    document.getElementById('engravedPanel').style.display = engraved ? '' : 'none';
+    if (engraved) {
+      updateEntropyScale(false, 'triplet', null, null);
+      renderEngraved();
+      return;
+    }
     const rollout = currentRollout();
     const gt = ex.gt_score.filter(Boolean);
     const pred = rollout.pred_score.filter(Boolean);
     const branchCands = Object.values(rollout.branches).flatMap(b => b.candidates.filter(c => !c.rest));
     scoreSpan = noteSpan([...gt, ...pred, ...branchCands]);
     const dims = mkSvg(scoreSvg, scoreSpan);
-    drawGrid(scoreSvg, scoreSpan, dims, 0.5);
+    drawGrid(scoreSvg, scoreSpan, dims, beatSeconds);
     gtEls = {}; predEls = {};
+    const heatOn = entropyHeatEnabled();
+    const chan = entropyChannel();
+    const isRgb = chan === 'rgb';
+    const mono = !isRgb && entropyMonoEnabled();
+    const heatRange = heatOn && !isRgb ? entropyHeatRange(rollout, chan) : null;
+    const rgbRanges = heatOn && isRgb ? entropyRgbRanges(rollout) : null;
+    updateEntropyScale(heatOn, chan, heatRange, rgbRanges);
+    const heatReady = heatOn && (isRgb ? rgbRanges : heatRange);
     rollout.pred_score.forEach((n, i) => {
       if (!n) return;
-      const e = rect(scoreSvg, xOf(n.t), noteY(scoreSpan, n.p), noteW(n.d), noteH(), css('--pred'));
-      e.setAttribute('opacity', 0.65); e.dataset.slot = i;
+      let fill = css('--pred');
+      if (heatReady) {
+        if (isRgb) {
+          fill = entropyRgbColor(rollout, i, rgbRanges) || fill;
+        } else {
+          const logH = slotLogEntropy(rollout, i, chan);
+          if (logH != null) {
+            const t = (logH - heatRange.lo) / (heatRange.hi - heatRange.lo);
+            fill = entropyColor(t, mono);
+          }
+        }
+      }
+      const e = rect(scoreSvg, xOf(n.t), noteY(scoreSpan, n.p), noteW(n.d), noteH(), fill);
+      e.setAttribute('opacity', heatReady ? 0.9 : 0.65);
+      e.dataset.slot = i;
       const branch = rollout.branches[String(i)];
       const gtSlot = branch && branch.gt_slot != null ? branch.gt_slot : (usingRawRollout() ? null : i);
       const gtNote = gtSlot != null ? ex.gt_score[gtSlot] : null;
@@ -602,13 +1473,32 @@
       if (pitchError) {
         e.dataset.pitchError = '1';
         setBaseStroke(e, css('--miss'), 2);
+      } else if (n.seeded) {
+        setBaseStroke(e, css('--sel'), 1.6, '2 2');
       }
       const title = document.createElementNS(NS, 'title');
-      title.textContent = pitchError
+      const ent = rollout.entropy;
+      const logEnt = rollout.log_entropy;
+      let entBits = '';
+      if (ent && ent.time?.[i] != null) {
+        const lt = logEnt?.time?.[i];
+        const ld = logEnt?.dur?.[i];
+        const lp = logEnt?.pitch?.[i];
+        entBits =
+          `  ·  H=[${ent.time[i].toFixed(2)}, ${ent.dur[i].toFixed(2)}, ${ent.pitch[i].toFixed(2)}] nats`;
+        if (isRgb && lt != null && ld != null && lp != null) {
+          entBits += `  ·  RGB logH R(onset)=${Number(lt).toFixed(2)} G(pitch)=${Number(lp).toFixed(2)} B(dur)=${Number(ld).toFixed(2)}`;
+        } else {
+          const logVal = logEnt?.[chan]?.[i];
+          if (logVal != null)
+            entBits += `  ·  ${entropyChannelLabel(chan)} logH=${Number(logVal).toFixed(2)}`;
+        }
+      }
+      title.textContent = (pitchError
         ? `pitch error at slot ${i}: generated ${pname(n.p)}, ground truth ${pname(gtNote.p)} at slot ${gtSlot}`
-        : `generated score slot ${i}: ${pname(n.p)}`;
+        : `generated score slot ${i}: ${pname(n.p)}`) + (n.seeded ? '  (ground truth dropped in)' : '') + entBits;
       e.appendChild(title);
-      accidentalMark(scoreSvg, scoreSpan, n, css('--pred'));
+      accidentalMark(scoreSvg, scoreSpan, n, fill);
       predEls[i] = e;
     });
     ex.gt_score.forEach((n, i) => {
@@ -1058,11 +1948,15 @@
     selectedKey = null;
     stopPlayback();
     updateStreamOptions();
+    updateLoraToggle();
+    updateSeedToggle();
+    updateBeamSlider();
     drawScore();
     drawPerf();
     drawMinimap();
     drawPerplexity();
     updateMeta();
+    updateAccuracy();
     clearSelection();
   }
 
@@ -1075,6 +1969,7 @@
     if (redrawMap) drawMinimap();
     drawPerplexity();
     updateMeta();
+    updateAccuracy();
     if (keep != null && currentRollout().branches[keep]) selectNote(keep);
     else clearSelection();
   }
@@ -1083,13 +1978,50 @@
   streamSel.addEventListener('change', () => {
     const keep = selectedKey;
     stopPlayback();
+    updateSeedToggle();
+    updateBeamSlider();
     drawScore();
     drawPerf();
     drawMinimap();
     drawPerplexity();
     updateMeta();
+    updateAccuracy();
     if (keep != null && currentRollout().branches[keep]) selectNote(keep);
     else clearSelection();
+  });
+  document.getElementById('seedGt').addEventListener('change', () => {
+    const keep = selectedKey;
+    stopPlayback();
+    updateBeamSlider();
+    drawScore();
+    drawPerf();
+    drawMinimap();
+    drawPerplexity();
+    updateMeta();
+    updateAccuracy();
+    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    else clearSelection();
+  });
+  document.getElementById('useLora').addEventListener('change', () => {
+    const keep = selectedKey;
+    stopPlayback();
+    updateSeedToggle();
+    updateBeamSlider();
+    drawScore();
+    drawPerf();
+    drawMinimap();
+    drawPerplexity();
+    updateMeta();
+    updateAccuracy();
+    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    else clearSelection();
+  });
+  const beamSlider = document.getElementById('beamN');
+  const beamVal = document.getElementById('beamNVal');
+  beamSlider.addEventListener('input', () => {
+    updateBeamSlider();
+    if (beamVal) beamVal.textContent = String(beamSlider.value);
+    redrawRollsPreservingSelection();
   });
   viewModeSel.addEventListener('change', () => redrawRollsPreservingSelection());
   timeScaleSlider.addEventListener('input', () => {
@@ -1100,6 +2032,15 @@
   document.getElementById('clearBtn').addEventListener('click', clearSelection);
   document.getElementById('showGt').addEventListener('change', applyToggles);
   document.getElementById('showPred').addEventListener('change', applyToggles);
+  document.getElementById('entropyHeat').addEventListener('change', () => {
+    if (ex) drawScore();
+  });
+  document.getElementById('entropyChan').addEventListener('change', () => {
+    if (ex && entropyHeatEnabled()) drawScore();
+  });
+  document.getElementById('entropyMono').addEventListener('change', () => {
+    if (ex && entropyHeatEnabled() && entropyChannel() !== 'rgb') drawScore();
+  });
   playBtns.perf.addEventListener('click', () => { void playMode('perf'); });
   playBtns.gt.addEventListener('click', () => { void playMode('gt'); });
   playBtns.pred.addEventListener('click', () => { void playMode('pred'); });
@@ -1119,7 +2060,7 @@
     streamSel.title = 'Raw streams unavailable — regenerate data.js with format-2 precompute';
   }
 
-  loadExample(sel.value = Object.keys(DATA.examples)[0]);
+  loadExample(sel.value = orderedIds[0]);
 })();
 </script>
 </body>

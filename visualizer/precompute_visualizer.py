@@ -1,5 +1,5 @@
 """
-Precompute piano-roll + logit data for the HTML visualizer (format 3).
+Precompute piano-roll + logit data for the HTML visualizer (format 4).
 
 For each sampled validation window this stores:
   - the filtered performance (control) notes exactly as the model sees them
@@ -8,13 +8,25 @@ For each sampled validation window this stores:
     performer actually played in the window's span, including notes the aligner
     could not match to any score note (performer mistakes / extra notes)
   - the ground-truth score notes
-  - TWO autoregressive greedy rollouts with per-slot candidate capture:
+  - FOUR autoregressive greedy rollouts with per-slot candidate capture:
       * ``rollouts.filtered`` — conditioning on the filtered packed controls
       * ``rollouts.raw`` — conditioning on the literal raw performance stream
         (mistakes included); each raw perf note r maps to score slot r
+      * ``rollouts.filtered_seeded`` / ``rollouts.raw_seeded`` — the same, but
+        the ground-truth score note for slot 0 (the window's first note) is
+        dropped in as context instead of the model's own guess, showing how
+        the rest of the rollout responds when it isn't left to bootstrap
+        itself
   - candidates are captured DURING each rollout (model's own prior score
     mistakes), not from a teacher-forced ground-truth walk
   - per-slot score-token perplexity (exp(-log p) for greedy onset/duration/pitch)
+  - sequence-level perplexity of the generated score stream vs the ground-truth
+    score stream under the model (teacher-forced controls; see
+    ``compute_sequence_ppl.py`` to backfill an existing data.js)
+  - if ``--lora-checkpoint`` is given, the same four rollouts are additionally
+    computed with that LoRA adapter merged onto the base pretrained model
+    (not onto ``--checkpoint``) and stored under ``rollouts_lora``, letting the
+    UI toggle the base fine-tune vs. the LoRA fine-tune
 
 Candidates are a top-A onsets x top-B durations x top-C pitches expansion of
 the constrained logits at the slot's rollout state (probabilities from softmax
@@ -29,7 +41,7 @@ Run:
   python visualizer/precompute_visualizer.py \
       --checkpoint run_nodummy_v2/checkpoint-15000 \
       --test-file data/test_normalized.txt \
-      --num-examples 8 --output visualizer/data.js
+      --num-examples 24 --output visualizer/data.js
 """
 
 from __future__ import annotations
@@ -38,6 +50,7 @@ import argparse
 import glob
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -73,6 +86,32 @@ from evaluate_muster import load_model  # noqa: E402
 from inference import parse_sequence, sample_test_lines  # noqa: E402
 
 STREAM_CACHE_DIR = REPO_ROOT / "data" / "asap_aligned_stream_cache"
+LORA_BASE_MODEL = "stanford-crfm/music-medium-800k"
+
+
+def load_lora_model(lora_checkpoint, base_model_name=LORA_BASE_MODEL):
+    """Load the LoRA adapter merged onto the same base pretrained model
+    train_lora.py starts from (not onto ``--checkpoint``'s fine-tuned weights)."""
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM
+
+    from anticipation.vocab import VOCAB_SIZE
+
+    print(f"Loading LoRA base model {base_model_name}...")
+    base = AutoModelForCausalLM.from_pretrained(base_model_name, trust_remote_code=True)
+    if base.config.vocab_size != VOCAB_SIZE:
+        base.resize_token_embeddings(VOCAB_SIZE)
+
+    print(f"Loading LoRA adapter from {lora_checkpoint}...")
+    model = PeftModel.from_pretrained(base, lora_checkpoint)
+    model = model.merge_and_unload()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.config.use_cache = True
+    model = model.to(device)
+    model.eval()
+    print(f"  LoRA model loaded on {device}")
+    return model
 
 
 def to_legacy_past(past):
@@ -104,15 +143,20 @@ def _clamp(value, max_value):
     return max(0, min(max_value - 1, int(value)))
 
 
-def _load_cache_pieces():
+def _load_cache_pieces(cache_dir=STREAM_CACHE_DIR):
     """Load every cached aligned stream as (piece_path, items) with raw control
     tuples. Returns list of dicts with:
       raw:      [(t, d, p)] for ALL performance notes (unfiltered)
       matched:  [bool] per raw note (True if aligned to a score note)
       filtered_to_raw: raw index of each filtered (matched) note
+
+    ``cache_dir`` selects which aligned-stream cache to read; it must be the same
+    one the ``--test-file`` was tokenized against (e.g. the 0.48s-beat-interval run
+    uses ``data/asap_aligned_stream_cache_b048``), otherwise the control triplets
+    won't reproduce the packed windows and ``locate_window`` returns nothing.
     """
     pieces = []
-    for path in sorted(glob.glob(str(STREAM_CACHE_DIR / "*.json"))):
+    for path in sorted(glob.glob(str(Path(cache_dir) / "*.json"))):
         try:
             payload = json.load(open(path))
         except Exception:
@@ -209,6 +253,15 @@ def encode_control_triplet(raw):
     ]
 
 
+def encode_score_note(note):
+    """Encode a {t,d,p} note dict (local units) into score-vocab token ids."""
+    return (
+        TIME_OFFSET + _clamp(note["t"], MAX_TIME),
+        DUR_OFFSET + _clamp(note["d"], MAX_DUR),
+        NOTE_OFFSET + (int(note["p"]) % MAX_PITCH),
+    )
+
+
 def tokens_from_controls(control_notes, target_len):
     """Build a packed-format context from a performance/control stream only.
 
@@ -284,19 +337,35 @@ def rollout_with_candidates(
     topk_pitch,
     max_candidates,
     slot_progress=False,
+    seed_note=None,
 ):
     """Greedy AR rollout (teacher-forced ground-truth controls) that also
     captures, at every body score slot, the candidate expansion from the
     ROLLOUT state -- i.e. conditioned on the model's own generated score notes
     so far, not the ground truth.
 
-    Returns (pred_by_slot, candidates_by_slot, perplexity_by_slot).
+    If ``seed_note`` ({t,d,p} in local units) is given, slot 0's greedy pick is
+    still captured for display, but the rollout is advanced using
+    ``seed_note`` instead -- i.e. the true first score note is "dropped in" as
+    context for every subsequent slot, showing how the model recovers when it
+    isn't left to guess the very first note itself.
+
+    Returns (pred_by_slot, candidates_by_slot, perplexity_by_slot, entropy_by_slot).
     """
 
     def token_logprob(logits, slot, token):
         constrained = constrain_score_token_logits(logits.float(), slot)
         log_probs = F.log_softmax(constrained, dim=-1)
         return float(log_probs[int(token)].item())
+
+    def token_entropy(logits, slot):
+        """Shannon entropy (nats) of the constrained predictive distribution."""
+        constrained = constrain_score_token_logits(logits.float(), slot)
+        log_probs = F.log_softmax(constrained, dim=-1)
+        probs = log_probs.exp()
+        term = probs * log_probs
+        term = torch.where(probs > 0, term, torch.zeros_like(term))
+        return float((-term.sum()).item())
 
     def feed(token, past):
         out = model(
@@ -327,6 +396,7 @@ def rollout_with_candidates(
     pred_by_slot = []
     candidates_by_slot = []
     perplexity_by_slot = []
+    entropy_by_slot = []
 
     slot_iter = enumerate(slot_positions)
     if slot_progress:
@@ -346,6 +416,7 @@ def rollout_with_candidates(
             pred_by_slot.append(None)
             candidates_by_slot.append([])
             perplexity_by_slot.append(None)
+            entropy_by_slot.append(None)
             continue
 
         # --- expand candidates from the current ROLLOUT state ---
@@ -374,6 +445,7 @@ def rollout_with_candidates(
             pred_by_slot.append(None)
             candidates_by_slot.append([])
             perplexity_by_slot.append(None)
+            entropy_by_slot.append(None)
             continue
 
         g_onset_tok, _ = onsets[0]
@@ -399,14 +471,31 @@ def rollout_with_candidates(
             "dur": math.exp(-token_logprob(dur_logits, 1, g_dur_tok)),
             "pitch": math.exp(-token_logprob(pitch_logits, 2, g_pitch_tok)),
         })
+        entropy_by_slot.append({
+            "time": token_entropy(next_logits, 0),
+            "dur": token_entropy(dur_logits, 1),
+            "pitch": token_entropy(pitch_logits, 2),
+        })
 
-        # --- advance the rollout: feed greedy pitch, then GT control triplet ---
-        past, next_logits = feed(g_pitch_tok, past_od)
+        # --- advance the rollout: feed the chosen pitch, then GT control triplet ---
+        if s == 0 and seed_note is not None:
+            onset_tok, dur_tok, pitch_tok = encode_score_note(seed_note)
+            past_o2, _ = feed(onset_tok, past)
+            past_od2, _ = feed(dur_tok, past_o2)
+            past, next_logits = feed(pitch_tok, past_od2)
+            pred_by_slot[-1] = {
+                "t": onset_tok - TIME_OFFSET,
+                "d": dur_tok - DUR_OFFSET,
+                "p": (pitch_tok - NOTE_OFFSET) % MAX_PITCH,
+                "seeded": True,
+            }
+        else:
+            past, next_logits = feed(g_pitch_tok, past_od)
         control_pos = pos + 3
         for k in range(3):
             past, next_logits = feed(tokens[control_pos + k], past)
 
-    return pred_by_slot, candidates_by_slot, perplexity_by_slot
+    return pred_by_slot, candidates_by_slot, perplexity_by_slot, entropy_by_slot
 
 
 def compact_perplexity(perplexity_by_slot):
@@ -418,20 +507,119 @@ def compact_perplexity(perplexity_by_slot):
     }
 
 
-@torch.inference_mode()
-def compute_example(model, device, tokens, pieces, args):
-    k = PREFIX_CONTROLS
+_LOG_ENTROPY_EPS = 1e-12
 
-    # filtered performance notes in window order (= model's control stream)
+
+def compact_entropy(entropy_by_slot):
+    """Shannon entropy (nats) + log-entropy arrays aligned with score slots."""
+    time_h = [None if p is None else p["time"] for p in entropy_by_slot]
+    dur_h = [None if p is None else p["dur"] for p in entropy_by_slot]
+    pitch_h = [None if p is None else p["pitch"] for p in entropy_by_slot]
+    log_time, log_dur, log_pitch, log_trip = [], [], [], []
+    for h_t, h_d, h_p in zip(time_h, dur_h, pitch_h):
+        if h_t is None or h_d is None or h_p is None:
+            log_time.append(None)
+            log_dur.append(None)
+            log_pitch.append(None)
+            log_trip.append(None)
+        else:
+            log_time.append(math.log(h_t + _LOG_ENTROPY_EPS))
+            log_dur.append(math.log(h_d + _LOG_ENTROPY_EPS))
+            log_pitch.append(math.log(h_p + _LOG_ENTROPY_EPS))
+            log_trip.append(math.log(h_t + h_d + h_p + _LOG_ENTROPY_EPS))
+    return {
+        "entropy": {"time": time_h, "dur": dur_h, "pitch": pitch_h},
+        "log_entropy": {
+            "time": log_time, "dur": log_dur, "pitch": log_pitch, "triplet": log_trip,
+        },
+    }
+
+
+@torch.inference_mode()
+def compute_rollout_set(model, device, tokens, raw_notes, gt_by_slot, args):
+    """Run all four AR rollout variants (filtered/raw x plain/GT-seeded) for a
+    single model against a single window. Returns (rollouts_dict, filtered_branches)."""
+    # the note "dropped in" for the ground-truth-seeded rollouts: slot 0 always
+    # quantizes local filtered index 0, the window's very first performance note
+    seed_note = gt_by_slot[0]
+
+    def run_rollout(rollout_tokens, key_for_slot, slot_meta, seed):
+        pred, cands, perplexity, entropy = rollout_with_candidates(
+            model, device, rollout_tokens,
+            args.topk_onset, args.topk_dur, args.topk_pitch, args.max_candidates,
+            slot_progress=args.slot_progress, seed_note=seed,
+        )
+        branches = build_branches_from_slots(cands, key_for_slot=key_for_slot, slot_meta=slot_meta)
+        ent = compact_entropy(entropy)
+        return {
+            "pred_score": pred,
+            "branches": branches,
+            "perplexity": compact_perplexity(perplexity),
+            "entropy": ent["entropy"],
+            "log_entropy": ent["log_entropy"],
+            # sequence_perplexity is filled by compute_sequence_ppl.py
+        }, branches
+
+    filtered_key_for_slot = lambda s: s
+    filtered_slot_meta = lambda s: {"gt_slot": s, "filtered_index": s}
+
+    filtered_rollout, filtered_branches = run_rollout(
+        tokens, filtered_key_for_slot, filtered_slot_meta, None,
+    )
+    filtered_seeded_rollout = None
+    if seed_note is not None:
+        filtered_seeded_rollout, _ = run_rollout(
+            tokens, filtered_key_for_slot, filtered_slot_meta, seed_note,
+        )
+
+    raw_rollout = raw_seeded_rollout = None
+    if raw_notes:
+        raw_tokens = tokens_from_controls(raw_notes, len(tokens))
+
+        def raw_key_for_slot(s):
+            return s if s < len(raw_notes) else None
+
+        def raw_slot_meta(s):
+            return {
+                "gt_slot": raw_notes[s].get("j") if s < len(raw_notes) else None,
+                "raw_index": s if s < len(raw_notes) else None,
+            }
+
+        raw_rollout, _ = run_rollout(raw_tokens, raw_key_for_slot, raw_slot_meta, None)
+        if seed_note is not None:
+            raw_seeded_rollout, _ = run_rollout(
+                raw_tokens, raw_key_for_slot, raw_slot_meta, seed_note,
+            )
+
+    return {
+        "filtered": filtered_rollout,
+        "filtered_seeded": filtered_seeded_rollout,
+        "raw": raw_rollout,
+        "raw_seeded": raw_seeded_rollout,
+    }, filtered_branches
+
+
+@torch.inference_mode()
+def extract_window_controls(tokens):
+    """The window's filtered performance notes in order (= the model's control
+    stream), as raw (time, dur, pitch) tuples. This is the beat-independent
+    signature used to locate a window's source piece in the aligned-stream cache."""
     control_positions = list(range(0, ALTERNATING_START, 6))
     for pos in iter_score_slot_positions(len(tokens), ALTERNATING_START):
         cpos = pos + 3
         if cpos + 2 < len(tokens) and is_control_triplet(tokens, cpos):
             control_positions.append(cpos)
-    window_controls = [
+    return [
         tuple(control_triplet_to_raw(triplet_values(tokens, pos)))
         for pos in control_positions
     ]
+
+
+def compute_example(model, device, tokens, pieces, args, lora_model=None):
+    k = PREFIX_CONTROLS
+
+    # filtered performance notes in window order (= model's control stream)
+    window_controls = extract_window_controls(tokens)
     perf_notes = [{"t": t, "d": d, "p": p % MAX_PITCH} for (t, d, p) in window_controls]
 
     # unfiltered stream from the source piece
@@ -451,50 +639,15 @@ def compute_example(model, device, tokens, pieces, args):
         for pos in iter_score_slot_positions(len(tokens), ALTERNATING_START)
     ]
 
-    filtered_pred_by_slot, filtered_candidates_by_slot, filtered_perplexity = (
-        rollout_with_candidates(
-            model, device, tokens,
-            args.topk_onset, args.topk_dur, args.topk_pitch, args.max_candidates,
-            slot_progress=args.slot_progress,
-        )
+    rollouts, filtered_branches = compute_rollout_set(
+        model, device, tokens, raw_notes, gt_by_slot, args,
     )
 
-    filtered_branches = build_branches_from_slots(
-        filtered_candidates_by_slot,
-        key_for_slot=lambda s: s,
-        slot_meta=lambda s: {"gt_slot": s, "filtered_index": s},
-    )
-    filtered_rollout = {
-        "pred_score": filtered_pred_by_slot,
-        "branches": filtered_branches,
-        "perplexity": compact_perplexity(filtered_perplexity),
-    }
-
-    raw_rollout = None
-    if raw_notes:
-        raw_tokens = tokens_from_controls(raw_notes, len(tokens))
-        raw_pred_by_slot, raw_candidates_by_slot, raw_perplexity = rollout_with_candidates(
-            model, device, raw_tokens,
-            args.topk_onset, args.topk_dur, args.topk_pitch, args.max_candidates,
-            slot_progress=args.slot_progress,
+    rollouts_lora = None
+    if lora_model is not None:
+        rollouts_lora, _ = compute_rollout_set(
+            lora_model, device, tokens, raw_notes, gt_by_slot, args,
         )
-
-        def raw_key_for_slot(s):
-            return s if s < len(raw_notes) else None
-
-        raw_branches = build_branches_from_slots(
-            raw_candidates_by_slot,
-            key_for_slot=raw_key_for_slot,
-            slot_meta=lambda s: {
-                "gt_slot": raw_notes[s].get("j") if s < len(raw_notes) else None,
-                "raw_index": s if s < len(raw_notes) else None,
-            },
-        )
-        raw_rollout = {
-            "pred_score": raw_pred_by_slot,
-            "branches": raw_branches,
-            "perplexity": compact_perplexity(raw_perplexity),
-        }
 
     return {
         "piece": piece_id,
@@ -503,14 +656,48 @@ def compute_example(model, device, tokens, pieces, args):
         "raw_notes": raw_notes,
         "gt_score": gt_by_slot,
         # Legacy aliases for old HTML; the UI now uses ``rollouts``.
-        "pred_score": filtered_pred_by_slot,
+        "pred_score": rollouts["filtered"]["pred_score"],
         "branches": filtered_branches,
-        "rollouts": {
-            "filtered": filtered_rollout,
-            "raw": raw_rollout,
-        },
+        "rollouts": rollouts,
+        "rollouts_lora": rollouts_lora,
         "time_resolution": TIME_RESOLUTION,
     }
+
+
+def sample_new_test_lines(test_file, num_new, seed, exclude_indices):
+    """Like ``inference.sample_test_lines``, but skips any line whose index is
+    in ``exclude_indices`` -- used by ``--append-to`` so newly sampled windows
+    can never duplicate windows already present in the file being appended to."""
+    rng = random.Random(seed)
+    sampled = []
+    seen = 0
+    with open(test_file, "r", encoding="utf-8") as handle:
+        for idx, raw_line in enumerate(handle):
+            if idx in exclude_indices:
+                continue
+            line = raw_line.strip()
+            if not line:
+                continue
+            if len(sampled) < num_new:
+                sampled.append((idx, line))
+            else:
+                replace_idx = rng.randrange(seen + 1)
+                if replace_idx < num_new:
+                    sampled[replace_idx] = (idx, line)
+            seen += 1
+    sampled.sort(key=lambda pair: pair[0])
+    return sampled, seen
+
+
+def load_existing_payload(path):
+    text = Path(path).read_text(encoding="utf-8")
+    prefix = "window.VISUALIZER_DATA = "
+    if not text.startswith(prefix):
+        raise ValueError(f"unexpected data.js format (missing '{prefix}' prefix): {path}")
+    body = text[len(prefix):].rstrip()
+    if body.endswith(";"):
+        body = body[:-1]
+    return json.loads(body)
 
 
 def main():
@@ -518,8 +705,21 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--config-source", default=None)
     parser.add_argument("--test-file", default="data/test_normalized.txt")
-    parser.add_argument("--num-examples", type=int, default=8)
+    parser.add_argument("--num-examples", type=int, default=24)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument(
+        "--cache-dir", default=None,
+        help="aligned-stream cache dir for raw-stream recovery (default "
+             "data/asap_aligned_stream_cache). Must match the cache --test-file was "
+             "tokenized against, e.g. data/asap_aligned_stream_cache_b048 for the 0.48s run.",
+    )
+    parser.add_argument(
+        "--only-indices", default=None,
+        help="comma-separated list of test-file line indices to render EXACTLY (no "
+             "random sampling); output examples are keyed by these line indices and "
+             "ordered as given. Used to reproduce a fixed window set (e.g. mirror the "
+             "0.5s viz windows in the 0.48s tokenization). Overrides --num-examples/--seed.",
+    )
     parser.add_argument("--output", default="visualizer/data.js")
     parser.add_argument("--topk-onset", type=int, default=5)
     parser.add_argument("--topk-dur", type=int, default=4)
@@ -530,17 +730,66 @@ def main():
         action="store_true",
         help="show per-slot tqdm bars during each rollout (verbose SLURM logs)",
     )
+    parser.add_argument(
+        "--lora-checkpoint", default=None,
+        help="PEFT adapter dir (e.g. run_nodummy_lora_r512/checkpoint-10000); "
+             "merged onto the base pretrained model, computed alongside the main rollouts",
+    )
+    parser.add_argument(
+        "--append-to", default=None,
+        help="existing data.js: its windows are kept as-is (excluded from resampling, "
+             "so no duplicates) and --num-examples NEW windows are computed and appended "
+             "after them in the dropdown (via the 'example_order' list)",
+    )
     args = parser.parse_args()
 
     t_start = time.perf_counter()
-    print("Loading aligned-stream cache for raw-stream recovery...", flush=True)
-    pieces = _load_cache_pieces()
+    cache_dir = Path(args.cache_dir) if args.cache_dir else STREAM_CACHE_DIR
+    print(f"Loading aligned-stream cache for raw-stream recovery ({cache_dir})...", flush=True)
+    pieces = _load_cache_pieces(cache_dir)
     print(f"  {len(pieces)} cached pieces", flush=True)
 
     model, device = load_model(args.checkpoint, args.config_source)
     print(f"Model ready on {device} ({time.perf_counter() - t_start:.1f}s since start)", flush=True)
 
-    sampled, total = sample_test_lines(args.test_file, args.num_examples, args.seed)
+    lora_model = None
+    if args.lora_checkpoint:
+        lora_model = load_lora_model(args.lora_checkpoint)
+        print(f"LoRA model ready ({time.perf_counter() - t_start:.1f}s since start)", flush=True)
+
+    existing_examples = {}
+    existing_order = []
+    if args.only_indices:
+        wanted = [int(x) for x in args.only_indices.split(",") if x.strip() != ""]
+        wanted_set = set(wanted)
+        by_index = {}
+        with open(args.test_file, "r", encoding="utf-8") as handle:
+            for idx, raw_line in enumerate(handle):
+                if idx in wanted_set:
+                    by_index[idx] = raw_line.strip()
+                    if len(by_index) == len(wanted_set):
+                        break
+        missing = [i for i in wanted if i not in by_index]
+        if missing:
+            raise ValueError(f"--only-indices: line index/indices not found in {args.test_file}: {missing}")
+        sampled = [(idx, by_index[idx]) for idx in wanted]  # preserve given order
+        total = len(sampled)
+        print(f"Rendering {len(sampled)} explicit window(s) from {args.test_file} "
+              f"(--only-indices; no sampling)", flush=True)
+    elif args.append_to:
+        existing_payload = load_existing_payload(args.append_to)
+        existing_examples = existing_payload.get("examples", {})
+        existing_order = existing_payload.get("example_order") or list(existing_examples.keys())
+        exclude_indices = {int(k) for k in existing_examples.keys()}
+        print(
+            f"Appending to {args.append_to}: keeping {len(existing_examples)} existing "
+            f"window(s) as-is, sampling {args.num_examples} new one(s)", flush=True,
+        )
+        sampled, total = sample_new_test_lines(
+            args.test_file, args.num_examples, args.seed, exclude_indices,
+        )
+    else:
+        sampled, total = sample_test_lines(args.test_file, args.num_examples, args.seed)
     print(f"Sampled {len(sampled)} of {total} validation windows (seed={args.seed})", flush=True)
 
     examples = {}
@@ -555,25 +804,31 @@ def main():
         if len(tokens) <= ALTERNATING_START:
             continue
         t_win = time.perf_counter()
-        tqdm.write(f"  window {original_index}: dual AR rollout + perplexity...")
-        example = compute_example(model, device, tokens, pieces, args)
+        tqdm.write(f"  window {original_index}: AR rollout(s) + perplexity...")
+        example = compute_example(model, device, tokens, pieces, args, lora_model=lora_model)
         n_real = sum(1 for n in example["gt_score"] if n is not None)
         raw_rollout = example["rollouts"].get("raw")
         raw_slots = len(raw_rollout["branches"]) if raw_rollout else 0
+        lora_note = " + LoRA rollouts" if example.get("rollouts_lora") else ""
         tqdm.write(
             f"    {len(example['perf_notes'])} filtered perf notes, {n_real} GT score notes, "
-            f"{len(example['branches'])} filtered slots, {raw_slots} raw slots "
+            f"{len(example['branches'])} filtered slots, {raw_slots} raw slots{lora_note} "
             f"({time.perf_counter() - t_win:.1f}s)"
         )
         examples[str(original_index)] = example
 
+    merged_examples = {**existing_examples, **examples}
+    example_order = existing_order + [str(idx) for idx, _ in sampled]
+
     payload = {
-        "format": 3,
+        "format": 4,
         "checkpoint": args.checkpoint,
+        "lora_checkpoint": args.lora_checkpoint,
         "test_file": args.test_file,
         "seed": args.seed,
         "logits_conditioning": "autoregressive_rollout",
-        "examples": examples,
+        "example_order": example_order,
+        "examples": merged_examples,
     }
 
     output_path = Path(args.output)
@@ -582,9 +837,7 @@ def main():
         handle.write("window.VISUALIZER_DATA = ")
         json.dump(payload, handle)
         handle.write(";\n")
-    with open(output_path.with_suffix(".json"), "w", encoding="utf-8") as handle:
-        json.dump(payload, handle)
-    print(f"Wrote {output_path} and {output_path.with_suffix('.json')}", flush=True)
+    print(f"Wrote {output_path}", flush=True)
     print(f"Total elapsed: {time.perf_counter() - t_start:.1f}s", flush=True)
 
 

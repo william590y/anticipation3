@@ -22,7 +22,7 @@ conda activate base
 CHECKPOINT="${CHECKPOINT:-run_nodummy/final}"
 TEST_FILE="${TEST_FILE:-data/test_normalized.txt}"
 OUTPUT="${OUTPUT:-visualizer/data.js}"
-NUM_EXAMPLES="${NUM_EXAMPLES:-8}"
+NUM_EXAMPLES="${NUM_EXAMPLES:-24}"
 EXTRA_FLAGS="${EXTRA_FLAGS:-}"
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-32}"
