@@ -278,21 +278,19 @@ def main():
     progress = tqdm(total=args.max_steps, disable=not accelerator.is_main_process, desc="LTLM")
 
     def run_validation():
-        if not accelerator.is_main_process:
-            accelerator.wait_for_everyone()
-            model.train()
-            return
-        max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
-        metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
-        print(
-            f"step {completed_steps}: "
-            f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
-            f"planner NLL {metrics['val/planner/loss']:.4f}  "
-            f"prefix NLL {metrics['val/prefix/loss']:.4f}  "
-            f"cos(q,p) {metrics['val/oracle/z_cosine_vs_planner']:.3f}"
-        )
-        if use_wandb:
-            wandb.log(metrics, step=completed_steps)
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
+            metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
+            print(
+                f"step {completed_steps}: "
+                f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
+                f"planner NLL {metrics['val/planner/loss']:.4f}  "
+                f"prefix NLL {metrics['val/prefix/loss']:.4f}  "
+                f"cos(q,p) {metrics['val/oracle/z_cosine_vs_planner']:.3f}"
+            )
+            if use_wandb:
+                wandb.log(metrics, step=completed_steps)
         accelerator.wait_for_everyone()
         model.train()
 
