@@ -15,7 +15,7 @@ set -euo pipefail
 # Dedicated checkout so we do not clobber the unpushed Cornell train_ltlm.py.
 SRC=/home/wjl86/anticipation3
 WORKDIR=/home/wjl86/anticipation3-planner
-BRANCH=cursor/planner-posterior-kl-50bc
+BRANCH=cursor/thickstun-ltlm-sbatch-50bc
 
 if [ ! -d "$WORKDIR/.git" ]; then
   git clone --branch "$BRANCH" https://github.com/william590y/anticipation3.git "$WORKDIR"
