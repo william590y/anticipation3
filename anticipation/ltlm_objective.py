@@ -1,20 +1,17 @@
 """Planner-regularized LTLM objective.
 
-The previous LTLM runs regularized the oracle posterior toward N(0, I) while
-training a separate performance-conditional diffusion as an auxiliary. That
-lets q(z|P,S) encode score information the planner cannot recover.
-
-This module implements the intended ELBO term:
-
     L = E_q[-log p_theta(S | P, z)] + beta * D(q(z|P,S), p_phi(z|P))
 
-with D = KL(q || p_phi) for diagonal Gaussians. beta trades oracle NLL
-against forcing the posterior to stay in the planner's support.
+beta trades oracle NLL against forcing the posterior to stay in the
+planner's support. D is analytic KL(q || p) when p_phi is a diagonal
+Gaussian, or the DDPM bound on -log p_phi(z|P) when p_phi is a diffusion.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
 
@@ -80,7 +77,7 @@ def _reduce(per_example: torch.Tensor, reduction: str, n_latents: int) -> torch.
 
 
 def latent_alignment_stats(mu_q: torch.Tensor, mu_p: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Cosine / RMSE between oracle posterior mean and planner mean."""
+    """Cosine / RMSE between oracle posterior mean and a planner reference (mean or sample)."""
     q = _flatten_latents(mu_q.float())
     p = _flatten_latents(mu_p.float())
     q_norm = F.normalize(q, dim=-1)
@@ -101,30 +98,40 @@ def planner_regularized_loss(
     nll: torch.Tensor,
     mu_q: torch.Tensor,
     log_var_q: torch.Tensor,
-    mu_p: torch.Tensor,
-    log_var_p: torch.Tensor,
-    beta: float,
+    mu_p: Optional[torch.Tensor] = None,
+    log_var_p: Optional[torch.Tensor] = None,
+    beta: float = 1.0,
     *,
+    divergence: Optional[torch.Tensor] = None,
     isotropic_kl_weight: float = 0.0,
     reduction: str = "mean",
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """L = NLL + beta * KL(q(z|P,S) || p(z|P)) [+ optional KL(q || N(0,I))].
+    """L = NLL + beta * D(q, p_phi) [+ optional KL(q || N(0,I))].
 
-    ``mu_p`` / ``log_var_p`` are the performance planner. Pass
-    ``mu_p.detach()`` during the fast (AdamVI) inner loop so the planner is
-    not updated 16x per batch; leave them attached on the slow step so phi
-    fits the current posterior.
+    Pass ``divergence`` for a precomputed D (diffusion DDPM bound, or a
+    detached Gaussian KL). Otherwise D is analytic KL(q || p) from
+    ``mu_p`` / ``log_var_p``. Detach those (or freeze planner weights)
+    during AdamVI so phi is not updated 16x per batch.
     """
-    planner_kl = kl_diagonal_gaussians(
-        mu_q, log_var_q, mu_p, log_var_p, reduction=reduction
-    )
-    loss = nll + beta * planner_kl
+    if divergence is None:
+        if mu_p is None or log_var_p is None:
+            raise ValueError("Need divergence=... or mu_p/log_var_p for Gaussian KL")
+        divergence = kl_diagonal_gaussians(
+            mu_q, log_var_q, mu_p, log_var_p, reduction=reduction
+        )
+    loss = nll + beta * divergence
     stats = {
         "nll": nll.detach(),
-        "planner_kl": planner_kl.detach(),
+        "planner_kl": divergence.detach(),
         "entropy": gaussian_entropy(log_var_q, reduction=reduction).detach(),
     }
-    stats.update(latent_alignment_stats(mu_q.detach(), mu_p.detach()))
+    if mu_p is not None:
+        stats.update(latent_alignment_stats(mu_q.detach(), mu_p.detach()))
+    else:
+        q = _flatten_latents(mu_q.detach().float())
+        stats["q_rms"] = q.square().mean().sqrt()
+        stats["z_cosine"] = torch.zeros((), device=mu_q.device)
+        stats["z_rmse"] = torch.zeros((), device=mu_q.device)
     if isotropic_kl_weight:
         iso = kl_standard_normal(mu_q, log_var_q, reduction=reduction)
         loss = loss + isotropic_kl_weight * iso

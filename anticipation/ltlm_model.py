@@ -1,9 +1,13 @@
 """GPT-2 LTLM wrapper: per-layer thought cross-attention + performance planner.
 
 Thoughts z have shape (batch, n_layers * thoughts_per_layer, n_embd). Layer i
-cross-attends to thoughts [i*T:(i+1)*T]. The planner p_phi(z|P) is an amortized
-diagonal Gaussian whose mean/log-var are produced by attending a set of learned
-thought queries to the packed performance (control) tokens.
+cross-attends to thoughts [i*T:(i+1)*T].
+
+The planner p_phi(z|P) is either:
+
+- ``gaussian``: amortized diagonal Gaussian (analytic KL)
+- ``diffusion``: performance-conditional DDPM; D is the noise-prediction
+  bound on -log p_phi(z|P), still scaled by the same beta
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from anticipation.ltlm_objective import planner_regularized_loss
+from anticipation.ltlm_diffusion import DiffusionPlanner
+from anticipation.ltlm_objective import kl_diagonal_gaussians, planner_regularized_loss
 from anticipation.vocab import CONTROL_OFFSET, SEPARATOR
 
 
@@ -120,8 +125,14 @@ class LTLMCausalLM(nn.Module):
         beta: float = 5.0,
         isotropic_kl_weight: float = 0.0,
         elbo_reduction: str = "mean",
+        planner_type: str = "diffusion",
+        diffusion_timesteps: int = 1000,
+        diffusion_layers: int = 3,
+        ddim_steps: int = 50,
     ):
         super().__init__()
+        if planner_type not in ("gaussian", "diffusion"):
+            raise ValueError(f"Unknown planner_type {planner_type!r}")
         self.base_model = base_model
         config = base_model.config
         self.n_embd = int(config.n_embd)
@@ -132,6 +143,8 @@ class LTLMCausalLM(nn.Module):
         self.beta = beta
         self.isotropic_kl_weight = isotropic_kl_weight
         self.elbo_reduction = elbo_reduction
+        self.planner_type = planner_type
+        self.ddim_steps = ddim_steps
         self.z_dim = self.n_embd
 
         transformer = self._transformer()
@@ -141,7 +154,16 @@ class LTLMCausalLM(nn.Module):
         )
         transformer.h = wrapped
         self.blocks = wrapped
-        self.planner = PerformancePlanner(self.n_embd, self.n_thoughts, self.n_head)
+        if planner_type == "gaussian":
+            self.planner = PerformancePlanner(self.n_embd, self.n_thoughts, self.n_head)
+        else:
+            self.planner = DiffusionPlanner(
+                self.n_embd,
+                self.n_thoughts,
+                self.n_head,
+                timesteps=diffusion_timesteps,
+                n_layers=diffusion_layers,
+            )
 
     def _transformer(self):
         if hasattr(self.base_model, "transformer"):
@@ -162,10 +184,75 @@ class LTLMCausalLM(nn.Module):
         for i, block in enumerate(self.blocks):
             block.thoughts = z[:, i]
 
-    def planner_params(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _control_context(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         embeds = self._wte()(input_ids)
         mask = control_token_mask(input_ids)
+        return embeds, mask
+
+    def planner_params(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.planner_type != "gaussian":
+            raise RuntimeError("planner_params is only defined for the Gaussian planner")
+        embeds, mask = self._control_context(input_ids)
         return self.planner(embeds, mask)
+
+    def planner_condition(self, input_ids: torch.Tensor) -> torch.Tensor:
+        embeds, mask = self._control_context(input_ids)
+        return self.planner.condition(embeds, mask)
+
+    def init_posterior(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """AdamVI start: planner mean (Gaussian) or a short DDIM sample (diffusion)."""
+        if self.planner_type == "gaussian":
+            mu_p, log_var_p = self.planner_params(input_ids)
+            return mu_p.detach().clone(), log_var_p.detach().clone()
+        z = self.sample_planner_z(input_ids, steps=min(8, self.ddim_steps))
+        return z.detach().clone(), torch.zeros_like(z)
+
+    def sample_planner_z(
+        self,
+        input_ids: torch.Tensor,
+        steps: Optional[int] = None,
+    ) -> torch.Tensor:
+        """Draw z ~ p_phi(z | P): Gaussian mean, or DDIM for diffusion."""
+        if self.planner_type == "gaussian":
+            mu_p, _ = self.planner_params(input_ids)
+            return mu_p
+        cond = self.planner_condition(input_ids)
+        return self.planner.ddim_sample(cond, steps=steps or self.ddim_steps)
+
+    def planner_divergence(
+        self,
+        z: torch.Tensor,
+        mu_q: torch.Tensor,
+        log_var_q: torch.Tensor,
+        input_ids: torch.Tensor,
+        *,
+        detach_planner: bool = False,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """D(q, p_phi). Returns (divergence, mu_p_or_sample, log_var_p_or_None)."""
+        if self.planner_type == "gaussian":
+            mu_p, log_var_p = self.planner_params(input_ids)
+            if detach_planner:
+                mu_p = mu_p.detach()
+                log_var_p = log_var_p.detach()
+            div = kl_diagonal_gaussians(
+                mu_q, log_var_q, mu_p, log_var_p, reduction=self.elbo_reduction
+            )
+            return div, mu_p, log_var_p
+
+        cond = self.planner_condition(input_ids)
+        if detach_planner:
+            cond = cond.detach()
+            flags = [p.requires_grad for p in self.planner.parameters()]
+            for param in self.planner.parameters():
+                param.requires_grad_(False)
+            try:
+                div = self.planner.denoise_loss(z, cond)
+            finally:
+                for param, flag in zip(self.planner.parameters(), flags):
+                    param.requires_grad_(flag)
+        else:
+            div = self.planner.denoise_loss(z, cond)
+        return div, None, None
 
     def decode(self, input_ids: torch.Tensor, z: torch.Tensor, **kwargs):
         self.set_thoughts(z)
@@ -208,13 +295,16 @@ class LTLMCausalLM(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         detach_planner: bool = False,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
-        mu_p, log_var_p = self.planner_params(input_ids)
-        if detach_planner:
-            mu_p = mu_p.detach()
-            log_var_p = log_var_p.detach()
         std = torch.exp(0.5 * log_var_q)
         z = mu_q + eps * std
         nll, logits = self.score_nll(input_ids, labels, z, attention_mask=attention_mask)
+        divergence, mu_p, log_var_p = self.planner_divergence(
+            z,
+            mu_q,
+            log_var_q,
+            input_ids,
+            detach_planner=detach_planner,
+        )
         loss, stats = planner_regularized_loss(
             nll,
             mu_q,
@@ -222,12 +312,16 @@ class LTLMCausalLM(nn.Module):
             mu_p,
             log_var_p,
             beta=self.beta,
+            divergence=divergence,
             isotropic_kl_weight=self.isotropic_kl_weight,
             reduction=self.elbo_reduction,
         )
-        stats["mu_p"] = mu_p
-        stats["log_var_p"] = log_var_p
+        if mu_p is not None:
+            stats["mu_p"] = mu_p
+        if log_var_p is not None:
+            stats["log_var_p"] = log_var_p
         stats["z"] = z
+        stats["planner_type"] = self.planner_type
         return loss, stats, logits
 
     def forward(self, input_ids=None, labels=None, attention_mask=None, **kwargs):
