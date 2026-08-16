@@ -2,21 +2,21 @@
 
 Loss
 ----
-    L = E_{q(z|P,S)} [ -log p_theta(S | P, z) ] + beta * KL(q(z|P,S) || p_phi(z|P))
+    L = E_{q(z|P,S)} [ -log p_theta(S | P, z) ] + beta * D(q(z|P,S), p_phi(z|P))
+
+p_phi is a performance-conditional diffusion by default (D = DDPM bound on
+-log p_phi(z|P)). --planner gaussian keeps the analytic KL parameterization.
 
 Fast inner loop (AdamVI) fits q with p_phi held fixed. The slow step updates
-the decoder and the performance planner. beta=0 recovers an unconstrained
-oracle; larger beta forces thoughts to be recoverable from performance.
+the decoder and the planner. beta=0 recovers an unconstrained oracle; larger
+beta forces thoughts to be recoverable from performance.
 
-This is the intended replacement for the previous isotropic KL(q || N(0,I))
-plus auxiliary diffusion loss, which let the oracle encode the score.
-
-Launch (same data flags as the Cornell LTLM jobs)::
+Launch::
 
     python train_ltlm.py \\
         --data_file data/train_paper.txt --val_file data/val_paper.txt \\
-        --output_dir ./run_ltlm_planner --wandb_run_name ltlm_planner \\
-        --kl_weight 5 --thoughts_per_layer 4 --mcmc_steps 16 \\
+        --output_dir ./run_ltlm_diffusion --wandb_run_name ltlm_diffusion \\
+        --planner diffusion --kl_weight 5 --thoughts_per_layer 4 --mcmc_steps 16 \\
         --batch_size 4 --gradient_accumulation_steps 4 --max_steps 20000
 """
 
@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument("--data_file", type=Path, default=Path("./data/train_paper.txt"))
     parser.add_argument("--val_file", type=Path, default=Path("./data/val_paper.txt"))
     parser.add_argument("--model_name", type=str, default="stanford-crfm/music-medium-800k")
-    parser.add_argument("--output_dir", type=Path, default=Path("./run_ltlm_planner"))
+    parser.add_argument("--output_dir", type=Path, default=Path("./run_ltlm_diffusion"))
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--val_batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
@@ -78,7 +78,22 @@ def parse_args():
         "--kl_weight",
         type=float,
         default=5.0,
-        help="beta in KL(q(z|P,S) || p_phi(z|P)). 0 = unconstrained oracle.",
+        help="beta in D(q(z|P,S), p_phi(z|P)). 0 = unconstrained oracle.",
+    )
+    parser.add_argument(
+        "--planner",
+        type=str,
+        default="diffusion",
+        choices=["diffusion", "gaussian"],
+        help="Parameterization of p_phi(z|P). diffusion uses the DDPM bound as D.",
+    )
+    parser.add_argument("--diffusion_timesteps", type=int, default=1000)
+    parser.add_argument("--diffusion_layers", type=int, default=3)
+    parser.add_argument(
+        "--ddim_steps",
+        type=int,
+        default=50,
+        help="DDIM steps when sampling z ~ p_phi(z|P) for the planner eval path.",
     )
     parser.add_argument(
         "--isotropic_kl_weight",
@@ -139,23 +154,42 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
         labels = batch["labels"].to(accelerator.device)
         attention_mask = batch["attention_mask"].to(accelerator.device)
 
+        planner_z = model.sample_planner_z(input_ids)
+
         oracle = posterior.infer(input_ids, labels, attention_mask=attention_mask)
         nll_o, _ = model.score_nll(input_ids, labels, oracle["z"], attention_mask=attention_mask)
-        mu_p, log_var_p = model.planner_params(input_ids)
-        _, o_stats = planner_regularized_loss(
-            nll_o, oracle["mu_q"], oracle["log_var_q"], mu_p, log_var_p, beta=model.beta
+        div_o, mu_p, log_var_p = model.planner_divergence(
+            oracle["z"], oracle["mu_q"], oracle["log_var_q"], input_ids, detach_planner=True
         )
-        align_o = latent_alignment_stats(oracle["mu_q"], mu_p)
+        _, o_stats = planner_regularized_loss(
+            nll_o,
+            oracle["mu_q"],
+            oracle["log_var_q"],
+            mu_p if mu_p is not None else planner_z,
+            log_var_p,
+            beta=model.beta,
+            divergence=div_o,
+        )
+        align_o = latent_alignment_stats(oracle["mu_q"], planner_z)
 
         prefix_labels = performance_only_labels(input_ids, labels)
         prefix = posterior.infer(input_ids, prefix_labels, attention_mask=attention_mask)
         nll_px, _ = model.score_nll(input_ids, labels, prefix["z"], attention_mask=attention_mask)
-        _, p_stats = planner_regularized_loss(
-            nll_px, prefix["mu_q"], prefix["log_var_q"], mu_p, log_var_p, beta=model.beta
+        div_p, _, _ = model.planner_divergence(
+            prefix["z"], prefix["mu_q"], prefix["log_var_q"], input_ids, detach_planner=True
         )
-        align_p = latent_alignment_stats(prefix["mu_q"], mu_p)
+        _, p_stats = planner_regularized_loss(
+            nll_px,
+            prefix["mu_q"],
+            prefix["log_var_q"],
+            planner_z,
+            log_var_p,
+            beta=model.beta,
+            divergence=div_p,
+        )
+        align_p = latent_alignment_stats(prefix["mu_q"], planner_z)
 
-        nll_pl, _ = model.score_nll(input_ids, labels, mu_p, attention_mask=attention_mask)
+        nll_pl, _ = model.score_nll(input_ids, labels, planner_z, attention_mask=attention_mask)
 
         bs = input_ids.shape[0]
         totals["oracle_nll"] += float(nll_o) * bs
@@ -175,7 +209,7 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
         return totals[key] / n
 
     model.train()
-    return {
+    metrics = {
         "val/oracle/loss": avg("oracle_nll", "oracle_n"),
         "val/oracle/kl": avg("oracle_kl", "oracle_n"),
         "val/oracle/z_cosine_vs_planner": avg("oracle_cos", "oracle_n"),
@@ -185,6 +219,10 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
         "val/planner/loss": avg("planner_nll", "planner_n"),
         "val/loss": avg("oracle_nll", "oracle_n"),
     }
+    if model.planner_type == "diffusion":
+        metrics["val/oracle/diffusion_loss"] = metrics["val/oracle/kl"]
+        metrics["val/prefix/diffusion_loss"] = metrics["val/prefix/kl"]
+    return metrics
 
 
 def main():
@@ -254,6 +292,10 @@ def main():
         beta=args.kl_weight,
         isotropic_kl_weight=args.isotropic_kl_weight,
         elbo_reduction=args.elbo_reduction,
+        planner_type=args.planner,
+        diffusion_timesteps=args.diffusion_timesteps,
+        diffusion_layers=args.diffusion_layers,
+        ddim_steps=args.ddim_steps,
     )
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, eps=1e-6, weight_decay=0.01)
@@ -278,21 +320,19 @@ def main():
     progress = tqdm(total=args.max_steps, disable=not accelerator.is_main_process, desc="LTLM")
 
     def run_validation():
-        if not accelerator.is_main_process:
-            accelerator.wait_for_everyone()
-            model.train()
-            return
-        max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
-        metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
-        print(
-            f"step {completed_steps}: "
-            f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
-            f"planner NLL {metrics['val/planner/loss']:.4f}  "
-            f"prefix NLL {metrics['val/prefix/loss']:.4f}  "
-            f"cos(q,p) {metrics['val/oracle/z_cosine_vs_planner']:.3f}"
-        )
-        if use_wandb:
-            wandb.log(metrics, step=completed_steps)
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
+            metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
+            print(
+                f"step {completed_steps}: "
+                f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
+                f"planner NLL {metrics['val/planner/loss']:.4f}  "
+                f"prefix NLL {metrics['val/prefix/loss']:.4f}  "
+                f"cos(q,p) {metrics['val/oracle/z_cosine_vs_planner']:.3f}"
+            )
+            if use_wandb:
+                wandb.log(metrics, step=completed_steps)
         accelerator.wait_for_everyone()
         model.train()
 
@@ -331,17 +371,20 @@ def main():
                         completed_steps += 1
                         progress.update(1)
                         if accelerator.is_main_process and use_wandb:
-                            wandb.log(
-                                {
-                                    "train/loss": float(stats["loss"]),
-                                    "train/mcmc_nll": float(stats["nll"]),
-                                    "train/planner_kl": float(stats["planner_kl"]),
-                                    "train/z_cosine_vs_planner": float(stats["z_cosine"]),
-                                    "train/z_rmse_vs_planner": float(stats["z_rmse"]),
-                                    "train/learning_rate": scheduler.get_last_lr()[0],
-                                },
-                                step=completed_steps,
-                            )
+                            payload = {
+                                "train/loss": float(stats["loss"]),
+                                "train/mcmc_nll": float(stats["nll"]),
+                                "train/planner_kl": float(stats["planner_kl"]),
+                                "train/learning_rate": scheduler.get_last_lr()[0],
+                            }
+                            if "q_rms" in stats:
+                                payload["train/q_rms"] = float(stats["q_rms"])
+                            if raw_model.planner_type == "diffusion":
+                                payload["train/diffusion_loss"] = float(stats["planner_kl"])
+                            else:
+                                payload["train/z_cosine_vs_planner"] = float(stats["z_cosine"])
+                                payload["train/z_rmse_vs_planner"] = float(stats["z_rmse"])
+                            wandb.log(payload, step=completed_steps)
                         if completed_steps % args.eval_steps == 0:
                             run_validation()
                         if (

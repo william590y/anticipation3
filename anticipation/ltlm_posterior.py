@@ -33,11 +33,9 @@ class PosteriorOptimizer:
 
     @torch.no_grad()
     def _init_q(self, input_ids: torch.Tensor):
-        mu_p, log_var_p = self.model.planner_params(input_ids)
-        # Start the posterior at the current planner so KL begins near 0.
-        mu = mu_p.detach().clone()
-        log_var = log_var_p.detach().clone()
-        return mu, log_var
+        # Start q at the current planner (Gaussian mean, or a short DDIM draw)
+        # so D(q, p_phi) begins small.
+        return self.model.init_posterior(input_ids)
 
     def infer(
         self,
@@ -59,36 +57,37 @@ class PosteriorOptimizer:
             param.requires_grad_(False)
 
         try:
-            mu, log_var = self._init_q(input_ids)
-            mu.requires_grad_(True)
-            log_var.requires_grad_(True)
-            optimizer = torch.optim.AdamW(
-                [mu, log_var], lr=base_lr, betas=self.betas, eps=self.eps
-            )
-            eps_noise = torch.randn_like(mu)
-
-            last_stats: dict[str, torch.Tensor] = {}
-            for step in range(steps):
-                for group in optimizer.param_groups:
-                    t = step / max(steps - 1, 1)
-                    group["lr"] = base_lr * (1.0 - t) + self.final_lr * t
-                optimizer.zero_grad(set_to_none=True)
-                loss, stats, _ = self.model.elbo(
-                    input_ids,
-                    labels,
-                    mu,
-                    log_var,
-                    eps_noise,
-                    attention_mask=attention_mask,
-                    detach_planner=True,
+            with torch.enable_grad():
+                mu, log_var = self._init_q(input_ids)
+                mu.requires_grad_(True)
+                log_var.requires_grad_(True)
+                optimizer = torch.optim.AdamW(
+                    [mu, log_var], lr=base_lr, betas=self.betas, eps=self.eps
                 )
-                loss.backward()
-                optimizer.step()
-                last_stats = stats
+                eps_noise = torch.randn_like(mu)
 
-            with torch.no_grad():
-                log_var.clamp_(-8.0, 4.0)
-                z = mu + eps_noise * torch.exp(0.5 * log_var)
+                last_stats: dict[str, torch.Tensor] = {}
+                for step in range(steps):
+                    for group in optimizer.param_groups:
+                        t = step / max(steps - 1, 1)
+                        group["lr"] = base_lr * (1.0 - t) + self.final_lr * t
+                    optimizer.zero_grad(set_to_none=True)
+                    loss, stats, _ = self.model.elbo(
+                        input_ids,
+                        labels,
+                        mu,
+                        log_var,
+                        eps_noise,
+                        attention_mask=attention_mask,
+                        detach_planner=True,
+                    )
+                    loss.backward()
+                    optimizer.step()
+                    last_stats = stats
+
+                with torch.no_grad():
+                    log_var.clamp_(-8.0, 4.0)
+                    z = mu + eps_noise * torch.exp(0.5 * log_var)
         finally:
             for param, flag in zip(self.model.parameters(), requires_grad_flags):
                 param.requires_grad_(flag)
