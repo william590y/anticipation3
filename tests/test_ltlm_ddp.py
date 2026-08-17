@@ -82,9 +82,27 @@ def test_train_ltlm_source_does_not_bypass_ddp():
     assert "broadcast_offsets" in src
     assert "attn_implementation" in src
     assert "val_loader" in main_src
+    assert "unwrap_ddp" in src
+    assert "accelerator.unwrap_model(" not in src
     # Validation and checkpointing are entered by every rank.
     assert "if accelerator.is_main_process:\n            max_batches" not in main_src
     assert "accelerator.wait_for_everyone()" in inspect.getsource(train_ltlm.main)
+
+
+def test_unwrap_ddp_leaves_plain_module():
+    module = nn.Linear(2, 2)
+    assert train_ltlm.unwrap_ddp(module) is module
+
+
+def test_compiled_root_walks_orig_mod():
+    inner = nn.Linear(2, 2)
+
+    class _Compiled(nn.Module):
+        def __init__(self, orig):
+            super().__init__()
+            self._orig_mod = orig
+
+    assert train_ltlm.compiled_root(_Compiled(inner)) is inner
 
 
 def test_compile_ltlm_disabled_is_identity():

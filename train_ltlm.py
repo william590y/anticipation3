@@ -234,6 +234,18 @@ def load_base_lm(model_name: str, attn_implementation: str):
     return AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
 
 
+def unwrap_ddp(module):
+    """Peel DDP/DataParallel only.
+
+    ``accelerator.unwrap_model`` also tries to unwrap ``torch.compile``. On
+    DDP(OptimizedModule(...)) Accelerate's ``has_compiled_regions`` is true
+    but DDP has no ``_orig_mod``, so it KeyErrors (job 81476).
+    """
+    while isinstance(module, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
+        module = module.module
+    return module
+
+
 def compiled_root(module):
     """Walk ``_orig_mod`` so checkpoints save the real ``LTLMCausalLM``."""
     root = module
@@ -501,7 +513,7 @@ def main():
         lambda step: cosine_lr_lambda(step, args.max_steps, args.learning_rate, args.final_learning_rate),
     )
 
-    raw_model = accelerator.unwrap_model(model)
+    raw_model = unwrap_ddp(model)
     posterior = PosteriorOptimizer(
         raw_model,
         num_steps=args.mcmc_steps,
@@ -586,7 +598,7 @@ def main():
                             if accelerator.is_main_process:
                                 ckpt = args.output_dir / f"checkpoint-{completed_steps}"
                                 ckpt.mkdir(parents=True, exist_ok=True)
-                                to_save = compiled_root(accelerator.unwrap_model(model))
+                                to_save = compiled_root(unwrap_ddp(model))
                                 to_save.base_model.save_pretrained(ckpt)
                                 extra_state = {
                                     k: v.detach().cpu()

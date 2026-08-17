@@ -12,9 +12,9 @@
 
 set -euo pipefail
 
-# Isolated checkout of local main so the job runs the DDP fix even before a
-# push. Do not clone GitHub: origin/cursor/diffusion-planner-50bc still has
-# the unwrap-elbo desync that killed job 69260.
+# Isolated checkout of local main so the job picks up DDP + compile/SDPA
+# without a GitHub push. Do not clone origin: that branch still has the
+# unwrap-elbo desync that killed job 69260.
 SRC=/home/wjl86/anticipation3
 WORKDIR=/home/wjl86/anticipation3-diffusion
 
