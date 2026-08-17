@@ -255,17 +255,28 @@ def compiled_root(module):
 
 
 def compile_ltlm(model, enabled: bool, mode: str):
+    """Compile GPT-2, not the whole LTLM.
+
+    Compiling ``LTLMCausalLM`` itself (job 81490) hits inductor's DDP backend
+    on ``elbo``'s ``(loss, stats_dict, logits)`` return; a Python float in
+    that graph raises ``'float' object has no attribute 'meta'``. The 16
+    AdamVI steps and the slow step all go through ``base_model``, so that is
+    the graph worth compiling. ``suppress_errors`` keeps training in eager
+    SDPA if inductor still chokes on thought injection.
+    """
     if not enabled:
         return model
     try:
-        # dynamic=True: last val/train batches can be shorter than batch_size;
-        # static shapes would recompile (minutes) every time that happens.
-        compiled = torch.compile(model, mode=mode, dynamic=True)
-        print(f"torch.compile enabled (mode={mode}, dynamic=True); first step compiles")
-        return compiled
+        torch._dynamo.config.optimize_ddp = False
+        torch._dynamo.config.suppress_errors = True
+        model.base_model = torch.compile(model.base_model, mode=mode, dynamic=True)
+        print(
+            f"torch.compile enabled on GPT-2 (mode={mode}, dynamic=True); "
+            "inductor errors fall back to eager"
+        )
     except Exception as exc:
         print(f"torch.compile failed, running eager: {exc}")
-        return model
+    return model
 
 
 def dataloader_kwargs(args, pin_memory: bool) -> dict:
@@ -599,7 +610,7 @@ def main():
                                 ckpt = args.output_dir / f"checkpoint-{completed_steps}"
                                 ckpt.mkdir(parents=True, exist_ok=True)
                                 to_save = compiled_root(unwrap_ddp(model))
-                                to_save.base_model.save_pretrained(ckpt)
+                                compiled_root(to_save.base_model).save_pretrained(ckpt)
                                 extra_state = {
                                     k: v.detach().cpu()
                                     for k, v in to_save.state_dict().items()
