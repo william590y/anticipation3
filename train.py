@@ -191,6 +191,8 @@ class TokenizedDataset(Dataset):
         tempo_scale_range=0.0,
         loss_mask_performance_tokens=False,
         is_training=True,
+        offsets=None,
+        sequence_length=None,
     ):
         self.onset_jitter_std = onset_jitter_std if is_training else 0.0
         self.dur_jitter_range = dur_jitter_range if is_training else 0.0
@@ -205,18 +207,23 @@ class TokenizedDataset(Dataset):
         self.offsets = []
         self.sequence_length = 0
 
-        print(f"Scanning {file_path} for line offsets...")
-        with open(self.file_path, "rb") as f:
-            offset = 0
-            for raw_line in f:
-                stripped = raw_line.strip()
-                if stripped:
-                    self.offsets.append(offset)
-                offset += len(raw_line)
+        if offsets is not None:
+            self.offsets = list(offsets)
+            self.sequence_length = int(sequence_length or 0)
+            if not self.sequence_length and self.offsets:
+                self.sequence_length = len(self._read_tokens(0))
+        else:
+            print(f"Scanning {file_path} for line offsets...")
+            with open(self.file_path, "rb") as f:
+                offset = 0
+                for raw_line in f:
+                    stripped = raw_line.strip()
+                    if stripped:
+                        self.offsets.append(offset)
+                    offset += len(raw_line)
+            print(f"Found {len(self.offsets)} sequences")
 
-        print(f"Found {len(self.offsets)} sequences")
-
-        if self.offsets:
+        if offsets is None and self.offsets:
             tokens = self._read_tokens(0)
             self.sequence_length = len(tokens)
             if self.sequence_length != PACKED_SEQUENCE_LENGTH:
@@ -230,7 +237,7 @@ class TokenizedDataset(Dataset):
                 print("Tokenization format validated (triplet-aligned, no header tokens)")
             print(f"Sequence length: {self.sequence_length}")
 
-        if self.is_training:
+        if offsets is None and self.is_training:
             print(
                 "  Training mode: "
                 f"onset_jitter_std={self.onset_jitter_std} (controls in input only), "
@@ -240,7 +247,7 @@ class TokenizedDataset(Dataset):
                 f"tempo_scale_range={self.tempo_scale_range}, "
                 f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}"
             )
-        else:
+        elif offsets is None:
             print(
                 "  Validation mode: no augmentation, "
                 f"loss_mask_performance_tokens={self.loss_mask_performance_tokens}"

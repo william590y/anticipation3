@@ -72,13 +72,15 @@ class PosteriorOptimizer:
                         t = step / max(steps - 1, 1)
                         group["lr"] = base_lr * (1.0 - t) + self.final_lr * t
                     optimizer.zero_grad(set_to_none=True)
-                    loss, stats, _ = self.model.elbo(
+                    # Call the module so torch.compile(DDP) actually runs.
+                    # model.elbo(...) bypasses OptimizedModule.forward.
+                    loss, stats, _ = self.model(
                         input_ids,
-                        labels,
-                        mu,
-                        log_var,
-                        eps_noise,
+                        labels=labels,
                         attention_mask=attention_mask,
+                        mu_q=mu,
+                        log_var_q=log_var,
+                        eps=eps_noise,
                         detach_planner=True,
                     )
                     loss.backward()
@@ -103,3 +105,31 @@ class PosteriorOptimizer:
             "stats": {k: v.detach() if torch.is_tensor(v) else v for k, v in last_stats.items()
                       if k not in ("mu_p", "log_var_p", "z")},
         }
+
+    def infer_paired(
+        self,
+        input_ids: torch.Tensor,
+        labels_a: torch.Tensor,
+        labels_b: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        """Run AdamVI on two observation sets as one doubled batch.
+
+        Oracle and prefix posteriors do not depend on each other, so stacking
+        them is free parallelism on one GPU (same kernels, twice the batch).
+        """
+        bsz = input_ids.shape[0]
+        ids = torch.cat([input_ids, input_ids], dim=0)
+        labels = torch.cat([labels_a, labels_b], dim=0)
+        mask = None if attention_mask is None else torch.cat([attention_mask, attention_mask], dim=0)
+        out = self.infer(ids, labels, attention_mask=mask, **kwargs)
+
+        def _split(key: str):
+            tensor = out[key]
+            return tensor[:bsz], tensor[bsz:]
+
+        left, right = {}, {}
+        for key in ("z", "mu_q", "log_var_q", "eps"):
+            left[key], right[key] = _split(key)
+        return left, right

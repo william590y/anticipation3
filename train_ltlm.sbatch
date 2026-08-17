@@ -38,9 +38,12 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export TOKENIZERS_PARALLELISM=false
-# Match train_ltlm.NCCL_TIMEOUT (60 min). Default 10 min is shorter than val.
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600
 export NCCL_TIMEOUT=3600
+# Node-local inductor/triton cache: NFS autotune dirs hang on exit and slow compile.
+export TORCHINDUCTOR_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/torchinductor-${USER}"
+export TRITON_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/triton-${USER}"
+mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
 
 echo "Host: $(hostname)"
 echo "SLURM_JOB_PARTITION=${SLURM_JOB_PARTITION:-unset}"
@@ -67,6 +70,10 @@ python -m torch.distributed.run --standalone --nproc_per_node=4 train_ltlm.py \
     --mcmc_steps 16 \
     --diffusion_timesteps 1000 \
     --diffusion_layers 3 \
-    --ddim_steps 50
+    --ddim_steps 50 \
+    --compile \
+    --compile_mode default \
+    --attn_implementation sdpa \
+    --num_workers 4
 
 echo "End: $(date)"

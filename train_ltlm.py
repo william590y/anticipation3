@@ -11,6 +11,11 @@ Fast inner loop (AdamVI) fits q with p_phi held fixed. The slow step updates
 the decoder and the planner. beta=0 recovers an unconstrained oracle; larger
 beta forces thoughts to be recoverable from performance.
 
+Speed: torch.compile + SDPA flash kernels on the teacher-forced window.
+TensorRT and speculative decoding are not applicable (TensorRT has no
+training backward through this graph; speculative decoding is for token-by-token
+AR generation, not 1020-token teacher-forced F+B).
+
 Launch::
 
     python train_ltlm.py \\
@@ -30,7 +35,7 @@ from pathlib import Path
 
 import torch
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 
@@ -109,7 +114,27 @@ def parse_args():
     parser.add_argument("--transpose_range_semitones", type=int, default=12)
     parser.add_argument("--tempo_scale_range", type=float, default=0.2)
     parser.add_argument("--loss_mask_performance_tokens", action="store_true")
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="torch.compile the LTLM. TensorRT / speculative decoding do not apply "
+        "(no training backward through TensorRT; this loop is teacher-forced, not AR decode).",
+    )
+    parser.add_argument(
+        "--compile_mode",
+        type=str,
+        default="default",
+        choices=["default", "reduce-overhead", "max-autotune"],
+        help="Inductor mode. default fuses kernels without CUDA-graph address constraints.",
+    )
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="sdpa",
+        help="GPT-2 attention kernel. sdpa uses PyTorch flash/mem-efficient kernels on Ada.",
+    )
     parser.add_argument("--wandb_project", type=str, default="anticipation-asap")
     parser.add_argument("--wandb_run_name", type=str, default=None)
     parser.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
@@ -173,7 +198,7 @@ def slow_elbo(
     / ``prepare_for_backward``. Gradients never all-reduce, ranks train
     independent copies, and the next ``wait_for_everyone`` NCCL-timeouts
     (job 69260: rank 0 still at step 955 while ranks 1-2 were already in
-    ``run_validation``).
+    ``run_validation``). Calling ``.elbo`` also skips ``torch.compile``.
     """
     return model(
         input_ids,
@@ -186,6 +211,97 @@ def slow_elbo(
     )
 
 
+def enable_fast_kernels():
+    """TF32 + SDPA flash/mem-efficient. No-op on CPU."""
+    torch.set_float32_matmul_precision("high")
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+
+
+def load_base_lm(model_name: str, attn_implementation: str):
+    kwargs = dict(trust_remote_code=True, use_cache=False)
+    if attn_implementation and attn_implementation != "eager":
+        try:
+            return AutoModelForCausalLM.from_pretrained(
+                model_name, attn_implementation=attn_implementation, **kwargs
+            )
+        except (TypeError, ValueError) as exc:
+            print(f"attn_implementation={attn_implementation!r} rejected ({exc}); falling back")
+    return AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
+
+
+def compiled_root(module):
+    """Walk ``_orig_mod`` so checkpoints save the real ``LTLMCausalLM``."""
+    root = module
+    while hasattr(root, "_orig_mod"):
+        root = root._orig_mod
+    return root
+
+
+def compile_ltlm(model, enabled: bool, mode: str):
+    if not enabled:
+        return model
+    try:
+        # dynamic=True: last val/train batches can be shorter than batch_size;
+        # static shapes would recompile (minutes) every time that happens.
+        compiled = torch.compile(model, mode=mode, dynamic=True)
+        print(f"torch.compile enabled (mode={mode}, dynamic=True); first step compiles")
+        return compiled
+    except Exception as exc:
+        print(f"torch.compile failed, running eager: {exc}")
+        return model
+
+
+def dataloader_kwargs(args, pin_memory: bool) -> dict:
+    kwargs = dict(
+        collate_fn=collate_fn,
+        num_workers=args.num_workers,
+        pin_memory=pin_memory,
+    )
+    if args.num_workers > 0:
+        kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = 2
+    return kwargs
+
+
+def broadcast_offsets(accelerator, offsets, seqlen):
+    """Share rank-0 line offsets so the other ranks do not rescan GB-scale token files."""
+    if accelerator.num_processes == 1:
+        return offsets, seqlen
+    device = accelerator.device
+    meta = torch.tensor(
+        [0 if offsets is None else len(offsets), 0 if seqlen is None else int(seqlen)],
+        device=device,
+        dtype=torch.long,
+    )
+    torch.distributed.broadcast(meta, src=0)
+    n_off, seqlen_b = int(meta[0].item()), int(meta[1].item())
+    buf = torch.empty(n_off, device=device, dtype=torch.long)
+    if accelerator.is_main_process:
+        buf.copy_(torch.tensor(offsets, device=device, dtype=torch.long))
+    torch.distributed.broadcast(buf, src=0)
+    return buf.cpu().tolist(), seqlen_b
+
+
+def build_dataset(args, *, is_training: bool, offsets=None, sequence_length=None):
+    return TokenizedDataset(
+        args.data_file if is_training else args.val_file,
+        onset_jitter_std=args.onset_jitter_std if is_training else 0.0,
+        dur_jitter_range=args.dur_jitter_range if is_training else 0.0,
+        mask_prob=args.mask_prob if is_training else 0.0,
+        transpose_range_semitones=args.transpose_range_semitones if is_training else 0,
+        tempo_scale_range=args.tempo_scale_range if is_training else 0.0,
+        loss_mask_performance_tokens=args.loss_mask_performance_tokens,
+        is_training=is_training,
+        offsets=offsets,
+        sequence_length=sequence_length,
+    )
+
+
 @torch.no_grad()
 def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloader, accelerator, max_batches: int):
     """Teacher-forced NLL on oracle / prefix / planner paths.
@@ -193,27 +309,30 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
     Every rank must enter this and participate in the final ``reduce``. A
     rank-0-only eval with ``wait_for_everyone`` around it is how job 69260
     died: non-main ranks sat on an NCCL barrier until the 10 min watchdog.
-    Batches are sharded by ``index % world_size``.
+
+    The dataloader must already be rank-sharded (Subset of eval_max_samples
+    then ``accelerator.prepare``). Oracle and prefix AdamVI are stacked into
+    one doubled batch so those two independent posteriors share one kernel
+    stream instead of running back-to-back.
     """
     model.eval()
     device = accelerator.device
     totals = {
         key: torch.zeros((), device=device, dtype=torch.float64) for key in EVAL_TOTAL_KEYS
     }
-    world = max(accelerator.num_processes, 1)
-    rank = accelerator.process_index
     for batch_idx, batch in enumerate(dataloader):
         if max_batches > 0 and batch_idx >= max_batches:
             break
-        if batch_idx % world != rank:
-            continue
         input_ids = batch["input_ids"].to(device)
         labels = batch["labels"].to(device)
         attention_mask = batch["attention_mask"].to(device)
 
         planner_z = model.sample_planner_z(input_ids)
 
-        oracle = posterior.infer(input_ids, labels, attention_mask=attention_mask)
+        prefix_labels = performance_only_labels(input_ids, labels)
+        oracle, prefix = posterior.infer_paired(
+            input_ids, labels, prefix_labels, attention_mask=attention_mask
+        )
         nll_o, _ = model.score_nll(input_ids, labels, oracle["z"], attention_mask=attention_mask)
         div_o, mu_p, log_var_p = model.planner_divergence(
             oracle["z"], oracle["mu_q"], oracle["log_var_q"], input_ids, detach_planner=True
@@ -229,8 +348,6 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
         )
         align_o = latent_alignment_stats(oracle["mu_q"], planner_z)
 
-        prefix_labels = performance_only_labels(input_ids, labels)
-        prefix = posterior.infer(input_ids, prefix_labels, attention_mask=attention_mask)
         nll_px, _ = model.score_nll(input_ids, labels, prefix["z"], attention_mask=attention_mask)
         div_p, _, _ = model.planner_divergence(
             prefix["z"], prefix["mu_q"], prefix["log_var_q"], input_ids, detach_planner=True
@@ -292,8 +409,15 @@ def main():
     if wandb is None and args.wandb_mode != "disabled":
         args.wandb_mode = "disabled"
 
+    if args.num_workers > 0:
+        try:
+            torch.multiprocessing.set_start_method("spawn")
+        except RuntimeError:
+            pass
+
     validate_selected_cuda_device_or_raise(force_cpu=args.force_cpu)
     report_runtime_device(force_cpu=args.force_cpu)
+    enable_fast_kernels()
 
     mixed_precision = "bf16" if torch.cuda.is_available() and not args.force_cpu else "no"
     accelerator = Accelerator(
@@ -316,35 +440,32 @@ def main():
             config=vars(args),
         )
 
-    train_dataset = TokenizedDataset(
-        args.data_file,
-        onset_jitter_std=args.onset_jitter_std,
-        dur_jitter_range=args.dur_jitter_range,
-        mask_prob=args.mask_prob,
-        transpose_range_semitones=args.transpose_range_semitones,
-        tempo_scale_range=args.tempo_scale_range,
-        loss_mask_performance_tokens=args.loss_mask_performance_tokens,
-        is_training=True,
-    )
-    val_dataset = TokenizedDataset(args.val_file, is_training=False)
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available() and not args.force_cpu,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.val_batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available() and not args.force_cpu,
-    )
+    if accelerator.is_main_process:
+        train_dataset = build_dataset(args, is_training=True)
+        t_off, t_len = train_dataset.offsets, train_dataset.sequence_length
+    else:
+        t_off, t_len = None, 0
+    t_off, t_len = broadcast_offsets(accelerator, t_off, t_len)
+    if not accelerator.is_main_process:
+        train_dataset = build_dataset(args, is_training=True, offsets=t_off, sequence_length=t_len)
 
-    base = AutoModelForCausalLM.from_pretrained(args.model_name, trust_remote_code=True, use_cache=False)
+    if accelerator.is_main_process:
+        val_full = build_dataset(args, is_training=False)
+        v_off, v_len = val_full.offsets, val_full.sequence_length
+    else:
+        v_off, v_len = None, 0
+    v_off, v_len = broadcast_offsets(accelerator, v_off, v_len)
+    if not accelerator.is_main_process:
+        val_full = build_dataset(args, is_training=False, offsets=v_off, sequence_length=v_len)
+
+    n_val = min(args.eval_max_samples, len(val_full))
+    val_dataset = Subset(val_full, range(n_val))
+    pin = torch.cuda.is_available() and not args.force_cpu
+    dl_kw = dataloader_kwargs(args, pin)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, **dl_kw)
+    val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, **dl_kw)
+
+    base = load_base_lm(args.model_name, args.attn_implementation)
     if base.config.vocab_size != VOCAB_SIZE:
         base.resize_token_embeddings(VOCAB_SIZE)
     model = LTLMCausalLM(
@@ -358,9 +479,20 @@ def main():
         diffusion_layers=args.diffusion_layers,
         ddim_steps=args.ddim_steps,
     )
+    compile_on = bool(args.compile) and torch.cuda.is_available() and not args.force_cpu
+    model = compile_ltlm(model, compile_on, args.compile_mode)
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate, eps=1e-6, weight_decay=0.01)
-    model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
+    adam_kw = dict(lr=args.learning_rate, eps=1e-6, weight_decay=0.01)
+    if torch.cuda.is_available() and not args.force_cpu:
+        adam_kw["fused"] = True
+    try:
+        optimizer = AdamW(model.parameters(), **adam_kw)
+    except RuntimeError:
+        adam_kw.pop("fused", None)
+        optimizer = AdamW(model.parameters(), **adam_kw)
+    model, optimizer, train_loader, val_loader = accelerator.prepare(
+        model, optimizer, train_loader, val_loader
+    )
 
     from torch.optim.lr_scheduler import LambdaLR
 
@@ -382,8 +514,7 @@ def main():
 
     def run_validation():
         accelerator.wait_for_everyone()
-        max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
-        metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
+        metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches=0)
         if accelerator.is_main_process:
             print(
                 f"step {completed_steps}: "
@@ -455,10 +586,11 @@ def main():
                             if accelerator.is_main_process:
                                 ckpt = args.output_dir / f"checkpoint-{completed_steps}"
                                 ckpt.mkdir(parents=True, exist_ok=True)
-                                accelerator.unwrap_model(model).base_model.save_pretrained(ckpt)
+                                to_save = compiled_root(accelerator.unwrap_model(model))
+                                to_save.base_model.save_pretrained(ckpt)
                                 extra_state = {
                                     k: v.detach().cpu()
-                                    for k, v in raw_model.state_dict().items()
+                                    for k, v in to_save.state_dict().items()
                                     if not k.startswith("base_model.")
                                 }
                                 torch.save(
