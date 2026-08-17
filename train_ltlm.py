@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import torch
@@ -38,7 +39,7 @@ try:
 except ImportError:
     wandb = None
 
-from accelerate import Accelerator
+from accelerate import Accelerator, InitProcessGroupKwargs
 
 from anticipation.ltlm_model import LTLMCausalLM, control_token_mask
 from anticipation.ltlm_objective import latent_alignment_stats, planner_regularized_loss
@@ -137,22 +138,78 @@ def cosine_lr_lambda(step: int, max_steps: int, initial_lr: float, final_lr: flo
     return (final_lr / initial_lr) + (1.0 - final_lr / initial_lr) * cosine_decay
 
 
+# Job 69260: 10 min default NCCL timeout fired while rank 0 was still in
+# validation (and, before that, ranks had drifted because the slow step
+# bypassed DDP.forward). Validation can exceed 10 min; keep the watchdog above it.
+NCCL_TIMEOUT = timedelta(minutes=60)
+
+EVAL_TOTAL_KEYS = (
+    "oracle_nll",
+    "oracle_kl",
+    "oracle_cos",
+    "oracle_n",
+    "prefix_nll",
+    "prefix_kl",
+    "prefix_cos",
+    "prefix_n",
+    "planner_nll",
+    "planner_n",
+)
+
+
+def slow_elbo(
+    model,
+    input_ids,
+    labels,
+    mu_q,
+    log_var_q,
+    eps,
+    attention_mask=None,
+    detach_planner=False,
+):
+    """Slow-step ELBO through ``model.forward`` so DDP's reducer is armed.
+
+    ``unwrap_model(model).elbo(...)`` skips ``DistributedDataParallel.forward``
+    / ``prepare_for_backward``. Gradients never all-reduce, ranks train
+    independent copies, and the next ``wait_for_everyone`` NCCL-timeouts
+    (job 69260: rank 0 still at step 955 while ranks 1-2 were already in
+    ``run_validation``).
+    """
+    return model(
+        input_ids,
+        labels=labels,
+        attention_mask=attention_mask,
+        mu_q=mu_q,
+        log_var_q=log_var_q,
+        eps=eps,
+        detach_planner=detach_planner,
+    )
+
+
 @torch.no_grad()
 def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloader, accelerator, max_batches: int):
-    """Teacher-forced NLL on oracle q(z|P,S), prefix/performance q(z|P), and planner p(z|P)."""
+    """Teacher-forced NLL on oracle / prefix / planner paths.
+
+    Every rank must enter this and participate in the final ``reduce``. A
+    rank-0-only eval with ``wait_for_everyone`` around it is how job 69260
+    died: non-main ranks sat on an NCCL barrier until the 10 min watchdog.
+    Batches are sharded by ``index % world_size``.
+    """
     model.eval()
+    device = accelerator.device
     totals = {
-        "oracle_nll": 0.0, "oracle_kl": 0.0, "oracle_cos": 0.0, "oracle_n": 0,
-        "prefix_nll": 0.0, "prefix_kl": 0.0, "prefix_cos": 0.0, "prefix_n": 0,
-        "planner_nll": 0.0, "planner_n": 0,
+        key: torch.zeros((), device=device, dtype=torch.float64) for key in EVAL_TOTAL_KEYS
     }
-    n_batches = 0
-    for batch in dataloader:
-        if max_batches > 0 and n_batches >= max_batches:
+    world = max(accelerator.num_processes, 1)
+    rank = accelerator.process_index
+    for batch_idx, batch in enumerate(dataloader):
+        if max_batches > 0 and batch_idx >= max_batches:
             break
-        input_ids = batch["input_ids"].to(accelerator.device)
-        labels = batch["labels"].to(accelerator.device)
-        attention_mask = batch["attention_mask"].to(accelerator.device)
+        if batch_idx % world != rank:
+            continue
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["labels"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
 
         planner_z = model.sample_planner_z(input_ids)
 
@@ -191,22 +248,25 @@ def evaluate_paths(model: LTLMCausalLM, posterior: PosteriorOptimizer, dataloade
 
         nll_pl, _ = model.score_nll(input_ids, labels, planner_z, attention_mask=attention_mask)
 
-        bs = input_ids.shape[0]
-        totals["oracle_nll"] += float(nll_o) * bs
-        totals["oracle_kl"] += float(o_stats["planner_kl"]) * bs
-        totals["oracle_cos"] += float(align_o["z_cosine"]) * bs
+        bs = float(input_ids.shape[0])
+        totals["oracle_nll"] += nll_o.detach().double() * bs
+        totals["oracle_kl"] += o_stats["planner_kl"].detach().double() * bs
+        totals["oracle_cos"] += align_o["z_cosine"].detach().double() * bs
         totals["oracle_n"] += bs
-        totals["prefix_nll"] += float(nll_px) * bs
-        totals["prefix_kl"] += float(p_stats["planner_kl"]) * bs
-        totals["prefix_cos"] += float(align_p["z_cosine"]) * bs
+        totals["prefix_nll"] += nll_px.detach().double() * bs
+        totals["prefix_kl"] += p_stats["planner_kl"].detach().double() * bs
+        totals["prefix_cos"] += align_p["z_cosine"].detach().double() * bs
         totals["prefix_n"] += bs
-        totals["planner_nll"] += float(nll_pl) * bs
+        totals["planner_nll"] += nll_pl.detach().double() * bs
         totals["planner_n"] += bs
-        n_batches += 1
+
+    packed = torch.stack([totals[key] for key in EVAL_TOTAL_KEYS])
+    packed = accelerator.reduce(packed, reduction="sum")
+    reduced = {key: packed[i] for i, key in enumerate(EVAL_TOTAL_KEYS)}
 
     def avg(key, count_key):
-        n = max(totals[count_key], 1)
-        return totals[key] / n
+        n = reduced[count_key].clamp(min=1.0)
+        return float(reduced[key] / n)
 
     model.train()
     metrics = {
@@ -240,6 +300,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         cpu=args.force_cpu,
         mixed_precision=mixed_precision,
+        kwargs_handlers=[InitProcessGroupKwargs(timeout=NCCL_TIMEOUT)],
     )
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
@@ -321,9 +382,9 @@ def main():
 
     def run_validation():
         accelerator.wait_for_everyone()
+        max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
+        metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
         if accelerator.is_main_process:
-            max_batches = max(1, args.eval_max_samples // max(args.val_batch_size, 1))
-            metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches)
             print(
                 f"step {completed_steps}: "
                 f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
@@ -351,9 +412,11 @@ def main():
                     eps = inferred["eps"]
 
                     # Slow: update decoder + planner. q is treated as data.
+                    # Must go through the DDP-wrapped `model`, not raw_model.elbo.
                     mu_q = mu_q.detach()
                     log_var_q = log_var_q.detach()
-                    loss, stats, _ = raw_model.elbo(
+                    loss, stats, _ = slow_elbo(
+                        model,
                         input_ids,
                         labels,
                         mu_q,
@@ -387,22 +450,22 @@ def main():
                             wandb.log(payload, step=completed_steps)
                         if completed_steps % args.eval_steps == 0:
                             run_validation()
-                        if (
-                            accelerator.is_main_process
-                            and completed_steps % args.save_steps == 0
-                        ):
-                            ckpt = args.output_dir / f"checkpoint-{completed_steps}"
-                            ckpt.mkdir(parents=True, exist_ok=True)
-                            accelerator.unwrap_model(model).base_model.save_pretrained(ckpt)
-                            extra_state = {
-                                k: v.detach().cpu()
-                                for k, v in raw_model.state_dict().items()
-                                if not k.startswith("base_model.")
-                            }
-                            torch.save(
-                                {"ltlm": extra_state, "step": completed_steps, "args": vars(args)},
-                                ckpt / "ltlm_extra.pt",
-                            )
+                        if completed_steps % args.save_steps == 0:
+                            accelerator.wait_for_everyone()
+                            if accelerator.is_main_process:
+                                ckpt = args.output_dir / f"checkpoint-{completed_steps}"
+                                ckpt.mkdir(parents=True, exist_ok=True)
+                                accelerator.unwrap_model(model).base_model.save_pretrained(ckpt)
+                                extra_state = {
+                                    k: v.detach().cpu()
+                                    for k, v in raw_model.state_dict().items()
+                                    if not k.startswith("base_model.")
+                                }
+                                torch.save(
+                                    {"ltlm": extra_state, "step": completed_steps, "args": vars(args)},
+                                    ckpt / "ltlm_extra.pt",
+                                )
+                            accelerator.wait_for_everyone()
                         if completed_steps >= args.max_steps:
                             break
             if completed_steps >= args.max_steps:

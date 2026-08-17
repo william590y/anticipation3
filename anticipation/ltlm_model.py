@@ -324,12 +324,39 @@ class LTLMCausalLM(nn.Module):
         stats["planner_type"] = self.planner_type
         return loss, stats, logits
 
-    def forward(self, input_ids=None, labels=None, attention_mask=None, **kwargs):
-        """HF-compatible forward. Uses currently set thoughts if present.
+    def forward(
+        self,
+        input_ids=None,
+        labels=None,
+        attention_mask=None,
+        mu_q=None,
+        log_var_q=None,
+        eps=None,
+        detach_planner=False,
+        **kwargs,
+    ):
+        """DDP entry point. Slow-step training must come through here.
 
-        Training should call ``elbo`` / the posterior optimizer rather than this.
-        Cached AR decode sets thoughts first, then calls this with use_cache=True.
+        Passing ``mu_q`` / ``log_var_q`` / ``eps`` dispatches to ``elbo``. That
+        is load-bearing under DistributedDataParallel: calling ``elbo`` on
+        ``unwrap_model(model)`` skips ``DDP.forward`` / ``prepare_for_backward``,
+        so gradients never all-reduce and ranks silently train different copies.
+
+        Cached AR decode leaves ``mu_q`` unset, sets thoughts first, then calls
+        this with ``use_cache=True``.
         """
+        if mu_q is not None:
+            if labels is None or log_var_q is None or eps is None:
+                raise ValueError("forward(mu_q=...) requires labels, log_var_q, and eps")
+            return self.elbo(
+                input_ids,
+                labels,
+                mu_q,
+                log_var_q,
+                eps,
+                attention_mask=attention_mask,
+                detach_planner=detach_planner,
+            )
         outputs = self.base_model(
             input_ids=input_ids,
             labels=labels,

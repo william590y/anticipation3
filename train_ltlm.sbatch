@@ -12,18 +12,17 @@
 
 set -euo pipefail
 
-# Dedicated checkout so we do not clobber the unpushed Cornell train_ltlm.py
-# or the Gaussian-planner clone.
+# Isolated checkout of local main so the job runs the DDP fix even before a
+# push. Do not clone GitHub: origin/cursor/diffusion-planner-50bc still has
+# the unwrap-elbo desync that killed job 69260.
 SRC=/home/wjl86/anticipation3
 WORKDIR=/home/wjl86/anticipation3-diffusion
-BRANCH=cursor/diffusion-planner-50bc
 
 if [ ! -d "$WORKDIR/.git" ]; then
-  git clone --branch "$BRANCH" https://github.com/william590y/anticipation3.git "$WORKDIR"
+  git clone --local --branch main "$SRC" "$WORKDIR"
 else
-  git -C "$WORKDIR" fetch origin "$BRANCH"
-  git -C "$WORKDIR" checkout "$BRANCH"
-  git -C "$WORKDIR" pull --ff-only origin "$BRANCH"
+  git -C "$WORKDIR" fetch "$SRC" main
+  git -C "$WORKDIR" checkout -B main FETCH_HEAD
 fi
 
 ln -sfn "$SRC/data" "$WORKDIR/data"
@@ -39,6 +38,9 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export TOKENIZERS_PARALLELISM=false
+# Match train_ltlm.NCCL_TIMEOUT (60 min). Default 10 min is shorter than val.
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600
+export NCCL_TIMEOUT=3600
 
 echo "Host: $(hostname)"
 echo "SLURM_JOB_PARTITION=${SLURM_JOB_PARTITION:-unset}"

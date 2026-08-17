@@ -188,7 +188,24 @@ class DiffusionPlanner(nn.Module):
         t: Optional[torch.Tensor] = None,
         noise: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Mean-reduced DDPM noise-prediction loss. Differentiable in z0 and phi."""
+        """Mean-reduced DDPM noise-prediction loss. Differentiable in z0 and phi.
+
+        Autocast is off: an ε-MSE at the low-loss end is where bf16's mantissa
+        starts to matter, and this module is small enough that fp32 is free.
+        """
+        if z0.device.type == "cuda":
+            with torch.autocast(device_type="cuda", enabled=False):
+                return self._denoise_loss_fp32(z0.float(), cond.float(), t=t, noise=noise)
+        return self._denoise_loss_fp32(z0, cond, t=t, noise=noise)
+
+    def _denoise_loss_fp32(
+        self,
+        z0: torch.Tensor,
+        cond: torch.Tensor,
+        *,
+        t: Optional[torch.Tensor] = None,
+        noise: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         batch = z0.shape[0]
         if t is None:
             t = torch.randint(0, self.timesteps, (batch,), device=z0.device)
