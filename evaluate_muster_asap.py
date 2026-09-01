@@ -434,7 +434,36 @@ def autoregressive_generate_from_controls(
     ground_truth_score_notes_to_feed=0,
     rollout_trace: list | None = None,
     max_notes: int | None = None,
+    window_mode: str = "reset",
+    window_overlap: int = 69,
+    pitch_force: bool = False,
+    overlap_source: str = "pred",
+    capture_trace: bool = False,
+    dagger_sink=None,
 ):
+    """overlap_source (slide mode only): "pred" re-feeds the model's own
+    predictions into the overlap (the deployable configuration); "gt" feeds
+    the ALIGNED GT score triplets instead -- an ORACLE arm that separates
+    'context is poisonous' from 'BAD context is poisonous', deciding whether
+    DAgger-style training has headroom."""
+    """window_mode:
+      "reset"  -- historical behaviour: when the packed context fills, drop ALL
+                  predicted score history and restart from a bare 32-control
+                  prefix. The model cold-starts every ~138 notes, and the score
+                  timeline is re-stitched by the max-onset-so-far heuristic.
+      "slide"  -- sliding window: when the context fills, RE-PACK a legitimate
+                  training-shaped window that starts `window_overlap` notes
+                  back, with our OWN predictions teacher-forced into the
+                  overlap's score slots (paired with their controls, prefix
+                  re-localised), then continue decoding. Three subtleties this
+                  must get right -- see the boundary branch below.
+    """
+    if window_mode not in ("reset", "slide"):
+        raise ValueError(f"unknown window_mode {window_mode!r}")
+    if window_mode == "slide" and not (0 < window_overlap <= 137):
+        raise ValueError("window_overlap must be in (0, 137]: the packed body "
+                         "holds 138 pairs and the prefix 32, so overlap 120 "
+                         "already leaves only 18 fresh slots per window")
     if not control_triplets:
         return [], {
             "num_window_resets": 0,
@@ -446,7 +475,7 @@ def autoregressive_generate_from_controls(
             "generated_score_note_count": 0,
             "score_token_perplexity_trace": empty_score_token_perplexity_trace(),
             "score_token_perplexity_summary": {"num_generated_notes": 0},
-            "window_mode": "reset",
+            "window_mode": window_mode,
         }
     if ground_truth_score_notes_to_feed < 0:
         raise ValueError("--ground-truth-score-notes-to-feed must be non-negative")
@@ -469,7 +498,7 @@ def autoregressive_generate_from_controls(
         "generated_score_note_count": 0,
         "score_token_perplexity_trace": empty_score_token_perplexity_trace(),
         "score_token_perplexity_summary": {},
-        "window_mode": "reset",
+        "window_mode": window_mode,
     }
 
     past = None
@@ -518,12 +547,47 @@ def autoregressive_generate_from_controls(
         if past is None:
             prime()
 
+    def peek_slot(start, end):
+        """decode_slot's argmax/sample WITHOUT appending or feeding -- the
+        caller substitutes and feeds (pitch forcing needs to intervene
+        between choice and feed)."""
+        ensure_primed()
+        logits = next_logits[start:end]
+        if temperature > 0:
+            logits = logits / temperature
+        log_probs = F.log_softmax(logits, dim=-1)
+        probe_slot(start, log_probs)
+        if temperature > 0:
+            rel_token = torch.multinomial(log_probs.exp(), 1).item()
+        else:
+            rel_token = logits.argmax().item()
+        return start + rel_token, log_probs[rel_token].item()
+
+    slot_probe = {"time": None, "dur": None, "pitch": None}
+    PROBE_CHAN = {TIME_OFFSET: "time", DUR_OFFSET: "dur", NOTE_OFFSET: "pitch"}
+
+    def probe_slot(start, log_probs):
+        # entropy (nats) + top-5 alternatives of the constrained slot
+        # distribution, captured for the visualizer; rel tokens keep ints small
+        if not capture_trace:
+            return
+        probs = log_probs.exp()
+        term = probs * log_probs
+        H = float(-(term[probs > 0]).sum().item())
+        v, i = probs.topk(min(5, probs.numel()))
+        slot_probe[PROBE_CHAN[start]] = {
+            "H": round(H, 3),
+            "alts": [[int(t), round(float(pr), 4)]
+                     for t, pr in zip(i.tolist(), v.tolist()) if pr > 1e-4],
+        }
+
     def decode_slot(start, end):
         ensure_primed()
         logits = next_logits[start:end]
         if temperature > 0:
             logits = logits / temperature
         log_probs = F.log_softmax(logits, dim=-1)
+        probe_slot(start, log_probs)
         if temperature > 0:
             rel_token = torch.multinomial(log_probs.exp(), 1).item()
         else:
@@ -563,7 +627,24 @@ def autoregressive_generate_from_controls(
         else:
             time_tok, time_log_prob = decode_slot(TIME_OFFSET, DUR_OFFSET)
             dur_tok, dur_log_prob = decode_slot(DUR_OFFSET, NOTE_OFFSET)
-            pitch_tok, pitch_log_prob = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
+            if pitch_force and note_idx < len(gt_score_triplets) \
+                    and int(gt_score_triplets[note_idx][2]) != REST:
+                # ORACLE DIAGNOSTIC: substitute the aligned GT pitch when the
+                # argmax disagrees (= first correct-pitch triplet in the ranked
+                # list under the time->dur->pitch factorization). decode_slot
+                # already appended+fed its choice, so replace both in-context
+                # and in-cache is NOT possible without refeeding -- instead we
+                # decide BEFORE feeding: peek at the argmax, swap, then feed.
+                pitch_tok, pitch_log_prob = peek_slot(NOTE_OFFSET, CONTROL_OFFSET)
+                gt_pitch = min(max(int(gt_score_triplets[note_idx][2]),
+                                   NOTE_OFFSET), CONTROL_OFFSET - 1)
+                if pitch_tok != gt_pitch:
+                    pitch_tok = gt_pitch
+                    stats["pitch_forced"] = stats.get("pitch_forced", 0) + 1
+                context.append(pitch_tok)
+                feed([pitch_tok])
+            else:
+                pitch_tok, pitch_log_prob = decode_slot(NOTE_OFFSET, CONTROL_OFFSET)
 
             onset_bins = max(0, int(time_tok + score_time_offset - TIME_OFFSET))
             trace = stats["score_token_perplexity_trace"]
@@ -573,6 +654,14 @@ def autoregressive_generate_from_controls(
             trace["time"].append(float(np.exp(-time_log_prob)))
             trace["dur"].append(float(np.exp(-dur_log_prob)))
             trace["pitch"].append(float(np.exp(-pitch_log_prob)))
+            if capture_trace:
+                for ch in ("time", "dur", "pitch"):
+                    pr = slot_probe[ch]
+                    trace.setdefault(f"H_{ch}", []).append(
+                        None if pr is None else pr["H"])
+                    trace.setdefault(f"alt_{ch}", []).append(
+                        None if pr is None else pr["alts"])
+                    slot_probe[ch] = None
             stats["generated_score_note_count"] += 1
             pred_score_triplets.append(
                 [time_tok + score_time_offset, dur_tok, pitch_tok]
@@ -590,18 +679,112 @@ def autoregressive_generate_from_controls(
             future_idx += 1
 
         if len(context) >= PACKED_SEQUENCE_LENGTH and note_idx < len(control_triplets):
-            header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
-                control_triplets,
-                window_start_idx=note_idx,
-            )
-            # Each training window uses a fresh local score timeline, so stitching new
-            # windows to the previous predicted note end is overly sensitive to duration
-            # errors. Re-anchor using the latest predicted onset instead.
-            score_time_offset = max_predicted_score_onset_units(pred_score_triplets)
-            min_score_time_units = min_real_score_onset_units_suffix(
-                gt_score_triplets, note_idx
-            )
-            context = list(header)
+            if window_mode == "slide":
+                # SLIDING WINDOW: re-pack a training-shaped window starting
+                # `window_overlap` notes back, teacher-forcing our own
+                # predictions into the overlap's score slots. The three
+                # subtleties:
+                #
+                # (a) POSITIONS, NOT KV TRICKS. GPT-2 here has absolute learned
+                #     positions and every training window started at position 0
+                #     with window-local times -- so a rolling KV cache with
+                #     shifted positions would hand the model activations it has
+                #     never seen. The only in-distribution slide is a full
+                #     re-pack + re-prime (one <=1020-token forward per
+                #     boundary; the note loop dwarfs it).
+                #
+                # (b) TIME RE-ANCHORING. Training windows are window-local:
+                #     control times are shifted so the window's first control
+                #     is 0, score times so the window's min onset is ~0. The
+                #     overlap's re-fed score tokens must therefore be
+                #     re-anchored to A2 = min predicted onset over the overlap
+                #     -- our own prediction, NOT a GT quantity, so conditioning
+                #     stays performance-only past note 0. Because the overlap
+                #     notes carry the old-window -> new-window mapping, the
+                #     stitched global timeline stays coherent through the
+                #     boundary; reset mode instead jumps to max-onset-so-far,
+                #     which collapses polyphonic spread at every boundary.
+                #
+                # (c) PAIRING. Score slot k pairs with control k while the
+                #     prefix front-loads controls k..k+31 -- so the re-packed
+                #     window must interleave (pred_score_k, control_{k+32}),
+                #     with the prefix re-localised to the overlap's first
+                #     control time. Getting this off by one control feeds the
+                #     model a lookahead it never saw in training.
+                s_idx = max(0, note_idx - window_overlap)
+                header, prefix_count, future_idx, control_time_offset = (
+                    initialize_generation_window(control_triplets,
+                                                 window_start_idx=s_idx))
+                if overlap_source == "gt_time":
+                    # CHANNEL ISOLATION: GT time+duration, MODEL pitch. The
+                    # overlap's pitches are ~99% correct anyway, so if this
+                    # arm recovers most of the full-GT arm's gain, the clock
+                    # channel is the whole poison -- and a decode-time onset
+                    # repair of the overlap becomes worth building.
+                    overlap = [([int(gt_score_triplets[k][0]),
+                                 int(gt_score_triplets[k][1]),
+                                 int(pred_score_triplets[k][2])]
+                                if k < len(gt_score_triplets)
+                                else list(pred_score_triplets[k]))
+                               for k in range(s_idx, note_idx)]
+                elif overlap_source == "gt":
+                    # ORACLE: aligned GT score triplets for notes s..note_idx-1,
+                    # in the same [token-with-offsets] convention as stored
+                    # predictions so the anchoring math below is unchanged.
+                    # The control stream can be LONGER than the aligned GT
+                    # (performance notes with no score partner), so any note
+                    # index past the GT falls back to the model's own
+                    # prediction -- 4 of 8 shards died on exactly that
+                    # IndexError before this guard.
+                    overlap = [([int(gt_score_triplets[k][0]),
+                                 int(gt_score_triplets[k][1]),
+                                 int(gt_score_triplets[k][2])]
+                                if k < len(gt_score_triplets)
+                                else list(pred_score_triplets[k]))
+                               for k in range(s_idx, note_idx)]
+                else:
+                    overlap = pred_score_triplets[s_idx:note_idx]
+                units = [max(0, int(t[0]) - TIME_OFFSET) for t in overlap]
+                anchor = min(units) if units else 0
+                context = list(header)
+                for k, trip in enumerate(overlap):
+                    local = units[k] - anchor
+                    time_tok = min(max(TIME_OFFSET + local, TIME_OFFSET),
+                                   DUR_OFFSET - 1)
+                    dur_tok = min(max(int(trip[1]), DUR_OFFSET), NOTE_OFFSET - 1)
+                    pitch_tok = min(max(int(trip[2]), NOTE_OFFSET),
+                                    CONTROL_OFFSET - 1)
+                    context.extend([time_tok, dur_tok, pitch_tok])
+                    if future_idx < len(control_triplets):
+                        context.extend(localize_control_triplet(
+                            control_triplets[future_idx], control_time_offset))
+                        future_idx += 1
+                score_time_offset = anchor
+                # min_score_time_units exists to absorb GT pickup offsets when
+                # a window is cut at tokenization; in slide mode the anchor is
+                # derived from our own overlap instead, so it must be 0 --
+                # keeping it GT-derived would both leak GT and double-shift.
+                min_score_time_units = 0
+                if dagger_sink is not None:
+                    # DAgger data collection: hand the re-packed self-context
+                    # window (header + model-predicted overlap) to the caller,
+                    # which appends GT-target fresh pairs to build a training
+                    # line. The rollout itself continues on self context.
+                    dagger_sink(list(context), note_idx, s_idx, anchor,
+                                control_time_offset, future_idx)
+            else:
+                header, prefix_count, future_idx, control_time_offset = initialize_generation_window(
+                    control_triplets,
+                    window_start_idx=note_idx,
+                )
+                # Each training window uses a fresh local score timeline, so stitching new
+                # windows to the previous predicted note end is overly sensitive to duration
+                # errors. Re-anchor using the latest predicted onset instead.
+                score_time_offset = max_predicted_score_onset_units(pred_score_triplets)
+                min_score_time_units = min_real_score_onset_units_suffix(
+                    gt_score_triplets, note_idx
+                )
+                context = list(header)
             score_start_idx = len(header)
             past = None
             next_logits = None

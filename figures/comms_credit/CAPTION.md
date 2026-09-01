@@ -1,0 +1,146 @@
+# Full caption set for `figure_reward_vs_f1.png`
+
+Prepared against Cornell's Engineering Communications Program resource
+**"Captions for Figures in Documents"**
+(<https://chec.engineering.cornell.edu/visuals/captions-for-figures-in-documents/>),
+which was read in full. That page names exactly four caption elements — **a Label, a
+Title, a good interpretive informative Caption, and a Citation if appropriate** — and
+warns that treating "the caption [as] just label" is "an opportunity lost." All four are
+supplied below.
+
+---
+
+## 1. Label and Title, formatted as the CHEC page prescribes
+
+> **Figure 1. Reward gain without transcription gain in reinforcement-learning post-training.**
+
+- **Label** — `Figure 1`. The page requires a Label: "For most visuals, this will be
+  *Figure* or *Fig.* with a number following that corresponds to the visual's placement
+  in the document. Use either 'Figure' or 'Fig.' consistently throughout … The use of a
+  Label is required." Use `Figure` (spelled out) for every visual in the essay, and number
+  strictly in order of first appearance.
+- **Title** — *Reward gain without transcription gain in reinforcement-learning
+  post-training.* The page asks for a Title that is "usually a fragment/phrasal piece"
+  and that names the visual; this is a noun phrase, not a sentence.
+- **Formatting** — the page gives no required format but does require that the caption
+  "should not be in the exact same font as the article or report. It needs to visually
+  stand apart … the key is consistency." Set the whole caption in a sans-serif face if
+  the essay body is serif, at one or two points below body size, with the Label and Title
+  in **bold**, and use that same treatment for every figure in the document. (These are
+  two of the three variations the page sanctions; it calls the third — same font, merely
+  smaller — "the least desirable design.")
+
+---
+
+## 2. The full caption
+
+> **Figure 1. Reward gain without transcription gain in reinforcement-learning
+> post-training.** All three panels post-train the same supervised checkpoint of a
+> transformer that reconstructs a written musical score from a recorded piano
+> performance. **(a)** Two reinforcement-learning arms, GRPO and token-level PPO,
+> optimise a reward defined as the sum of the model's three greedy per-token accuracies
+> — onset, duration and pitch — so the scale runs from 0 to 3. Both raise it well above
+> the supervised starting value of 1.327. The checkpoints carried forward to (b), each
+> selected as its run's best validation reward, score 1.584 for GRPO (step 250) and 1.620
+> for PPO (step 775) on a fixed 96-window validation subset; the PPO figure is that run's
+> maximum, while GRPO's curve later edges marginally higher, to 1.588 at step 2100. **(b)** Scoring those same
+> two checkpoints on what a musician would actually count — how many individual notes are
+> recovered at the right pitch and the right time — shows no such gain. Macro note-level
+> F1 over 24 held-out pieces is flat or slightly worse than the checkpoint the arms
+> started from, under all three note-matching criteria: on the exact onset-and-pitch
+> criterion, 18.9 % before post-training against 17.2 % for GRPO and 18.6 % for PPO. The
+> reward and the quality measure have come apart, and the arms' own logs show why:
+> GRPO's greedy pitch accuracy climbs from 82.0 % to 92.2 % while its onset accuracy
+> moves only from 13.6 % to 18.2 %, so the reward is being bought almost entirely with
+> the token that note matching is least sensitive to. **(c)** A third arm, PPO-F1, takes
+> note-level F1 itself as its reward and does move it, from 39.9 % to a best of 45.6 % at
+> step 4900, pulling the two stricter criteria up with it. Read together the panels argue
+> that the failure in (b) is a misspecified reward, not a failure of reinforcement
+> learning — the standard reason to distrust an optimiser that is visibly succeeding.
+> Three limits qualify that reading. Every arm is a single seed; all three runs were
+> killed by the cluster scheduler before their step budget (GRPO at 2 424 of 5 750, PPO
+> at 4 975 of 6 000, PPO-F1 at about 5 310 of 6 000), so no curve here has converged; and
+> the 24-piece sample in (b) is small enough that a one- to two-point gap is not
+> resolvable — splitting the same pieces into their 12 validation and 12 test halves
+> reverses the PPO-versus-baseline ordering (measured on the companion filtered
+> evaluation stream, where PPO scores 17.4 % on the validation half and 21.1 % on the
+> test half against the baseline's 22.4 % and 20.4 %). Panel (c) is also evaluated on a different,
+> mistakes-included variant of the corpus from (a) and (b), so only the direction of
+> change within each panel should be compared, never the absolute heights across panels.
+> *Data: the runs' own validation logs in this repository; every value and its source
+> file are listed in* `figures/comms_credit/SOURCES.md`, *and the figure is regenerated by*
+> `figures/comms_credit/make_figure.py`.
+
+**Why this caption is built the way it is.** The CHEC page's standard for a great caption
+is that it "offers information that is not found elsewhere in the article … Great captions
+are specific to the visual and offer interpretation and technical details not found
+elsewhere in the write-up," and that a caption and its body text "compliment each other
+(not repeat each other)." So the caption carries three things the body text does not: the
+mechanism behind the divergence (the pitch-versus-onset accuracy split), the sample size
+and its consequence, and the fact that the runs were truncated. The page also settles the
+length question directly — of its exemplary caption it asks, "Is it long? Yes. Is it
+effective? Yes." — and says such captions "leave little room for misinterpretation by the
+reader," which is why the limits are stated in the caption rather than deferred.
+
+**Citation element.** The CHEC page's fourth element is "A Citation (if appropriate). If
+the visual is taken or created from another source, then it should be cited." This figure
+is original work by the author from the author's own experiment logs, so no external
+source citation is owed; the closing italic sentence discharges the element by pointing at
+the underlying data and the generating script instead. If the essay reproduces any figure
+from Beyer & Dai or Zeng et al., that one *does* need a full citation in its caption.
+
+---
+
+## 3. Sample in-text callout
+
+> Post-training with a token-accuracy reward is the clearest case in this project of an
+> optimiser succeeding at the wrong thing: as **Figure 1** shows, both reinforcement-learning
+> arms drive the reward well above the supervised baseline while leaving note-level F1
+> where they found it, and only the arm rewarded on F1 directly moves the measure that
+> matters.
+
+Two notes on this sentence:
+
+- It names the figure in the flow of the argument and states the figure's point, rather
+  than parking a bare "(see Figure 1)" at the end of an unrelated claim. It does not
+  restate the numbers — those live in the caption, keeping the two complementary in the
+  way the CHEC page asks.
+- **The CHEC page does not prescribe an in-text cross-reference format.** It is silent on
+  callouts, on whether captions sit above or below the visual, and on numbering beyond
+  "a number … that corresponds to the visual's placement in the document." The convention
+  used here (spelled-out "Figure", bold, integrated into the sentence, figure placed after
+  its first mention) is ordinary engineering practice, not a rule taken from that page.
+
+---
+
+## 4. Reflection for the essay (adapt freely; 224 words)
+
+The CHEC resource "Captions for Figures in Documents" frames technical visuals as
+*islands of information* and insists that a caption is not a name tag. Its four required
+elements — Label, Title, interpretive Caption, and Citation where appropriate — organised
+how I wrote Figure 1. The Label is `Figure 1`, numbered by placement and spelled out
+consistently. The Title, *Reward gain without transcription gain in reinforcement-learning
+post-training*, is the phrasal fragment the page asks for: it names the visual without
+becoming a sentence.
+
+The element I worked hardest at is the one CHEC says most writers skip. The page warns
+that treating the caption as "just label" is "an opportunity lost," and defines a great
+caption as one offering "interpretation and technical details not found elsewhere in the
+write-up." My caption therefore does interpretive work the body text does not repeat: it
+explains *why* the reward and the quality metric diverge, using the pitch-versus-onset
+accuracy numbers from the training log, and it states the sample size, the single seed,
+and the fact that the scheduler killed all three runs early. CHEC's answer to whether that
+makes a caption too long — "Is it long? Yes. Is it effective? Yes." — gave me licence to
+keep the limitations in. A caption that "leaves little room for misinterpretation" has to
+include what the figure cannot prove.
+
+---
+
+### Source attribution for the guidance itself
+
+Cornell University Engineering Communications Program, "Captions for Figures in
+Documents," *Cornell Help for Engineering Communications (CHEC)*,
+<https://chec.engineering.cornell.edu/visuals/captions-for-figures-in-documents/>
+(accessed 24 August 2026). The page notes: "Portions of this page were previously
+released by the IEEE Professional Communication Society via its newsletter (ISSN
+1539-3593, Volume 54, Number 3, March/April 2010. Author: Nathans-Kelly)."

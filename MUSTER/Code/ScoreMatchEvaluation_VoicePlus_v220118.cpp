@@ -144,6 +144,22 @@ cout<<pitchER<<"\t"<<missRate<<"\t"<<extraRate<<"\t"<<RCRate<<"\t"<<offsetER<<"\
 			}//endfor j
 			if(scoreNote.sitch!=""){break;}
 		}//endfor i
+		/// FIX 2026-08-27 (unison symmetry): the GT builder collapses
+		/// duplicate-unison notes (fmt3x.duplicateOnsets) but the est side
+		/// kept both copies, so an IDENTICAL file scores an ExtraNote for
+		/// every unison in the score. Collapse est-side exact
+		/// (onstime, sitch) duplicates the same way.
+		{
+			bool dupNote=false;
+			for(int q=0;q<matchedNoteEst.size();q+=1){
+				if(matchedNoteEst[q].onstime==scoreNote.onstime
+				   && matchedNoteEst[q].sitch==scoreNote.sitch){dupNote=true;break;}
+			}//endfor q
+			if(dupNote){
+				nEstNote-=1;
+				continue;
+			}//endif
+		}
 		matchedNoteEst.push_back(scoreNote);
 	}//endfor n
 
@@ -167,6 +183,96 @@ cout<<pitchER<<"\t"<<missRate<<"\t"<<extraRate<<"\t"<<RCRate<<"\t"<<offsetER<<"\
 // 		matchedNoteEst.push_back(scoreNote);
 // 	}//endfor n
 }//
+
+	/// RESCUE PASS (fix 2026-08-27). The HMM matcher mis-aligns repeated
+	/// figures and near-chords even when GT and EST are IDENTICAL files,
+	/// yielding paired Miss+Extra notes of the same pitch at the same score
+	/// time (self-comparison repro on the windowed test set: e.g. a repeated
+	/// F#2/G#4/B4 figure matched to its earlier occurrence). Before the
+	/// extraction below, re-pair each 'extra' est note with an UNCLAIMED GT
+	/// note of equal sitch within a quarter/4 score-time tolerance -- what a
+	/// correct alignment would have produced. Genuine extras (no matching
+	/// unclaimed GT note nearby) are untouched.
+	{
+		vector<int> gtClaimed(matchedNoteTrue.size(),0);
+		for(int i=0;i<matchedNoteEst.size();i+=1){
+			if(match.evts[matchedNoteEst[i].matchPos].errorInd>1){continue;}
+			for(int n=0;n<matchedNoteTrue.size();n+=1){
+				if(matchedNoteTrue[n].fmt1ID==matchedNoteEst[i].fmt1ID){gtClaimed[n]=1;break;}
+			}//endfor n
+		}//endfor i
+		double tol=double(fmt3x.TPQN)/4.;
+		for(int i=0;i<matchedNoteEst.size();i+=1){
+			int mp=matchedNoteEst[i].matchPos;
+			if(match.evts[mp].errorInd!=2 && match.evts[mp].errorInd!=3){continue;}
+			int best=-1; double bestD=tol+1;
+			for(int n=0;n<matchedNoteTrue.size();n+=1){
+				if(gtClaimed[n]){continue;}
+				if(matchedNoteTrue[n].sitch!=matchedNoteEst[i].sitch){continue;}
+				double dd=fabs(double(matchedNoteTrue[n].onstime)-double(matchedNoteEst[i].onstime));
+				if(dd<=tol && dd<bestD){bestD=dd; best=n;}
+			}//endfor n
+			if(best>=0){
+				gtClaimed[best]=1;
+				match.evts[mp].errorInd=0;
+				match.evts[mp].fmt1ID=matchedNoteTrue[best].fmt1ID;
+				matchedNoteEst[i].fmt1ID=matchedNoteTrue[best].fmt1ID;
+			}//endif
+		}//endfor i
+	}
+
+	/// FIX 2026-08-27 round 2 (claim swap): in dense clusters the matcher can
+	/// CLAIM a GT note for a same-pitch est note from a different occurrence,
+	/// blocking the rescue above (the displaced twin then reports miss+extra).
+	/// Conservative repair: swap two same-pitch assignments -- an extra est
+	/// note e (errorInd 2/3) takes over a claimed GT g, and the est note that
+	/// held g is re-pointed to e's nearest unclaimed same-pitch GT -- ONLY
+	/// when both resulting time distances strictly improve. Nothing is ever
+	/// unmatched, so onset-error semantics for genuinely shifted notes are
+	/// unchanged.
+	{
+		for(int i=0;i<matchedNoteEst.size();i+=1){
+			int mpi=matchedNoteEst[i].matchPos;
+			if(match.evts[mpi].errorInd!=2 && match.evts[mpi].errorInd!=3){continue;}
+			for(int k=0;k<matchedNoteEst.size();k+=1){
+				if(k==i){continue;}
+				int mpk=matchedNoteEst[k].matchPos;
+				if(match.evts[mpk].errorInd>1){continue;}
+				if(matchedNoteEst[k].sitch!=matchedNoteEst[i].sitch){continue;}
+				// GT currently held by k
+				int gk=-1;
+				for(int n=0;n<matchedNoteTrue.size();n+=1){
+					if(matchedNoteTrue[n].fmt1ID==matchedNoteEst[k].fmt1ID){gk=n;break;}
+				}//endfor n
+				if(gk<0){continue;}
+				// unclaimed same-pitch GT nearest to k
+				int gfree=-1; double dfree=1e18;
+				for(int n=0;n<matchedNoteTrue.size();n+=1){
+					if(matchedNoteTrue[n].sitch!=matchedNoteEst[k].sitch){continue;}
+					bool claimed=false;
+					for(int q=0;q<matchedNoteEst.size();q+=1){
+						int mq=matchedNoteEst[q].matchPos;
+						if(match.evts[mq].errorInd>1){continue;}
+						if(matchedNoteEst[q].fmt1ID==matchedNoteTrue[n].fmt1ID){claimed=true;break;}
+					}//endfor q
+					if(claimed){continue;}
+					double dd=fabs(double(matchedNoteTrue[n].onstime)-double(matchedNoteEst[k].onstime));
+					if(dd<dfree){dfree=dd; gfree=n;}
+				}//endfor n
+				if(gfree<0){continue;}
+				double d_ik=fabs(double(matchedNoteTrue[gk].onstime)-double(matchedNoteEst[i].onstime));
+				double d_kold=fabs(double(matchedNoteTrue[gk].onstime)-double(matchedNoteEst[k].onstime));
+				if(d_ik<d_kold && dfree<d_kold){
+					match.evts[mpi].errorInd=0;
+					match.evts[mpi].fmt1ID=matchedNoteTrue[gk].fmt1ID;
+					matchedNoteEst[i].fmt1ID=matchedNoteTrue[gk].fmt1ID;
+					match.evts[mpk].fmt1ID=matchedNoteTrue[gfree].fmt1ID;
+					matchedNoteEst[k].fmt1ID=matchedNoteTrue[gfree].fmt1ID;
+					break;
+				}//endif
+			}//endfor k
+		}//endfor i
+	}
 
 	// Extract extra notes (including doubly appeared notes)
 	for(int i=matchedNoteEst.size()-1;i>=0;i-=1){
@@ -404,7 +510,7 @@ ofsDetail<<"OnsetError(shift):\tGtID\t"<<matchedNoteTrue[n].fmt1ID<<"\tEstID\t"<
 				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].higherMinPos].onstime;
 			}else{
 				if(durEst*durTrue<0){durTrue*=-1;}
-				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].lowerMaxPos].onstime+(durTrue*(matchedNoteEst[n].offstime-matchedNoteEst[n].onstime))/durEst;
+				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].lowerMaxPos].onstime+(durTrue*(matchedNoteEst[n].offstime-matchedNoteEst[matchedNoteEst[n].lowerMaxPos].onstime))/durEst;//FIX 2026-08-27: interpolate the OFFSET'S POSITION WITHIN THE BRACKET INTERVAL. The original added the note's full duration (offstime-onstime of the note itself) onto an anchor at the BRACKET note's onset -- wrong whenever any other note's onset falls between this note's onset and offset, i.e. almost always in polyphony. Self-comparison then reports offset errors on identical files (repro: 8/8 windows, e.g. len-37 note scored as 62).
 			}//endif
 		}//endif
 

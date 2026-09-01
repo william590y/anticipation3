@@ -338,7 +338,7 @@ cout<<pitchER<<"\t"<<missRate<<"\t"<<extraRate<<"\t"<<RCRate<<"\t"<<offsetER<<"\
 				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].higherMinPos].onstime;
 			}else{
 				if(durEst*durTrue<0){durTrue*=-1;}
-				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].lowerMaxPos].onstime+(durTrue*(matchedNoteEst[n].offstime-matchedNoteEst[n].onstime))/durEst;
+				matchedNoteEstCorrected[n].offstime=matchedNoteTrue[matchedNoteEst[n].lowerMaxPos].onstime+(durTrue*(matchedNoteEst[n].offstime-matchedNoteEst[matchedNoteEst[n].lowerMaxPos].onstime))/durEst;//FIX 2026-08-27: interpolate the OFFSET'S POSITION WITHIN THE BRACKET INTERVAL. The original added the note's full duration (offstime-onstime of the note itself) onto an anchor at the BRACKET note's onset -- wrong whenever any other note's onset falls between this note's onset and offset, i.e. almost always in polyphony. Self-comparison then reports offset errors on identical files (repro: 8/8 windows, e.g. len-37 note scored as 62).
 			}//endif
 		}//endif
 

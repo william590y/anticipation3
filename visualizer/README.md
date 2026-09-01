@@ -172,3 +172,25 @@ between the base and LoRA-adapted rollouts.
     `precompute_scores_xml.py` additionally strips `<direction>` elements whose only
     content is an empty `<words/>` from the real excerpts (music21 export artifact for
     bare tempo `<sound>` carriers) — OSMD's createMetronomeMark crashes on them.
+
+## Scale-max & interarrival F1 (metric mode selector)
+
+The F1 panel has a **metric** dropdown with two modes:
+
+* **standard** — the original three criteria (`on+pit` / `+dur` / `±1`).
+* **scale & IOI** — beat-scale-forgiving variants, computed by
+  `compute_scalemax_f1.py` into each rollout's `f1` dict:
+  `tol1_scalemax` (onset±1+pitch F1 maxed over all ASAP beat-unit ratios,
+  13 rationals 1/6..6; hover a cell for the winning `r`), `tol1_ioi` (the
+  same matcher on (interarrival, pitch) events — rhythm-shape credit without
+  absolute alignment), and `tol1_ioi_scalemax`. Paper rows are rebinned
+  exactly from their stored `pred_quarters` (`t = round(on*50/qpb*r)`);
+  everything else scales its bins in float before rounding.
+
+CAVEAT: max over 13 scales inflates every row by roughly the same amount
+(measured on the 1,181-window test set: +23 pts for ours, Beyer and Zeng
+alike), so compare rows to each other within a mode, never across modes.
+The per-rollout hover tooltip also shows `s-max` (with `r`) and `IOI ±1`.
+
+To refresh after adding rollout groups: run `compute_f1.py`, then
+`compute_scalemax_f1.py`, then `split_visualizer_payload.py`.

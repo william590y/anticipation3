@@ -2,9 +2,10 @@
 """Note-level F1 for predicted vs ground-truth score notes (replaces MUSTER).
 
 CPU-only post-process over a visualizer data.js: for every window and every
-rollout variant present (ours base / ours LoRA / paper 1 / paper 2) it scores the
-predicted score notes against that window's `gt_score` and writes the result back
-as `<rollout>.f1`.
+rollout variant present (ours base / ours LoRA / ours masked / masked 40k /
+paper 1 / paper 2, plus any extra ``rollouts*`` key) it scores the predicted
+score notes against that window's `gt_score`
+and writes the result back as `<rollout>.f1`.
 
 Three matching criteria are reported side by side (all requested):
 
@@ -99,10 +100,31 @@ def load_payload(path, expected_prefix="window.VISUALIZER_DATA = "):
     return json.loads(txt[txt.index("{"): txt.rindex("}") + 1]), txt[: txt.index("{")]
 
 
+KNOWN_ROLLOUT_GROUPS = (
+    "rollouts",
+    "rollouts_lora",
+    "rollouts_masked",
+    "rollouts_masked_40k",
+    "rollouts_masked_40k_final",
+    "rollouts_paper1",
+    "rollouts_paper2",
+)
+
+
 def iter_rollout_groups(example):
-    """Yield (group_name, variant_name, rollout_dict) for every rollout present:
-    our base/LoRA rollouts plus any external-model rollouts."""
-    for group in ("rollouts", "rollouts_lora", "rollouts_paper1", "rollouts_paper2"):
+    """Yield (group_name, variant_name, rollout_dict) for every rollout present.
+
+    Known groups are scored in a stable order; any extra ``rollouts*`` key is
+    included too so a new vis model does not need a compute_f1.py edit.
+    """
+    names = [g for g in KNOWN_ROLLOUT_GROUPS if g in example]
+    names.extend(
+        sorted(
+            g for g in example
+            if isinstance(g, str) and g.startswith("rollouts") and g not in KNOWN_ROLLOUT_GROUPS
+        )
+    )
+    for group in names:
         block = example.get(group)
         if not isinstance(block, dict):
             continue

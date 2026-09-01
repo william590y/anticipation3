@@ -46,6 +46,13 @@ except ImportError:
 
 from accelerate import Accelerator, InitProcessGroupKwargs
 
+from anticipation.ltlm_eval import (
+    EVAL_MODES,
+    evaluate_ar_modes,
+    fixed_piano_roll_indices,
+    render_ltlm_piano_rolls,
+    wandb_ar_payload,
+)
 from anticipation.ltlm_model import LTLMCausalLM, control_token_mask
 from anticipation.ltlm_objective import latent_alignment_stats, planner_regularized_loss
 from anticipation.ltlm_posterior import PosteriorOptimizer
@@ -72,6 +79,25 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=2500)
     parser.add_argument("--eval_steps", type=int, default=1000)
     parser.add_argument("--eval_max_samples", type=int, default=100)
+    parser.add_argument(
+        "--eval_autoregressive_samples",
+        type=int,
+        default=100,
+        help="Val windows for AR pitch/onset/duration. 0 disables AR and piano rolls.",
+    )
+    parser.add_argument(
+        "--piano_roll_examples",
+        type=int,
+        default=3,
+        help="Fixed validation windows drawn as piano rolls each eval "
+        "(first N of val_file, same every step). 0 disables.",
+    )
+    parser.add_argument(
+        "--disable-autoregressive-pitch-eval",
+        action="store_true",
+        default=False,
+        help="Skip AR decode (and piano rolls) during validation.",
+    )
     parser.add_argument("--warmup_steps", type=int, default=0)
     parser.add_argument("--max_grad_norm", type=float, default=2.0)
     parser.add_argument("--force_cpu", action="store_true")
@@ -483,10 +509,29 @@ def main():
 
     n_val = min(args.eval_max_samples, len(val_full))
     val_dataset = Subset(val_full, range(n_val))
+    ar_n = 0
+    if not args.disable_autoregressive_pitch_eval and args.eval_autoregressive_samples > 0:
+        ar_n = min(args.eval_autoregressive_samples, n_val)
+    ar_dataset = Subset(val_full, range(ar_n)) if ar_n else None
+    piano_roll_indices = fixed_piano_roll_indices(val_full, args.piano_roll_examples)
     pin = torch.cuda.is_available() and not args.force_cpu
     dl_kw = dataloader_kwargs(args, pin)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, **dl_kw)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, **dl_kw)
+    ar_loader = (
+        DataLoader(ar_dataset, batch_size=args.val_batch_size, shuffle=False, **dl_kw)
+        if ar_dataset is not None
+        else None
+    )
+
+    if accelerator.is_main_process:
+        if ar_n:
+            print(
+                f"AR eval: first {ar_n} of {args.val_file} "
+                f"(piano rolls: {piano_roll_indices or 'disabled'})."
+            )
+        else:
+            print("AR eval disabled.")
 
     base = load_base_lm(args.model_name, args.attn_implementation)
     if base.config.vocab_size != VOCAB_SIZE:
@@ -513,9 +558,13 @@ def main():
     except RuntimeError:
         adam_kw.pop("fused", None)
         optimizer = AdamW(model.parameters(), **adam_kw)
-    model, optimizer, train_loader, val_loader = accelerator.prepare(
-        model, optimizer, train_loader, val_loader
-    )
+    prepared = [model, optimizer, train_loader, val_loader]
+    if ar_loader is not None:
+        prepared.append(ar_loader)
+    prepared = accelerator.prepare(*prepared)
+    model, optimizer, train_loader, val_loader = prepared[:4]
+    if ar_loader is not None:
+        ar_loader = prepared[4]
 
     from torch.optim.lr_scheduler import LambdaLR
 
@@ -538,13 +587,63 @@ def main():
     def run_validation():
         accelerator.wait_for_everyone()
         metrics = evaluate_paths(raw_model, posterior, val_loader, accelerator, max_batches=0)
+        if ar_loader is not None:
+            ar_by_mode = evaluate_ar_modes(
+                raw_model, posterior, ar_loader, accelerator, modes=EVAL_MODES
+            )
+            figures = {}
+            if piano_roll_indices and accelerator.is_main_process:
+                try:
+                    import matplotlib.pyplot as plt
+
+                    windows = {
+                        key: torch.stack([val_full[i][key] for i in piano_roll_indices])
+                        for key in ("input_ids", "attention_mask", "labels")
+                    }
+                    figures = render_ltlm_piano_rolls(
+                        raw_model,
+                        posterior,
+                        windows,
+                        piano_roll_indices,
+                        completed_steps,
+                        accelerator.device,
+                    )
+                    roll_dir = args.output_dir / "piano_rolls"
+                    roll_dir.mkdir(parents=True, exist_ok=True)
+                    for mode, figure in figures.items():
+                        figure.savefig(
+                            roll_dir / f"{mode}_step{completed_steps:06d}.png", dpi=110
+                        )
+                except Exception as viz_error:
+                    print(f"WARNING: piano-roll logging failed: {viz_error}")
+                    figures = {}
+            if accelerator.is_main_process:
+                metrics.update(
+                    wandb_ar_payload(
+                        ar_by_mode,
+                        figures,
+                        wandb_module=wandb if use_wandb else None,
+                    )
+                )
+                if figures:
+                    import matplotlib.pyplot as plt
+
+                    plt.close("all")
         if accelerator.is_main_process:
+            ar_msg = ""
+            if "val/planner/ar_pitch_accuracy" in metrics:
+                ar_msg = (
+                    f"  AR planner pitch {metrics['val/planner/ar_pitch_accuracy']:.1f}% "
+                    f"onset {metrics['val/planner/ar_onset_accuracy']:.1f}% "
+                    f"dur {metrics['val/planner/ar_duration_accuracy']:.1f}%"
+                )
             print(
                 f"step {completed_steps}: "
                 f"oracle NLL {metrics['val/oracle/loss']:.4f}  "
                 f"planner NLL {metrics['val/planner/loss']:.4f}  "
                 f"prefix NLL {metrics['val/prefix/loss']:.4f}  "
                 f"cos(q,p) {metrics['val/oracle/z_cosine_vs_planner']:.3f}"
+                f"{ar_msg}"
             )
             if use_wandb:
                 wandb.log(metrics, step=completed_steps)

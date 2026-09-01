@@ -54,7 +54,9 @@
   .note { cursor: pointer; }
   .fadeout { opacity: 0.07 !important; }
   .semifade { opacity: 0.25 !important; }
-  #empty { padding: 40px; text-align: center; color: var(--muted); }
+  #empty { position: fixed; inset: 0; z-index: 20; margin: 0;
+           display: flex; align-items: center; justify-content: center;
+           background: var(--bg); padding: 40px; text-align: center; color: var(--muted); }
   #staleWarn { display: none; margin: 10px 16px 0; padding: 10px 12px; border-radius: 8px;
                background: rgba(224,93,93,0.12); border: 1px solid var(--miss); color: var(--text); }
   button.playing { border-color: var(--sel); color: var(--sel); }
@@ -141,20 +143,23 @@
   <h1>Score Infilling Visualizer</h1>
   <span class="lbl">window</span>
   <select id="exampleSel"></select>
+  <button id="rolloutModeBtn" style="margin-left:8px;padding:4px 12px;background:#2a78d6;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600"
+    title="open the FULL-SONG rollout viewer for this window's performance (ours + pitch-forced + Beyer + Zeng vs ground truth)">&#127925; rollout mode</button>
   <span class="lbl">stream</span>
   <select id="streamSel" title="Unfiltered = raw performance including notes the aligner dropped (performer mistakes)">
     <option value="raw" selected>unfiltered (raw)</option>
     <option value="filtered">filtered (model input)</option>
   </select>
+  <span class="lbl">ours</span>
+  <select id="oursSel" title="Which of our checkpoints fills the Ours piano roll, F1 row, entropy heatmap, and perplexity. Paper 1 / paper 2 stay as comparison rows.">
+    <option value="rollouts" selected>FT (non-masked)</option>
+    <option value="rollouts_lora">LoRA (non-masked)</option>
+    <option value="rollouts_masked">masked 20k</option>
+    <option value="rollouts_masked_40k">masked 40k (best onset)</option>
+    <option value="rollouts_masked_40k_final">masked 40k (final)</option>
+  </select>
   <label class="key" title="Drop in the ground-truth score note for the window's first slot instead of the model's own guess, then let the rest of the rollout respond autoregressively">
     <input type="checkbox" id="seedGt"> seed first note (GT)
-  </label>
-  <label class="key" title="Switch between the base fine-tuned checkpoint and the LoRA-adapted checkpoint">
-    <input type="checkbox" id="useLora"> LoRA
-  </label>
-  <label class="key" id="beamNLabel" title="Beam width for our model's constrained score-token beam search (1 = greedy). Missing widths fall back to greedy. Paper models are unaffected.">
-    n beams <input type="range" id="beamN" min="1" max="10" step="1" value="1" style="vertical-align:middle">
-    <span id="beamNVal" style="min-width:18px; display:inline-block">1</span>
   </label>
   <span class="lbl">view</span>
   <select id="viewMode" title="Switch between piano-roll, staff-style, and engraved sheet display">
@@ -208,7 +213,7 @@
 <div id="staleWarn"></div>
 
 <div class="panel" id="scorePanel">
-  <h2>Score <span class="hint">(0.5 s beat grid — GT vs the model's autoregressive rollout; a selected performance note shows its own slot's candidate distribution, conditioned on the rollout so far)</span></h2>
+  <h2>Ours <span class="hint" id="oursHint">(0.5 s beat grid — GT vs the selected checkpoint's autoregressive rollout; a selected performance note shows its own slot's candidate distribution, conditioned on the rollout so far)</span></h2>
   <div class="rollwrap"><svg id="scoreRoll"></svg></div>
 </div>
 
@@ -217,6 +222,21 @@
   <div id="engravedReal" class="engraved-sheet"></div>
   <h2 style="margin-top:14px">Predicted score — engraved rollout <span class="hint" id="engravedPredHint">(the selected AR rollout snapped to a 1/12-beat grid, typeset in the piece's real meter and key with barlines on the real downbeat phase; falls back to exact-grid 4/4 when no meter mapping exists)</span></h2>
   <div id="engravedPred" class="engraved-sheet"></div>
+</div>
+
+<div class="panel" id="rerankSweepPanel">
+  <h2>Rerank baseline sweep <span class="hint">(beam-5 decode of &alpha;&middot;log p<sub>FT</sub> + (1&minus;&alpha;)&middot;log p<sub>base</sub> under run_paper_split_v2/checkpoint-2500, raw performance input; the slider selects &alpha;)</span></h2>
+  <div class="lbl" style="padding:4px 10px">&alpha; = <b id="rerankAlphaVal">0.5</b> &nbsp; &beta; = <b id="rerankBetaVal">0.5</b>
+    <input type="range" id="rerankAlpha" min="0" max="4" step="1" value="2" style="width:200px;vertical-align:middle;margin-left:10px">
+  </div>
+  <div class="rollwrap"><svg id="rerankSweepRoll"></svg></div>
+  <div class="lbl" id="rerankSweepNote" style="padding:0 10px 8px"></div>
+</div>
+
+<div class="panel" id="rerankPanel">
+  <h2>Reranked decode <span class="hint">(beam search maximizing &alpha;&middot;log p<sub>FT</sub> + &beta;&middot;log p<sub>base</sub> + &gamma;&middot;q<sub>&phi;</sub> — GT vs the selected candidate)</span></h2>
+  <div class="rollwrap"><svg id="rerankRoll"></svg></div>
+  <div class="lbl" id="rerankNote" style="padding:0 10px 8px"></div>
 </div>
 
 <div class="panel" id="paper1Panel">
@@ -272,24 +292,62 @@
   <div class="row"><span>ground truth</span><b id="pplGt">–</b></div>
   <div class="lbl" id="pplSeqNote" style="margin-top:5px"></div>
   <hr>
-  <div class="lbl" title="Macro-mean note-level F1 across all pieces shared by the three models, using unfiltered performance input and no GT seeding. Three matching criteria: onset+pitch exact, onset+pitch+duration exact, and onset+pitch with a +-1 bin onset tolerance. 'Ours' follows the LoRA toggle.">Mean F1 vs GT (all pieces)</div>
+  <div class="lbl" title="Macro-mean note-level F1 across all pieces shared by the compared models, using unfiltered performance input and no GT seeding. Three matching criteria: onset+pitch exact, onset+pitch+duration exact, and onset+pitch with a +-1 bin onset tolerance. 'Ours' follows the top ours checkpoint control.">Mean F1 vs GT (all pieces)</div>
+  <div class="lbl" style="margin:2px 0 4px">
+    <label title="ORACLE DIAGNOSTIC: show the pitch-forced rollout for the ours row (wrong argmax pitches replaced by the slot's GT pitch during decoding; filtered variant only). Not a method -- it reads GT.">
+      <input id="pfOurs" type="checkbox"> pitch-force ours</label>
+    &nbsp;
+    <a id="fullsongLink" href="fullsong.html" target="_blank"
+       title="jump from windowed mode to the FULL-SONG rollout of this window's performance (ours + Beyer + Zeng, test+val). Needs data_fullsong.js (visualizer/build_fullsong_payload.py)."
+       style="color:#8ab4f8">full rollout &#8599;</a>
+  </div>
+  <div class="lbl" style="margin:2px 0 4px">
+    metric: <select id="f1MetricMode" title="standard = the three exact/tolerance criteria. scale &amp; IOI = beat-scale-forgiving variants: max over ASAP beat-unit ratios of onset±1+pitch F1; the same matcher on (interarrival, pitch) events; and the interarrival scale-max. Hover a cell for the best scale r. CAVEAT: max over 13 scales inflates every row equally -- compare rows to each other, not across modes.">
+      <option value="standard" selected>standard (on+pit / +dur / ±1)</option>
+      <option value="scaleioi">scale &amp; IOI (±1 s-max / IOI ±1 / IOI s-max)</option>
+    </select>
+  </div>
   <div id="f1Wrap">
   <table id="f1Table">
-    <thead><tr><th></th><th title="pitch and onset must match exactly">on+pit</th><th title="pitch, onset and duration must all match exactly">+dur</th><th title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
+    <thead><tr><th></th><th id="f1HeadA" title="pitch and onset must match exactly">on+pit</th><th id="f1HeadB" title="pitch, onset and duration must all match exactly">+dur</th><th id="f1HeadC" title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
     <tbody>
       <tr><td class="mdl" id="f1NameOurs">ours</td><td id="f1OursA">–</td><td id="f1OursB">–</td><td id="f1OursC">–</td></tr>
+      <tr><td class="mdl" title="one draw from the FT model at temperature 1.0 (constrained), no selection">ft sample</td><td id="f1FtSampleA">–</td><td id="f1FtSampleB">–</td><td id="f1FtSampleC">–</td></tr>
+      <tr><td class="mdl" id="f1NameRerankBase" title="alpha/beta baseline beam decode; follows the sweep slider">rr base</td><td id="f1RerankBaseA">–</td><td id="f1RerankBaseB">–</td><td id="f1RerankBaseC">–</td></tr>
+      <tr><td class="mdl" title="native N-best selection: 8 sampled + 1 greedy candidates, fitted objective picks one">rr sample</td><td id="f1RerankSampleA">–</td><td id="f1RerankSampleB">–</td><td id="f1RerankSampleC">–</td></tr>
+      <tr><td class="mdl" title="candidate-consensus (MBR): argmax of mean pairwise F1 against the other 8 candidates, no GT used">mbr</td><td id="f1MbrA">–</td><td id="f1MbrB">–</td><td id="f1MbrC">–</td></tr>
+      <tr><td class="mdl" title="selection by the pairwise-trained (margin-weighted RankNet) reranker's score alone">rr pairwise</td><td id="f1PwA">–</td><td id="f1PwB">–</td><td id="f1PwC">–</td></tr>
+      <tr><td class="mdl" title="pairwise reranker retrained on the 32-candidate augmented (transpose + tempo) pools">rr pairwise32</td><td id="f1Pw32A">–</td><td id="f1Pw32B">–</td><td id="f1Pw32C">–</td></tr>
+      <tr><td class="mdl" title="listwise soft-CE reranker (softmax over F1 at tau_R=0.05) trained on the 32-candidate augmented pools">rr listwise32</td><td id="f1Lw32A">–</td><td id="f1Lw32B">–</td><td id="f1Lw32C">–</td></tr>
+      <tr><td class="mdl" title="pairwise32 reranker whose encoder also sees per-token log p under the FT and base models">rr pairwise32+tokfeat</td><td id="f1Pwf32A">–</td><td id="f1Pwf32B">–</td><td id="f1Pwf32C">–</td></tr>
+      <tr><td class="mdl" title="knockout tournament with an order-symmetrised pairwise-input comparator (PairJudge RM, arXiv 2501.13007)">rr tournament</td><td id="f1TourA">–</td><td id="f1TourB">–</td><td id="f1TourC">–</td></tr>
+      <tr><td class="mdl" title="listwise Fusion-in-Decoder over 5 candidates at a time + m-ary tournament sort (arXiv 2402.15838)">rr listT5</td><td id="f1Lt5A">–</td><td id="f1Lt5B">–</td><td id="f1Lt5C">–</td></tr>
+      <tr><td class="mdl" title="generative verifier: argmax p(YES) as next-token prediction (arXiv 2408.15240)">rr genRM</td><td id="f1GenA">–</td><td id="f1GenB">–</td><td id="f1GenC">–</td></tr>
+      <tr><td class="mdl" title="pool oracle: same 9 candidates, pick the best onset±1+pitch F1 (selection ceiling)">rr oracle</td><td id="f1RerankSampleOrcA">–</td><td id="f1RerankSampleOrcB">–</td><td id="f1RerankSampleOrcC">–</td></tr>
       <tr><td class="mdl">paper 1</td><td id="f1P1A">–</td><td id="f1P1B">–</td><td id="f1P1C">–</td></tr>
       <tr><td class="mdl">paper 2</td><td id="f1P2A">–</td><td id="f1P2B">–</td><td id="f1P2C">–</td></tr>
     </tbody>
   </table>
   </div>
   <div class="lbl" id="f1Note" style="margin-top:5px"></div>
-  <div class="lbl" style="margin-top:8px" title="Note-level F1 for the piece of the currently selected window, same unfiltered unseeded protocol as the mean table. Windows from the same piece are averaged. 'Ours' follows the LoRA toggle.">This piece F1</div>
+  <div class="lbl" style="margin-top:8px" title="Note-level F1 for the piece of the currently selected window, same unfiltered unseeded protocol as the mean table. Windows from the same piece are averaged. 'Ours' follows the top ours checkpoint control.">This piece F1</div>
   <div id="f1PieceWrap">
   <table id="f1PieceTable">
-    <thead><tr><th></th><th title="pitch and onset must match exactly">on+pit</th><th title="pitch, onset and duration must all match exactly">+dur</th><th title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
+    <thead><tr><th></th><th id="f1PieceHeadA" title="pitch and onset must match exactly">on+pit</th><th id="f1PieceHeadB" title="pitch, onset and duration must all match exactly">+dur</th><th id="f1PieceHeadC" title="pitch matches, onset may differ by up to 1 bin">&plusmn;1</th></tr></thead>
     <tbody>
       <tr><td class="mdl" id="f1PieceNameOurs">ours</td><td id="f1PieceOursA">–</td><td id="f1PieceOursB">–</td><td id="f1PieceOursC">–</td></tr>
+      <tr><td class="mdl" title="one draw from the FT model at temperature 1.0 (constrained), no selection">ft sample</td><td id="f1PieceFtSampleA">–</td><td id="f1PieceFtSampleB">–</td><td id="f1PieceFtSampleC">–</td></tr>
+      <tr><td class="mdl" id="f1PieceNameRerankBase" title="alpha/beta baseline beam decode; follows the sweep slider">rr base</td><td id="f1PieceRerankBaseA">–</td><td id="f1PieceRerankBaseB">–</td><td id="f1PieceRerankBaseC">–</td></tr>
+      <tr><td class="mdl" title="native N-best selection: 8 sampled + 1 greedy candidates, fitted objective picks one">rr sample</td><td id="f1PieceRerankSampleA">–</td><td id="f1PieceRerankSampleB">–</td><td id="f1PieceRerankSampleC">–</td></tr>
+      <tr><td class="mdl" title="candidate-consensus (MBR): argmax of mean pairwise F1 against the other 8 candidates, no GT used">mbr</td><td id="f1PieceMbrA">–</td><td id="f1PieceMbrB">–</td><td id="f1PieceMbrC">–</td></tr>
+      <tr><td class="mdl" title="selection by the pairwise-trained (margin-weighted RankNet) reranker's score alone">rr pairwise</td><td id="f1PiecePwA">–</td><td id="f1PiecePwB">–</td><td id="f1PiecePwC">–</td></tr>
+      <tr><td class="mdl" title="pairwise reranker retrained on the 32-candidate augmented (transpose + tempo) pools">rr pairwise32</td><td id="f1PiecePw32A">–</td><td id="f1PiecePw32B">–</td><td id="f1PiecePw32C">–</td></tr>
+      <tr><td class="mdl" title="listwise soft-CE reranker (softmax over F1 at tau_R=0.05) trained on the 32-candidate augmented pools">rr listwise32</td><td id="f1PieceLw32A">–</td><td id="f1PieceLw32B">–</td><td id="f1PieceLw32C">–</td></tr>
+      <tr><td class="mdl" title="pairwise32 reranker whose encoder also sees per-token log p under the FT and base models">rr pairwise32+tokfeat</td><td id="f1PiecePwf32A">–</td><td id="f1PiecePwf32B">–</td><td id="f1PiecePwf32C">–</td></tr>
+      <tr><td class="mdl" title="knockout tournament with an order-symmetrised pairwise-input comparator (PairJudge RM, arXiv 2501.13007)">rr tournament</td><td id="f1PieceTourA">–</td><td id="f1PieceTourB">–</td><td id="f1PieceTourC">–</td></tr>
+      <tr><td class="mdl" title="listwise Fusion-in-Decoder over 5 candidates at a time + m-ary tournament sort (arXiv 2402.15838)">rr listT5</td><td id="f1PieceLt5A">–</td><td id="f1PieceLt5B">–</td><td id="f1PieceLt5C">–</td></tr>
+      <tr><td class="mdl" title="generative verifier: argmax p(YES) as next-token prediction (arXiv 2408.15240)">rr genRM</td><td id="f1PieceGenA">–</td><td id="f1PieceGenB">–</td><td id="f1PieceGenC">–</td></tr>
+      <tr><td class="mdl" title="pool oracle: same 9 candidates, pick the best onset±1+pitch F1 (selection ceiling)">rr oracle</td><td id="f1PieceRerankSampleOrcA">–</td><td id="f1PieceRerankSampleOrcB">–</td><td id="f1PieceRerankSampleOrcC">–</td></tr>
       <tr><td class="mdl">paper 1</td><td id="f1PieceP1A">–</td><td id="f1PieceP1B">–</td><td id="f1PieceP1C">–</td></tr>
       <tr><td class="mdl">paper 2</td><td id="f1PieceP2A">–</td><td id="f1PieceP2B">–</td><td id="f1PieceP2C">–</td></tr>
     </tbody>
@@ -317,21 +375,24 @@
   <input type="range" id="rankSlider" min="1" max="1" step="1" value="1">
 </div>
 
-<div id="empty" style="display:none">No data loaded — run <code>precompute_visualizer.py</code> to generate <code>data.js</code> next to this file.</div>
+<div id="empty">Loading visualizer data…</div>
 
 <script src="osmd.min.js"></script>
 <script src="sheet_xml.js?v=20260719a1"></script>
 <script src="scores_xml.js?v=20260719a1"></script>
-<script src="data.js?v=202608111619"></script>
+<script src="data_slim.js?v=202608171420"></script>
 <script>
 (() => {
   const DATA = window.VISUALIZER_DATA;
   const activeScores = window.VISUALIZER_SCORES;
   const beatSeconds = 0.5;
+  const emptyEl = document.getElementById('empty');
   if (!DATA || !DATA.examples || !Object.keys(DATA.examples).length) {
-    document.getElementById('empty').style.display = 'block';
+    emptyEl.style.display = 'flex';
+    emptyEl.innerHTML = 'No data loaded — run <code>precompute_visualizer.py</code> then <code>split_visualizer_payload.py</code> to generate <code>data_slim.js</code> next to this file.';
     return;
   }
+  emptyEl.style.display = 'none';
   // Plain-integer keys would otherwise be reordered ascending by JS's own
   // key-enumeration rules, breaking "new windows appended after old ones" --
   // example_order (when present) is the authoritative dropdown/display order.
@@ -362,6 +423,12 @@
     normalizeRawBranchesOf(example?.rollouts?.raw_seeded, example?.raw_notes);
     normalizeRawBranchesOf(example?.rollouts_lora?.raw, example?.raw_notes);
     normalizeRawBranchesOf(example?.rollouts_lora?.raw_seeded, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked?.raw, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked?.raw_seeded, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked_40k?.raw, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked_40k?.raw_seeded, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked_40k_final?.raw, example?.raw_notes);
+    normalizeRawBranchesOf(example?.rollouts_masked_40k_final?.raw_seeded, example?.raw_notes);
   }
 
   Object.values(DATA.examples).forEach(normalizeRawBranches);
@@ -377,7 +444,10 @@
 
   const staleWarn = document.getElementById('staleWarn');
   const firstEx = DATA.examples[orderedIds[0]];
-  const hasDualRollouts = ex => ex?.rollouts?.filtered && ex?.rollouts?.raw;
+  const hasDualRollouts = ex => {
+    const roots = ex?.[oursSource().group];
+    return !!(roots?.filtered && roots?.raw);
+  };
   if ((DATA.format < 2 || DATA.format > 4) || DATA.logits_conditioning !== 'autoregressive_rollout') {
     staleWarn.style.display = 'block';
     staleWarn.innerHTML =
@@ -407,11 +477,68 @@
   const BINS_PER_SEC = 100;
 
   const streamSel = document.getElementById('streamSel');
+  const oursSel = document.getElementById('oursSel');
   const viewModeSel = document.getElementById('viewMode');
   const timeScaleSlider = document.getElementById('timeScale');
   const timeScaleVal = document.getElementById('timeScaleVal');
   const metaEl = document.getElementById('meta');
   let pxps = parseInt(timeScaleSlider.value, 10);
+
+  const OURS_SOURCES = [
+    {
+      group: 'rollouts',
+      label: 'FT (non-masked)',
+      short: 'ours (FT)',
+      ckptKey: 'checkpoint',
+      hint: 'paper-split full fine-tune',
+    },
+    {
+      group: 'rollouts_lora',
+      label: 'LoRA (non-masked)',
+      short: 'ours (LoRA)',
+      ckptKey: 'lora_checkpoint',
+      hint: 'paper-split LoRA r512',
+    },
+    {
+      group: 'rollouts_masked',
+      label: 'masked 20k',
+      short: 'ours (masked 20k)',
+      ckptKey: 'checkpoint_masked',
+      hint: 'score-token-only loss, checkpoint-20000',
+    },
+    {
+      group: 'rollouts_masked_40k',
+      label: 'masked 40k (best onset)',
+      short: 'ours (masked 40k)',
+      ckptKey: 'checkpoint_masked_40k',
+      hint: 'score-token-only loss, checkpoint-7500 (best AR onset)',
+    },
+    {
+      group: 'rollouts_masked_40k_final',
+      label: 'masked 40k (final)',
+      short: 'ours (masked 40k final)',
+      ckptKey: 'checkpoint_masked_40k_final',
+      hint: 'score-token-only loss, checkpoint-40000',
+    },
+  ];
+
+  function oursSource() {
+    const base = OURS_SOURCES.find(s => s.group === oursSel.value) || OURS_SOURCES[0];
+    // Pitch-forcing toggle: reroute EVERY consumer of the 'ours' row to the
+    // oracle-diagnostic group. Filtered variant only (the slot-aligned GT
+    // pitch the forcing substitutes exists only in the filtered packing).
+    const pf = document.getElementById('pfOurs');
+    if (pf && pf.checked)
+      return Object.assign({}, base, { group: 'rollouts_pitch_forced',
+        label: (base.label || 'ours') + ' +PF',
+        short: (base.short || 'ours') + '+PF' });
+    return base;
+  }
+
+  function oursCheckpoint() {
+    const src = oursSource();
+    return DATA[src.ckptKey] || src.label;
+  }
 
   function isSheetMode() {
     return viewModeSel.value === 'sheet';
@@ -421,12 +548,9 @@
     return viewModeSel.value === 'engraved';
   }
 
-  function loraRequested() {
-    return document.getElementById('useLora').checked;
-  }
-
   function rolloutsRoot() {
-    return (loraRequested() && ex?.rollouts_lora) ? ex.rollouts_lora : ex?.rollouts;
+    const group = oursSource().group;
+    return (ex && ex[group]) ? ex[group] : null;
   }
 
   function usingRawRollout() {
@@ -437,63 +561,8 @@
     return document.getElementById('seedGt').checked;
   }
 
-  function beamWidth() {
-    const el = document.getElementById('beamN');
-    return el ? (parseInt(el.value, 10) || 1) : 1;
-  }
-
-  function availableBeamWidths(base) {
-    if (!base || !base.beams) return [];
-    return Object.keys(base.beams)
-      .map((k) => parseInt(k, 10))
-      .filter((n) => Number.isFinite(n) && n >= 1 && base.beams[String(n)] && Array.isArray(base.beams[String(n)].pred_score))
-      .sort((a, b) => a - b);
-  }
-
-  /** Metrics that must track the notes currently on screen (not greedy leftovers). */
-  const BEAM_SYNCED_METRICS = [
-    'perplexity',
-    'sequence_perplexity',
-    'entropy',
-    'log_entropy',
-  ];
-
-  /** Copy decode-specific metrics from a beam entry, or clear them if absent. */
-  function beamMetricOverlay(entry) {
-    const overlay = {};
-    for (const key of BEAM_SYNCED_METRICS) {
-      overlay[key] = entry && entry[key] != null ? entry[key] : null;
-    }
-    return overlay;
-  }
-
-  /** Resolve which pred_score / PPL to show for the selected beam width. */
-  function resolveBeamRollout(base, bw) {
-    // beam=1 is constrained greedy (stored as top-level pred_score + AR perplexity)
-    if (bw === 1) {
-      return { pred_score: base.pred_score, beam_width: 1, beam_status: 'greedy' };
-    }
-    const beamEntry = base.beams && base.beams[String(bw)];
-    if (beamEntry && Array.isArray(beamEntry.pred_score)) {
-      return Object.assign(
-        {
-          pred_score: beamEntry.pred_score,
-          beam_width: bw,
-          beam_status: 'beam',
-        },
-        // Prefer beam-scored PPL/entropy; never keep greedy curves for a different sequence.
-        beamMetricOverlay(beamEntry),
-      );
-    }
-    // Missing precomputed width — show greedy notes; metrics stay on the greedy path.
-    return {
-      pred_score: base.pred_score,
-      beam_width: bw,
-      beam_status: 'missing',
-    };
-  }
-
-  function baseRollout() {
+  function currentRollout() {
+    if (!ex) return null;
     const roots = rolloutsRoot();
     if (usingRawRollout()) {
       if (seedRequested() && roots.raw_seeded) return roots.raw_seeded;
@@ -506,55 +575,6 @@
     return { pred_score: ex.pred_score, branches: ex.branches };
   }
 
-  function currentRollout() {
-    const base = baseRollout();
-    if (!base) return base;
-    const resolved = resolveBeamRollout(base, beamWidth());
-    return Object.assign({}, base, resolved);
-  }
-
-  function beamStatusNote(rollout) {
-    if (!rollout) return '';
-    if (rollout.beam_status === 'greedy') return 'beam 1 = greedy';
-    if (rollout.beam_status === 'missing') {
-      return `beam ${rollout.beam_width} not precomputed — showing greedy`;
-    }
-    if (rollout.beam_status === 'beam' && rollout.perplexity == null) {
-      return `beam ${rollout.beam_width} (PPL pending)`;
-    }
-    return `beam ${rollout.beam_width}`;
-  }
-
-  function updateBeamSlider() {
-    const slider = document.getElementById('beamN');
-    const valEl = document.getElementById('beamNVal');
-    const labelEl = document.getElementById('beamNLabel');
-    if (!slider) return;
-    // Keep 1–10 selectable; beam=1 is always greedy, other widths use beams[] when present.
-    const prev = parseInt(slider.value, 10);
-    slider.min = '1';
-    slider.max = '10';
-    slider.disabled = false;
-    if (Number.isFinite(prev) && prev >= 1 && prev <= 10) {
-      slider.value = String(prev);
-    } else {
-      slider.value = '1';
-    }
-    const base = baseRollout();
-    const available = availableBeamWidths(base);
-    const bw = parseInt(slider.value, 10) || 1;
-    const resolved = base ? resolveBeamRollout(base, bw) : null;
-    const availStr = available.length ? available.join(', ') : 'none';
-    let title =
-      `Beam width (1–10). 1 = constrained greedy. Precomputed beams for this rollout: ${availStr}.`;
-    if (resolved && resolved.beam_status === 'missing') {
-      title += ` Beam ${bw} not precomputed — showing greedy.`;
-    }
-    slider.title = title;
-    if (labelEl) labelEl.title = title;
-    if (valEl) valEl.textContent = String(slider.value);
-  }
-
   function updateSeedToggle() {
     const seedGt = document.getElementById('seedGt');
     const roots = rolloutsRoot();
@@ -565,13 +585,36 @@
       : 'GT-seeded rollout unavailable for this example/stream — re-run precompute for format 4';
   }
 
-  function updateLoraToggle() {
-    const useLora = document.getElementById('useLora');
-    const available = !!ex?.rollouts_lora;
-    useLora.disabled = !available;
-    useLora.title = available
-      ? 'Switch between the base fine-tuned checkpoint and the LoRA-adapted checkpoint'
-      : `LoRA rollout unavailable — re-run precompute with --lora-checkpoint (checkpoint used: ${DATA.lora_checkpoint || 'none'})`;
+  function updateOursToggle() {
+    const present = new Set();
+    for (const example of Object.values(DATA.examples)) {
+      for (const src of OURS_SOURCES) {
+        if (example[src.group]) present.add(src.group);
+      }
+    }
+    for (const opt of oursSel.options) {
+      const src = OURS_SOURCES.find(s => s.group === opt.value);
+      const available = present.has(opt.value);
+      opt.disabled = !available;
+      const ckpt = src && DATA[src.ckptKey];
+      opt.textContent = available
+        ? src.label
+        : `${src ? src.label : opt.value} (missing)`;
+      opt.title = available && ckpt ? ckpt : (available ? src.hint : 'not in this data.js');
+    }
+    if (oursSel.selectedOptions[0]?.disabled) {
+      const fallback = OURS_SOURCES.find(s => present.has(s.group));
+      if (fallback) oursSel.value = fallback.group;
+    }
+    const hint = document.getElementById('oursHint');
+    if (hint) {
+      const src = oursSource();
+      const ckpt = oursCheckpoint();
+      const roll = ex ? currentRollout() : null;
+      const heat = roll?.log_entropy ? 'entropy heatmap from stored log-entropy' : 'no entropy arrays for this variant';
+      hint.textContent =
+        `(${src.hint} — ${ckpt} · 0.5 s beat grid · GT vs predicted vs performance · ${heat})`;
+    }
   }
 
   function noteSelectionKey(n) {
@@ -582,11 +625,19 @@
 
   function branchForNote(n) {
     const key = noteSelectionKey(n);
-    return key != null ? currentRollout().branches[key] : null;
+    const branches = currentRollout()?.branches;
+    return key != null && branches ? (branches[key] || null) : null;
   }
 
   function hasScoreSlotForNote(n) {
-    return branchForNote(n) != null;
+    if (branchForNote(n) != null) return true;
+    const key = noteSelectionKey(n);
+    if (key == null) return false;
+    const branches = currentRollout()?.branches;
+    const branchesReady = !!(branches && Object.keys(branches).length);
+    if (branchesReady) return false;
+    if (usingRawRollout()) return n.r != null || n.j != null;
+    return n.j != null;
   }
 
   function rawNoteForFilteredIndex(j) {
@@ -626,23 +677,75 @@
     }
   }
 
-  // Macro-mean note-level F1 over pieces shared by all three models. Use only the
-  // unseeded raw rollout: it has the same meaning for every model and avoids
+  // Macro-mean note-level F1 over pieces shared by the compared models. Use only
+  // the unseeded raw rollout: it has the same meaning for every model and avoids
   // letting the currently selected stream/window change a corpus-level result.
   // When a future dataset contains multiple windows from one piece, average those
   // windows first so every piece still receives equal weight. "ours" follows the
-  // Base/LoRA toggle; the two paper rows are fixed.
+  // top ours-source control; the two paper rows are fixed.
   const F1_CELLS = {
     ours:   ['f1OursA', 'f1OursB', 'f1OursC'],
+    ftsample: ['f1FtSampleA', 'f1FtSampleB', 'f1FtSampleC'],
+    rerankbase: ['f1RerankBaseA', 'f1RerankBaseB', 'f1RerankBaseC'],
+    reranksample: ['f1RerankSampleA', 'f1RerankSampleB', 'f1RerankSampleC'],
+    mbr: ['f1MbrA', 'f1MbrB', 'f1MbrC'],
+    rrpairwise: ['f1PwA', 'f1PwB', 'f1PwC'],
+    rrpairwise32: ['f1Pw32A', 'f1Pw32B', 'f1Pw32C'],
+    rrlistwise32: ['f1Lw32A', 'f1Lw32B', 'f1Lw32C'],
+    rrpairwise32feat: ['f1Pwf32A', 'f1Pwf32B', 'f1Pwf32C'],
+    rrtournament: ['f1TourA', 'f1TourB', 'f1TourC'],
+    rrlistt5: ['f1Lt5A', 'f1Lt5B', 'f1Lt5C'],
+    rrgenrm: ['f1GenA', 'f1GenB', 'f1GenC'],
+    reranksampleoracle: ['f1RerankSampleOrcA', 'f1RerankSampleOrcB', 'f1RerankSampleOrcC'],
     paper1: ['f1P1A', 'f1P1B', 'f1P1C'],
     paper2: ['f1P2A', 'f1P2B', 'f1P2C'],
   };
   const F1_PIECE_CELLS = {
     ours:   ['f1PieceOursA', 'f1PieceOursB', 'f1PieceOursC'],
+    ftsample: ['f1PieceFtSampleA', 'f1PieceFtSampleB', 'f1PieceFtSampleC'],
+    rerankbase: ['f1PieceRerankBaseA', 'f1PieceRerankBaseB', 'f1PieceRerankBaseC'],
+    reranksample: ['f1PieceRerankSampleA', 'f1PieceRerankSampleB', 'f1PieceRerankSampleC'],
+    mbr: ['f1PieceMbrA', 'f1PieceMbrB', 'f1PieceMbrC'],
+    rrpairwise: ['f1PiecePwA', 'f1PiecePwB', 'f1PiecePwC'],
+    rrpairwise32: ['f1PiecePw32A', 'f1PiecePw32B', 'f1PiecePw32C'],
+    rrlistwise32: ['f1PieceLw32A', 'f1PieceLw32B', 'f1PieceLw32C'],
+    rrpairwise32feat: ['f1PiecePwf32A', 'f1PiecePwf32B', 'f1PiecePwf32C'],
+    rrtournament: ['f1PieceTourA', 'f1PieceTourB', 'f1PieceTourC'],
+    rrlistt5: ['f1PieceLt5A', 'f1PieceLt5B', 'f1PieceLt5C'],
+    rrgenrm: ['f1PieceGenA', 'f1PieceGenB', 'f1PieceGenC'],
+    reranksampleoracle: ['f1PieceRerankSampleOrcA', 'f1PieceRerankSampleOrcB', 'f1PieceRerankSampleOrcC'],
     paper1: ['f1PieceP1A', 'f1PieceP1B', 'f1PieceP1C'],
     paper2: ['f1PieceP2A', 'f1PieceP2B', 'f1PieceP2C'],
   };
-  const F1_KEYS = ['onset_pitch', 'onset_pitch_dur', 'onset_pitch_tol1'];
+  const F1_ROW_KEYS = ['ours', 'ftsample', 'rerankbase', 'reranksample', 'mbr', 'rrpairwise', 'rrpairwise32', 'rrlistwise32', 'rrpairwise32feat', 'rrtournament', 'rrlistt5', 'rrgenrm', 'reranksampleoracle', 'paper1', 'paper2'];
+  const F1_METRIC_MODES = {
+    standard: {
+      keys: ['onset_pitch', 'onset_pitch_dur', 'onset_pitch_tol1'],
+      heads: [['on+pit', 'pitch and onset must match exactly'],
+              ['+dur', 'pitch, onset and duration must all match exactly'],
+              ['\u00b11', 'pitch matches, onset may differ by up to 1 bin']],
+    },
+    scaleioi: {
+      keys: ['tol1_scalemax', 'tol1_ioi', 'tol1_ioi_scalemax'],
+      heads: [['\u00b11 s-max', 'onset\u00b11+pitch F1, maxed over ASAP beat-unit ratios (hover cells for the winning scale r)'],
+              ['IOI \u00b11', 'onset\u00b11+pitch matcher on (interarrival, pitch) events: rhythm-shape credit without absolute alignment'],
+              ['IOI s-max', 'interarrival variant, maxed over beat-unit ratios']],
+    },
+  };
+  let F1_KEYS = F1_METRIC_MODES.standard.keys;
+
+  function setF1MetricMode(mode) {
+    const m = F1_METRIC_MODES[mode] || F1_METRIC_MODES.standard;
+    F1_KEYS = m.keys;
+    [['f1HeadA', 'f1HeadB', 'f1HeadC'],
+     ['f1PieceHeadA', 'f1PieceHeadB', 'f1PieceHeadC']].forEach(ids => {
+      ids.forEach((id, i) => {
+        const th = document.getElementById(id);
+        if (th) { th.textContent = m.heads[i][0]; th.title = m.heads[i][1]; }
+      });
+    });
+    updateF1Panel();
+  }
 
   function setF1Row(which, f1, cells = F1_CELLS) {
     cells[which].forEach((id, i) => {
@@ -650,6 +753,7 @@
       if (!cell) return;
       const v = f1 && f1[F1_KEYS[i]];
       cell.textContent = v ? (v.f1 * 100).toFixed(1) + '%' : '–';
+      cell.title = v && v.r != null ? 'best scale r=' + (+v.r).toFixed(3) : '';
       cell.classList.toggle('unavail', !v);
     });
   }
@@ -691,22 +795,51 @@
   }
 
   function updateF1Panel() {
-    const oursLabel = loraRequested() ? 'ours (LoRA)' : 'ours (FT)';
+    const src = oursSource();
     for (const id of ['f1NameOurs', 'f1PieceNameOurs']) {
       const nameCell = document.getElementById(id);
-      if (nameCell) nameCell.textContent = oursLabel;
+      if (nameCell) nameCell.textContent = src.short;
+    }
+    for (const id of ['f1NameRerankBase', 'f1PieceNameRerankBase']) {
+      const nameCell = document.getElementById(id);
+      if (nameCell) nameCell.textContent = `rr α=${(sweepAlphaPct() / 100).toFixed(1)}`;
     }
 
-    const oursGroup = loraRequested() ? 'rollouts_lora' : 'rollouts';
     const groups = {
-      ours: f1ByPiece(example => example[oursGroup]?.raw),
+      ours: f1ByPiece(example => example[src.group]?.raw
+                      || example[src.group]?.filtered),
+      ftsample: f1ByPiece(example => example.rollouts_sample_t1?.raw
+                          || example.rollouts_sample_t1?.filtered),
+      rerankbase: f1ByPiece(example => example[sweepGroupName()]?.raw
+                            || example[sweepGroupName()]?.filtered),
+      mbr: f1ByPiece(example => example.rollouts_mbr?.raw
+                     || example.rollouts_mbr?.filtered),
+      rrpairwise: f1ByPiece(example => example.rollouts_rerank_pairwise?.raw
+                            || example.rollouts_rerank_pairwise?.filtered),
+      rrpairwise32: f1ByPiece(example => example.rollouts_rerank_pairwise32?.raw
+                              || example.rollouts_rerank_pairwise32?.filtered),
+      rrlistwise32: f1ByPiece(example => example.rollouts_rerank_listwise32?.raw
+                              || example.rollouts_rerank_listwise32?.filtered),
+      rrpairwise32feat: f1ByPiece(example => example.rollouts_rerank_pairwise32feat?.raw
+                    || example.rollouts_rerank_pairwise32feat?.filtered),
+      rrtournament: f1ByPiece(example => example.rollouts_rerank_tournament?.raw
+                    || example.rollouts_rerank_tournament?.filtered),
+      rrlistt5: f1ByPiece(example => example.rollouts_rerank_listt5?.raw
+                    || example.rollouts_rerank_listt5?.filtered),
+      rrgenrm: f1ByPiece(example => example.rollouts_rerank_genrm?.raw
+                    || example.rollouts_rerank_genrm?.filtered),
+      reranksample: f1ByPiece(example => example.rollouts_rerank_sample?.raw
+                              || example.rollouts_rerank_sample?.filtered),
+      reranksampleoracle: f1ByPiece(example => example.rollouts_rerank_sample_oracle?.raw
+                                    || example.rollouts_rerank_sample_oracle?.filtered),
       // Each paper model transcribes the original full performance MIDI. Its one
       // result is stored under `filtered` only because it has no raw/seed variants.
       paper1: f1ByPiece(example => example.rollouts_paper1?.filtered),
       paper2: f1ByPiece(example => example.rollouts_paper2?.filtered),
     };
     let common = new Set(groups.ours.keys());
-    for (const byPiece of [groups.paper1, groups.paper2])
+    const required = [groups.paper1, groups.paper2];
+    for (const byPiece of required)
       common = new Set([...common].filter(piece => byPiece.has(piece)));
     // Stable piece order: follow example_order, then any leftover.
     const seen = new Set();
@@ -722,21 +855,20 @@
       if (!seen.has(piece)) pieces.push(piece);
     }
 
-    setF1Row('ours', macroMeanF1(groups.ours, pieces));
-    setF1Row('paper1', macroMeanF1(groups.paper1, pieces));
-    setF1Row('paper2', macroMeanF1(groups.paper2, pieces));
+    for (const which of F1_ROW_KEYS)
+      setF1Row(which, macroMeanF1(groups[which], pieces));
 
     const note = document.getElementById('f1Note');
     if (note) {
       const allPieces = new Set(Object.entries(DATA.examples).map(([id, example]) => example.piece || id));
       note.textContent = pieces.length
         ? `macro-average · unfiltered, unseeded · n=${pieces.length}/${allPieces.size} pieces`
-        : 'no pieces have F1 for all three models';
+        : 'no pieces have F1 for all compared models';
       note.classList.toggle('unavail', !pieces.length || pieces.length < allPieces.size);
     }
 
     const curPiece = ex ? (ex.piece || sel.value) : null;
-    for (const which of ['ours', 'paper1', 'paper2']) {
+    for (const which of F1_ROW_KEYS) {
       const f1 = curPiece
         ? pieceMeanF1(groups[which].get(curPiece) || [])
         : {};
@@ -751,6 +883,38 @@
     return v.toFixed(3);
   }
 
+  function geometricMeanPpl(ppl) {
+    if (!ppl) return null;
+    const vals = [];
+    for (const key of ['time', 'dur', 'pitch']) {
+      const arr = ppl[key];
+      if (!arr) continue;
+      for (const v of arr) {
+        if (v != null && isFinite(v) && v > 0) vals.push(v);
+      }
+    }
+    if (!vals.length) return null;
+    // seq PPL = exp(mean NLL) = geometric mean of per-token exp(NLL).
+    const meanLog = vals.reduce((s, v) => s + Math.log(v), 0) / vals.length;
+    return { ppl: Math.exp(meanLog), n_tokens: vals.length };
+  }
+
+  function sequencePplOf(rollout) {
+    const seq = rollout?.sequence_perplexity;
+    if (seq && seq.generated != null && isFinite(seq.generated)
+        && seq.ground_truth != null && isFinite(seq.ground_truth)) {
+      return seq;
+    }
+    const derived = geometricMeanPpl(rollout?.perplexity);
+    if (!derived && !(seq && seq.generated != null)) return null;
+    return {
+      generated: (seq && seq.generated != null) ? seq.generated : derived.ppl,
+      ground_truth: (seq && seq.ground_truth != null) ? seq.ground_truth : null,
+      derived: !(seq && seq.generated != null && seq.ground_truth != null),
+      n_tokens_generated: derived ? derived.n_tokens : seq?.n_tokens_generated,
+    };
+  }
+
   function updateSequencePpl() {
     const pplGen = document.getElementById('pplGen');
     const pplGt = document.getElementById('pplGt');
@@ -758,16 +922,20 @@
     pplGen.classList.remove('gt-higher', 'gen-higher');
     pplGt.classList.remove('gt-higher', 'gen-higher');
     const rollout = currentRollout();
-    const seq = rollout?.sequence_perplexity;
-    if (!seq || seq.generated == null || seq.ground_truth == null) {
+    const seq = sequencePplOf(rollout);
+    if (!seq || seq.generated == null) {
       pplGen.textContent = pplGt.textContent = '–';
-      note.textContent = rollout?.beam_status === 'beam'
-        ? 'beam PPL not scored yet (compute_sequence_ppl.py)'
-        : 'run compute_sequence_ppl.py';
+      note.textContent = 'no token PPL on this rollout';
       return;
     }
     pplGen.textContent = fmtSeqPpl(seq.generated);
-    pplGt.textContent = fmtSeqPpl(seq.ground_truth);
+    pplGt.textContent = seq.ground_truth != null ? fmtSeqPpl(seq.ground_truth) : '–';
+    if (seq.ground_truth == null) {
+      note.textContent = seq.derived
+        ? 'generated = geo-mean of AR token PPL · GT seq PPL not scored for this checkpoint'
+        : 'GT seq PPL not scored for this checkpoint';
+      return;
+    }
     if (seq.ground_truth > seq.generated) {
       pplGt.classList.add('gt-higher');
       const ratio = seq.ratio_gt_over_gen != null
@@ -824,15 +992,16 @@
     const stream = streamSel.value === 'raw' && ex.raw_notes ? 'unfiltered' : 'filtered';
     const notes = currentPerfNotes();
     const mistakes = notes.filter(n => n.j == null).length;
-    const modelDesc = loraRequested() && ex.rollouts_lora
-      ? `LoRA (${DATA.lora_checkpoint || 'unknown'})`
-      : DATA.checkpoint;
+    const modelDesc = oursCheckpoint();
+    const src = oursSource();
     const rollout = currentRollout();
+    const hasPpl = !!(rollout?.perplexity && rollout.perplexity.time
+      && rollout.perplexity.time.some(v => v != null));
     metaEl.textContent =
-      `checkpoint: ${modelDesc}  ·  stream: ${stream} (${notes.length} notes` +
+      `ours: ${src.label}  ·  checkpoint: ${modelDesc}  ·  stream: ${stream} (${notes.length} notes` +
       `${mistakes ? `, ${mistakes} unmatched` : ''})  ·  rollout: ${usingRawRollout() ? 'raw controls' : 'filtered controls'}` +
       `${seedRequested() ? ' (GT-seeded)' : ''}` +
-      `  ·  ${beamStatusNote(rollout)}` +
+      `  ·  PPL: ${hasPpl ? 'token' : 'none'}${rollout?.sequence_perplexity?.ground_truth != null ? '+seq' : (hasPpl ? ' (gen derived)' : '')}` +
       `  ·  view: ${isEngravedMode() ? 'engraved' : isSheetMode() ? 'sheet' : 'piano'} @ ${pxps}px/s` +
       `${hasDualRollouts(ex) ? '' : ' (re-run precompute for dual rollouts)'}`;
   }
@@ -1186,9 +1355,15 @@
     if (isEngravedMode()) { panel.style.display = 'none'; return; }
     panel.style.display = '';
 
-    const block = ex && ex[`rollouts_${which}`];
+    const groupName = `rollouts_${which}`;
+    const any = Object.values(DATA.examples).some(e => e[groupName]);
+    if (!any) { panel.style.display = 'none'; return; }
+    const block = ex && ex[groupName];
     const variant = streamSel.value === 'raw' ? 'raw' : 'filtered';
-    const roll = block && (block[variant] || block.filtered);
+    const seededKey = variant === 'raw' ? 'raw_seeded' : 'filtered_seeded';
+    const roll = block && (
+      (seedRequested() && block[seededKey]) || block[variant] || block.filtered
+    );
     const gt = (ex?.gt_score || []).filter(Boolean);
     const pred = (roll?.pred_score || []).filter(Boolean);
 
@@ -1210,6 +1385,62 @@
       : '';
     note.classList.toggle('unavail', scaleOff);
 
+    const span = noteSpan([...gt, ...pred]);
+    const dims = mkSvg(svg, span);
+    drawGrid(svg, span, dims, beatSeconds);
+    for (const n of pred)
+      rect(svg, xOf(n.t), noteY(span, n.p), noteW(n.d), noteH(), css('--pred'));
+    for (const n of gt) {
+      const e = rect(svg, xOf(n.t), noteY(span, n.p), noteW(n.d), noteH(), 'none');
+      setBaseStroke(e, css('--gt'), 1.5);
+    }
+  }
+
+  const SWEEP_ALPHAS = [10, 30, 50, 70, 90];
+  function sweepAlphaPct() {
+    const el = document.getElementById('rerankAlpha');
+    return SWEEP_ALPHAS[el ? parseInt(el.value, 10) : 2];
+  }
+  function sweepGroupName() { return `rollouts_rerank_ab${sweepAlphaPct()}`; }
+
+  function drawRerankSweepPanel() {
+    const panel = document.getElementById('rerankSweepPanel');
+    const svg = document.getElementById('rerankSweepRoll');
+    const note = document.getElementById('rerankSweepNote');
+    if (!panel || !svg) return;
+    if (isEngravedMode()) { panel.style.display = 'none'; return; }
+    const anySweep = Object.values(DATA.examples).some(
+      e => SWEEP_ALPHAS.some(a => e[`rollouts_rerank_ab${a}`]));
+    if (!anySweep) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    const alphaPct = sweepAlphaPct();
+    const aEl = document.getElementById('rerankAlphaVal');
+    const bEl = document.getElementById('rerankBetaVal');
+    if (aEl) aEl.textContent = (alphaPct / 100).toFixed(1);
+    if (bEl) bEl.textContent = ((100 - alphaPct) / 100).toFixed(1);
+    const block = ex && ex[sweepGroupName()];
+    const roll = block && (block.raw || block.filtered);
+    const gt = (ex?.gt_score || []).filter(Boolean);
+    const pred = (roll?.pred_score || []).filter(Boolean);
+    svg.innerHTML = '';
+    if (!roll || !pred.length) {
+      note.textContent = 'not computed for this window / alpha';
+      note.classList.add('unavail');
+      svg.setAttribute('height', 0);
+      return;
+    }
+    const bits = [];
+    const meta = roll.rerank_meta;
+    const sel = meta && meta.candidates && meta.candidates[meta.selected];
+    if (sel) bits.push(`selected beam: log p_FT ${sel.logp_ft.toFixed(1)}, `
+                       + `log p_base ${sel.logp_base.toFixed(1)}`);
+    const f1 = roll.f1 && roll.f1.onset_pitch_tol1;
+    if (f1) bits.push(`F1 (±1 onset): ${(f1.f1 * 100).toFixed(1)}%`);
+    const fx = roll.f1 || {};
+    if (fx.tol1_scalemax) bits.push(`s-max: ${(fx.tol1_scalemax.f1 * 100).toFixed(1)}% (r=${(+fx.tol1_scalemax.r).toFixed(2)})`);
+    if (fx.tol1_ioi) bits.push(`IOI ±1: ${(fx.tol1_ioi.f1 * 100).toFixed(1)}%`);
+    note.textContent = bits.join('  ·  ');
+    note.classList.remove('unavail');
     const span = noteSpan([...gt, ...pred]);
     const dims = mkSvg(svg, span);
     drawGrid(svg, span, dims, beatSeconds);
@@ -1423,6 +1654,11 @@
   }
 
   function drawScore() {
+    drawPaperPanel('masked');
+    drawPaperPanel('masked_40k');
+    drawPaperPanel('masked_40k_final');
+    drawPaperPanel('rerank');
+    drawRerankSweepPanel();
     drawPaperPanel('paper1');
     drawPaperPanel('paper2');
     const engraved = isEngravedMode();
@@ -1433,10 +1669,11 @@
       renderEngraved();
       return;
     }
-    const rollout = currentRollout();
-    const gt = ex.gt_score.filter(Boolean);
-    const pred = rollout.pred_score.filter(Boolean);
-    const branchCands = Object.values(rollout.branches).flatMap(b => b.candidates.filter(c => !c.rest));
+    const rollout = currentRollout() || { pred_score: [], branches: {} };
+    const gt = (ex.gt_score || []).filter(Boolean);
+    const pred = (rollout.pred_score || []).filter(Boolean);
+    const branches = rollout.branches || {};
+    const branchCands = Object.values(branches).flatMap(b => (b.candidates || []).filter(c => !c.rest));
     scoreSpan = noteSpan([...gt, ...pred, ...branchCands]);
     const dims = mkSvg(scoreSvg, scoreSpan);
     drawGrid(scoreSvg, scoreSpan, dims, beatSeconds);
@@ -1466,7 +1703,7 @@
       const e = rect(scoreSvg, xOf(n.t), noteY(scoreSpan, n.p), noteW(n.d), noteH(), fill);
       e.setAttribute('opacity', heatReady ? 0.9 : 0.65);
       e.dataset.slot = i;
-      const branch = rollout.branches[String(i)];
+      const branch = branches[String(i)];
       const gtSlot = branch && branch.gt_slot != null ? branch.gt_slot : (usingRawRollout() ? null : i);
       const gtNote = gtSlot != null ? ex.gt_score[gtSlot] : null;
       const pitchError = gtNote && gtNote.p !== n.p;
@@ -1563,6 +1800,36 @@
       if (selKey) perfElByKey[selKey] = e;
     });
     perfSvg.addEventListener('click', () => clearSelection());
+    document.getElementById('f1MetricMode')?.addEventListener('change',
+      e => setF1MetricMode(e.target.value));
+    document.getElementById('rolloutModeBtn')?.addEventListener('click', () => {
+      const id = document.getElementById('exampleSel')?.value;
+      const ex = DATA.examples[id];
+      const split = String(id).startsWith('val') ? 'val' : 'test';
+      const target = ex && ex.piece
+        ? 'fullsong.html#' + encodeURIComponent(split + '/' + ex.piece)
+        : 'fullsong.html';
+      window.open(target, '_blank');
+    });
+    document.getElementById('pfOurs')?.addEventListener('change', () => {
+      // full re-render through the existing example pipeline
+      sel.dispatchEvent(new Event('change'));
+      updateF1Panel();
+    });
+    // Task-6 jump: windowed mode -> full rollout of this window's performance.
+    // example.piece is the performance path, which is exactly the fullsong key
+    // (prefixed by its split, derivable from the example id "val-*/test-*").
+    function syncFullsongLink() {
+      const a = document.getElementById('fullsongLink');
+      if (!a) return;
+      const id = document.getElementById('exampleSel')?.value;
+      const ex = DATA.examples[id];
+      const split = String(id).startsWith('val') ? 'val' : 'test';
+      if (ex && ex.piece)
+        a.href = 'fullsong.html#' + encodeURIComponent(split + '/' + ex.piece);
+    }
+    window.__syncFullsongLink = syncFullsongLink;
+    setInterval(syncFullsongLink, 1500);
   }
 
   function showMistakeInfo(n) {
@@ -1632,10 +1899,17 @@
     const el = perfElByKey[key];
     if (el) { el.setAttribute('stroke', css('--sel')); el.setAttribute('stroke-width', 2); }
 
-    const rollout = currentRollout();
-    const branch = rollout.branches[key];
+    const rollout = currentRollout() || {};
+    const branch = rollout.branches && rollout.branches[key];
     const info = document.getElementById('candinfo');
     if (!branch) {
+      if (!branchLoaded[sel.value]) {
+        info.innerHTML = `<span class="lbl">Loading candidates…</span>`;
+        void ensureBranches(sel.value).then(() => {
+          if (selectedKey === key) selectNote(key);
+        });
+        return;
+      }
       info.innerHTML = `<span class="lbl">No rollout branch for selection key ${key}.</span>`;
       return;
     }
@@ -1772,10 +2046,10 @@
       d.addEventListener('click', () => {
         if (cell.kind === 'control' && cell.j != null) {
           const key = selectionKeyForFilteredIndex(cell.j);
-          if (rollout.branches[key]) selectNote(key);
+          if (rollout.branches?.[key]) selectNote(key);
         } else if (cell.kind === 'score') {
           const key = selectionKeyForFilteredIndex(cell.slot);
-          if (rollout.branches[key]) selectNote(key);
+          if (rollout.branches?.[key]) selectNote(key);
         }
       });
       minimap.appendChild(d);
@@ -1943,12 +2217,54 @@
     svg.appendChild(hit);
   }
 
+  const branchLoaded = {};
+  const branchLoading = {};
+
+  function mergeBranches(example, packed) {
+    if (!example || !packed) return;
+    if (packed.branches) example.branches = packed.branches;
+    for (const [group, streams] of Object.entries(packed)) {
+      if (group === 'branches' || !example[group] || !streams) continue;
+      for (const [stream, payload] of Object.entries(streams)) {
+        if (example[group][stream] && payload && payload.branches) {
+          example[group][stream].branches = payload.branches;
+        }
+      }
+    }
+  }
+
+  function ensureBranches(id) {
+    if (branchLoaded[id]) return Promise.resolve();
+    if (branchLoading[id]) return branchLoading[id];
+    branchLoading[id] = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'data_ex/' + encodeURIComponent(id) + '.js?v=202608171420';
+      s.onload = () => {
+        const packed = window.VISUALIZER_BRANCHES && window.VISUALIZER_BRANCHES[id];
+        if (packed) mergeBranches(DATA.examples[id], packed);
+        normalizeRawBranches(DATA.examples[id]);
+        branchLoaded[id] = true;
+        if (sel.value === id) {
+          const keep = selectedKey;
+          drawScore();
+          drawPerf();
+          drawMinimap();
+          if (keep != null && currentRollout()?.branches?.[keep]) selectNote(keep);
+        }
+        resolve();
+      };
+      s.onerror = () => resolve();
+      document.head.appendChild(s);
+    });
+    return branchLoading[id];
+  }
+
   function loadExample(id) {
     ex = DATA.examples[id];
     selectedKey = null;
     stopPlayback();
     updateStreamOptions();
-    updateLoraToggle();
+    updateOursToggle();
     updateSeedToggle();
     updateBeamSlider();
     drawScore();
@@ -1958,6 +2274,7 @@
     updateMeta();
     updateAccuracy();
     clearSelection();
+    void ensureBranches(id);
   }
 
   function redrawRollsPreservingSelection(redrawMap = false) {
@@ -1970,7 +2287,7 @@
     drawPerplexity();
     updateMeta();
     updateAccuracy();
-    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    if (keep != null && currentRollout()?.branches?.[keep]) selectNote(keep);
     else clearSelection();
   }
 
@@ -1986,7 +2303,7 @@
     drawPerplexity();
     updateMeta();
     updateAccuracy();
-    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    if (keep != null && currentRollout()?.branches?.[keep]) selectNote(keep);
     else clearSelection();
   });
   document.getElementById('seedGt').addEventListener('change', () => {
@@ -1999,12 +2316,13 @@
     drawPerplexity();
     updateMeta();
     updateAccuracy();
-    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    if (keep != null && currentRollout()?.branches?.[keep]) selectNote(keep);
     else clearSelection();
   });
-  document.getElementById('useLora').addEventListener('change', () => {
+  oursSel.addEventListener('change', () => {
     const keep = selectedKey;
     stopPlayback();
+    updateOursToggle();
     updateSeedToggle();
     updateBeamSlider();
     drawScore();
@@ -2013,12 +2331,20 @@
     drawPerplexity();
     updateMeta();
     updateAccuracy();
-    if (keep != null && currentRollout().branches[keep]) selectNote(keep);
+    if (keep != null && currentRollout()?.branches?.[keep]) selectNote(keep);
     else clearSelection();
+  });
+  // Beam-width UI was removed; the hoisted stub keeps the remaining
+  // updateBeamSlider() call sites harmless until the UI returns.
+  function updateBeamSlider() {}
+  const rerankAlphaSlider = document.getElementById('rerankAlpha');
+  if (rerankAlphaSlider) rerankAlphaSlider.addEventListener('input', () => {
+    drawRerankSweepPanel();
+    updateF1Panel();
   });
   const beamSlider = document.getElementById('beamN');
   const beamVal = document.getElementById('beamNVal');
-  beamSlider.addEventListener('input', () => {
+  if (beamSlider) beamSlider.addEventListener('input', () => {
     updateBeamSlider();
     if (beamVal) beamVal.textContent = String(beamSlider.value);
     redrawRollsPreservingSelection();

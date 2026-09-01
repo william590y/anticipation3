@@ -25,3 +25,20 @@ build/
 
 __pycache__/
 *.py[cod]
+
+# --- added 2026-08-31 ---
+# Model weights: *.safetensors was already ignored, but *.pt was not, so a
+# `git add -A` swept in 50 GB of checkpoints (e.g. run_ltlm*/checkpoint-2500/
+# ltlm_state.pt at 1.8 GB each). Git history is permanent - keep weights out.
+*.pt
+*.wandb
+
+# Generated visualizer payloads. visualizer/data.js is already tracked at
+# 201 MiB, which is over GitHub's 100 MB per-file hard limit and blocks pushes;
+# do not add more of these. Regenerate them instead of committing them.
+visualizer/data_*.js
+visualizer/*_shards/
+visualizer/*.bak
+visualizer/*.bak_*
+visualizer/*.preguard
+visualizer/*.prev_*

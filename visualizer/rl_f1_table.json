@@ -1,0 +1,148 @@
+{
+  "variant": "raw",
+  "rows": [
+    {
+      "key": "base_loss",
+      "group": "rollouts_valloss",
+      "model": "Ours (FT)",
+      "label": "best val loss",
+      "variant": "raw",
+      "checkpoint": "run_paper_split_v2/checkpoint-2500",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.18900966183574877,
+        "onset_pitch_dur": 0.1111111111111111,
+        "onset_pitch_tol1": 0.22705314009661837
+      },
+      "delta_vs_compare": {
+        "onset_pitch": 0.0,
+        "onset_pitch_dur": 0.0,
+        "onset_pitch_tol1": 0.0
+      }
+    },
+    {
+      "key": "base_pitch",
+      "group": "rollouts",
+      "model": "Ours (FT)",
+      "label": "best AR pitch",
+      "variant": "raw",
+      "checkpoint": "run_paper_split_v2/checkpoint-7500",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.18810386473429952,
+        "onset_pitch_dur": 0.1352657004830918,
+        "onset_pitch_tol1": 0.23580917874396135
+      },
+      "delta_vs_compare": {
+        "onset_pitch": 0.0,
+        "onset_pitch_dur": 0.0,
+        "onset_pitch_tol1": 0.0
+      }
+    },
+    {
+      "key": "lora_loss",
+      "group": "rollouts_lora_valloss",
+      "model": "Ours (LoRA)",
+      "label": "best val loss",
+      "variant": "raw",
+      "checkpoint": "run_paper_split_lora_r512/checkpoint-10000",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.19504830917874397,
+        "onset_pitch_dur": 0.12439613526570048,
+        "onset_pitch_tol1": 0.23580917874396135
+      },
+      "delta_vs_compare": {
+        "onset_pitch": 0.0,
+        "onset_pitch_dur": 0.0,
+        "onset_pitch_tol1": 0.0
+      }
+    },
+    {
+      "key": "lora_pitch",
+      "group": "rollouts_lora",
+      "model": "Ours (LoRA)",
+      "label": "best AR pitch",
+      "variant": "raw",
+      "checkpoint": "run_paper_split_lora_r512/checkpoint-15000",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.16968599033816426,
+        "onset_pitch_dur": 0.10869565217391304,
+        "onset_pitch_tol1": 0.1911231884057971
+      },
+      "delta_vs_compare": {
+        "onset_pitch": 0.0,
+        "onset_pitch_dur": 0.0,
+        "onset_pitch_tol1": 0.0
+      }
+    },
+    {
+      "key": "grpo",
+      "group": "rollouts_grpo",
+      "model": "Ours (GRPO)",
+      "label": "best val reward",
+      "variant": "raw",
+      "checkpoint": "run_grpo_acc_reward/checkpoint-250",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.17179951690821257,
+        "onset_pitch_dur": 0.10386473429951691,
+        "onset_pitch_tol1": 0.2101449275362319
+      },
+      "best_step": 250
+    },
+    {
+      "key": "ppo",
+      "group": "rollouts_ppo",
+      "model": "Ours (PPO)",
+      "label": "best val reward",
+      "variant": "raw",
+      "checkpoint": "run_ppo_corrected_20260814_020654_2364547/best-val-reward",
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.18632307686605357,
+        "onset_pitch_dur": 0.11020208435236743,
+        "onset_pitch_tol1": 0.21813456506210774
+      },
+      "best_step": 775,
+      "val_reward": 1.620018115942029
+    },
+    {
+      "key": "paper1",
+      "group": "rollouts_paper1",
+      "model": "Paper 1",
+      "label": "Zeng+ (joint-apt-epr)",
+      "variant": "filtered",
+      "checkpoint": null,
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.11642240414694356,
+        "onset_pitch_dur": 0.07631569518718405,
+        "onset_pitch_tol1": 0.17404709017786948
+      }
+    },
+    {
+      "key": "paper2",
+      "group": "rollouts_paper2",
+      "model": "Paper 2",
+      "label": "Beyer & Dai (MIDI2ScoreTF)",
+      "variant": "filtered",
+      "checkpoint": null,
+      "n_windows": 24,
+      "n_pieces": 24,
+      "macro_f1": {
+        "onset_pitch": 0.2149808382139388,
+        "onset_pitch_dur": 0.1587663929039683,
+        "onset_pitch_tol1": 0.2875743871594395
+      }
+    }
+  ]
+}

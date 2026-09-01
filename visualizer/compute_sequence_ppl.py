@@ -296,7 +296,16 @@ BEAM_FIELDS = ("beams", "beams_triplet", "beams_triplet_pitch_forced")
 def extract_metrics_patch(ex):
     """Keep only score metrics (not pred_score) for merging shard outputs."""
     patch = {}
-    for group_name in ("rollouts", "rollouts_lora"):
+    for group_name in ("rollouts", "rollouts_lora", "rollouts_rerank",
+                       "rollouts_rerank_sample", "rollouts_rerank_sample_oracle",
+                       "rollouts_sample_t1", "rollouts_mbr",
+                       "rollouts_rerank_pairwise",
+                       "rollouts_rerank_pairwise32",
+                       "rollouts_rerank_listwise32",
+                       "rollouts_rerank_pairwise32feat",
+                       "rollouts_rerank_tournament",
+                       "rollouts_rerank_listt5",
+                       "rollouts_rerank_genrm"):
         block = ex.get(group_name)
         if not isinstance(block, dict):
             continue
@@ -403,6 +412,31 @@ def main():
             lora_model.eval()
 
     groups = [("rollouts", model)]
+    # The rerank decodes used the FT model family, so score them with `model`.
+    if any(ex.get("rollouts_rerank") for ex in examples.values()):
+        groups.append(("rollouts_rerank", model))
+    if any(ex.get("rollouts_rerank_sample") for ex in examples.values()):
+        groups.append(("rollouts_rerank_sample", model))
+    if any(ex.get("rollouts_rerank_sample_oracle") for ex in examples.values()):
+        groups.append(("rollouts_rerank_sample_oracle", model))
+    if any(ex.get("rollouts_sample_t1") for ex in examples.values()):
+        groups.append(("rollouts_sample_t1", model))
+    if any(ex.get("rollouts_mbr") for ex in examples.values()):
+        groups.append(("rollouts_mbr", model))
+    if any(ex.get("rollouts_rerank_pairwise") for ex in examples.values()):
+        groups.append(("rollouts_rerank_pairwise", model))
+    if any(ex.get("rollouts_rerank_pairwise32") for ex in examples.values()):
+        groups.append(("rollouts_rerank_pairwise32", model))
+    if any(ex.get("rollouts_rerank_listwise32") for ex in examples.values()):
+        groups.append(("rollouts_rerank_listwise32", model))
+    if any(ex.get("rollouts_rerank_pairwise32feat") for ex in examples.values()):
+        groups.append(("rollouts_rerank_pairwise32feat", model))
+    if any(ex.get("rollouts_rerank_tournament") for ex in examples.values()):
+        groups.append(("rollouts_rerank_tournament", model))
+    if any(ex.get("rollouts_rerank_listt5") for ex in examples.values()):
+        groups.append(("rollouts_rerank_listt5", model))
+    if any(ex.get("rollouts_rerank_genrm") for ex in examples.values()):
+        groups.append(("rollouts_rerank_genrm", model))
     if lora_model is not None:
         groups.append(("rollouts_lora", lora_model))
 

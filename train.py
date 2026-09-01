@@ -178,6 +178,20 @@ device = torch.device("cpu")
 
 PACKED_SEQUENCE_LENGTH = CONTEXT_SIZE - 4
 
+def _role_range(pos: int):
+    """Legal [lo, hi) token range for a BODY position, by its role.
+
+    Body layout from ALTERNATING_START is (score t,d,p, control t,d,p) repeating,
+    so role = (pos - ALTERNATING_START) % 6 fixes the range exactly the way
+    anticipation.score_constraints masks logits during decode.
+    """
+    r = (pos - ALTERNATING_START) % 6
+    return ((TIME_OFFSET, DUR_OFFSET), (DUR_OFFSET, NOTE_OFFSET),
+            (NOTE_OFFSET, CONTROL_OFFSET), (ATIME_OFFSET, ADUR_OFFSET),
+            (ADUR_OFFSET, ANOTE_OFFSET),
+            (ANOTE_OFFSET, ANOTE_OFFSET + MAX_PITCH))[r]
+
+
 class TokenizedDataset(Dataset):
     """Dataset that loads packed ASAP sequences and applies augmentation on-the-fly."""
 
@@ -190,6 +204,9 @@ class TokenizedDataset(Dataset):
         transpose_range_semitones=0,
         tempo_scale_range=0.0,
         loss_mask_performance_tokens=False,
+        loss_mask_first_score_slots=0,
+        rand_replace_prob=0.0,
+        rand_replace_whole_vocab=False,
         is_training=True,
         offsets=None,
         sequence_length=None,
@@ -200,6 +217,9 @@ class TokenizedDataset(Dataset):
         self.transpose_range_semitones = transpose_range_semitones if is_training else 0
         self.tempo_scale_range = tempo_scale_range if is_training else 0.0
         self.loss_mask_performance_tokens = loss_mask_performance_tokens
+        self.loss_mask_first_score_slots = int(loss_mask_first_score_slots)
+        self.rand_replace_prob = float(rand_replace_prob) if is_training else 0.0
+        self.rand_replace_whole_vocab = bool(rand_replace_whole_vocab)
         self.is_training = is_training
         self._vocab_warning_counts = {}
 
@@ -536,6 +556,34 @@ class TokenizedDataset(Dataset):
         performance_loss_mask = self._build_performance_loss_mask(labels)
         if torch.any(performance_loss_mask).item():
             labels[performance_loss_mask] = -100
+        if self.loss_mask_first_score_slots > 0:
+            # DAgger windows: the first N body score slots hold the model's
+            # own rollout predictions as context; the loss trains only the
+            # GT continuation (use model output as input, GT as target).
+            for k in range(self.loss_mask_first_score_slots):
+                pos = ALTERNATING_START + 6 * k
+                if pos + 3 > len(labels):
+                    break
+                labels[pos:pos + 3] = -100
+
+        if self.rand_replace_prob > 0:
+            # arXiv:2606.16246 Eq. 1 with alpha_m = 0: corrupt INPUTS only, keep
+            # the label sequence untouched, and protect structural tokens. The
+            # paper draws uniformly from the non-special vocab; here the
+            # role-respecting default draws from the token's own legal range
+            # (onset/dur/pitch/control) -- a cross-range token in the packed
+            # format is not "plausible but incorrect", it is illegal, and the
+            # model would learn to detect corruption instead of denoise it.
+            body = torch.arange(ALTERNATING_START, len(augmented_tokens))
+            sel = body[torch.rand(len(body)) < self.rand_replace_prob]
+            if len(sel):
+                if self.rand_replace_whole_vocab:
+                    augmented_tokens[sel] = torch.randint(
+                        0, VOCAB_SIZE, (len(sel),), dtype=augmented_tokens.dtype)
+                else:
+                    for pos in sel.tolist():
+                        lo, hi = _role_range(pos)
+                        augmented_tokens[pos] = int(torch.randint(lo, hi, (1,)))
 
         attention_mask = torch.ones_like(augmented_tokens)
 
@@ -547,11 +595,99 @@ class TokenizedDataset(Dataset):
             "score_mask": score_mask,
         }
 
+def enable_fast_kernels():
+    """TF32 + SDPA flash/mem-efficient. No-op on CPU."""
+    torch.set_float32_matmul_precision("high")
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+
+
+def unwrap_ddp(module):
+    """Peel DDP/DataParallel only.
+
+    ``accelerator.unwrap_model`` also tries to unwrap ``torch.compile``. On
+    DDP(OptimizedModule(...)) Accelerate's ``has_compiled_regions`` is true
+    but DDP has no ``_orig_mod``, so it KeyErrors (LTLM job 81476).
+    """
+    while isinstance(module, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
+        module = module.module
+    return module
+
+
+def compiled_root(module):
+    """Walk ``_orig_mod`` so checkpoints save the real HuggingFace module."""
+    root = module
+    while hasattr(root, "_orig_mod"):
+        root = root._orig_mod
+    return root
+
+
+def saveable_model(model):
+    """HF module under DDP and/or torch.compile, for ``save_pretrained`` / L2."""
+    return compiled_root(unwrap_ddp(model))
+
+
+def compile_causal_lm(model, enabled, mode):
+    """Compile the GPT-2 causal LM. Unlike LTLM, this forward is tensor-in/out."""
+    if not enabled:
+        return model
+    try:
+        torch._dynamo.config.optimize_ddp = False
+        torch._dynamo.config.suppress_errors = True
+        compiled = torch.compile(model, mode=mode, dynamic=True)
+        print(
+            f"torch.compile enabled on GPT-2 (mode={mode}, dynamic=True); "
+            "inductor errors fall back to eager"
+        )
+        return compiled
+    except Exception as exc:
+        print(f"torch.compile failed, running eager: {exc}")
+        return model
+
+
+def load_causal_lm(model_name, attn_implementation, extra_kwargs=None):
+    kwargs = dict(trust_remote_code=True, use_cache=False)
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
+    if attn_implementation and attn_implementation != "eager":
+        try:
+            return AutoModelForCausalLM.from_pretrained(
+                model_name, attn_implementation=attn_implementation, **kwargs
+            )
+        except (TypeError, ValueError) as exc:
+            print(f"attn_implementation={attn_implementation!r} rejected ({exc}); falling back")
+    return AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
+
+
+def make_adamw(params, lr):
+    adam_kw = dict(lr=lr, eps=1e-6, weight_decay=0.01, betas=(0.9, 0.999))
+    if torch.cuda.is_available():
+        adam_kw["fused"] = True
+    try:
+        return AdamW(params, **adam_kw)
+    except RuntimeError:
+        adam_kw.pop("fused", None)
+        return AdamW(params, **adam_kw)
+
+
+def l2_anchor_loss_addend(l2_penalty, coefficient, gradient_accumulation_steps):
+    """Last-microbatch L2 term whose gradient matches adding L2 every microbatch.
+
+    ``accelerator.backward`` divides by ``gradient_accumulation_steps``, and
+    weights do not change during accumulation, so computing the penalty once
+    and multiplying by that factor is the same Adam update.
+    """
+    return coefficient * l2_penalty * gradient_accumulation_steps
+
+
 def _get_input_embedding_layer(model):
-    if hasattr(model, "get_input_embeddings"):
-        return model.get_input_embeddings()
-    if hasattr(model, "module") and hasattr(model.module, "get_input_embeddings"):
-        return model.module.get_input_embeddings()
+    root = saveable_model(model)
+    if hasattr(root, "get_input_embeddings"):
+        return root.get_input_embeddings()
     raise AttributeError("Model does not expose get_input_embeddings()")
 
 
@@ -1028,6 +1164,35 @@ def main():
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=4) 
     parser.add_argument('--learning_rate', type=float, default=3e-5)
+    parser.add_argument('--optimizer', choices=['adamw', 'muon', 'fisher_sam'], default='adamw')
+    parser.add_argument('--muon_lr', type=float, default=2e-3,
+                        help='Muon lr for 2D hidden matrices (fine-tune scale)')
+    parser.add_argument('--muon_wd', type=float, default=3.0,
+                        help='decoupled weight decay on Muon matrices; the '
+                             '"Pre-training under infinite compute" recipe '
+                             'tunes WD ~30x above the 0.1 standard')
+    parser.add_argument('--emb_wd', type=float, default=0.3,
+                        help='decoupled weight decay on embedding/head params')
+    parser.add_argument('--dagger_file', type=Path, default=None,
+                        help='optional second data file of DAgger windows; '
+                             'loss_mask_first_score_slots applies to THESE '
+                             'windows only, the main data_file stays unmasked')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='seed for init/data order (model-soup arm needs it)')
+    parser.add_argument('--rand_replace_prob', type=float, default=0.0,
+                        help='arXiv:2606.16246 token-level noise: replace this '
+                             'fraction of INPUT content tokens with a random '
+                             'token; labels keep the original ids')
+    parser.add_argument('--rand_replace_whole_vocab', action='store_true',
+                        help='draw replacements from the whole vocab instead of '
+                             "the token's own role range (paper-literal, but "
+                             'structurally illegal in the packed format)')
+    parser.add_argument('--sam_rho', type=float, default=0.05,
+                        help='Fisher-SAM neighbourhood radius')
+    parser.add_argument('--sam_eta', type=float, default=1.0,
+                        help='Fisher-SAM curvature strength (0 = plain SAM)')
+    parser.add_argument('--loss_mask_first_score_slots', type=int, default=0,
+                        help='mask loss on the first N body score slots (DAgger windows with self-predicted overlap context)')
     parser.add_argument('--max_steps', type=int, default=40000)
     parser.add_argument('--save_steps', type=int, default=2500)
     parser.add_argument('--eval_steps', type=int, default=1000)
@@ -1100,6 +1265,26 @@ def main():
         help='Coefficient for L2 anchoring to the model weights immediately after load/resize. Set to 0 to disable.',
     )
     parser.add_argument(
+        '--compile',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='torch.compile the causal LM. TensorRT / speculative decoding do not apply '
+             '(this loop is teacher-forced F+B, not AR decode).',
+    )
+    parser.add_argument(
+        '--compile_mode',
+        type=str,
+        default='default',
+        choices=['default', 'reduce-overhead', 'max-autotune'],
+        help='Inductor mode. default fuses kernels without CUDA-graph address constraints.',
+    )
+    parser.add_argument(
+        '--attn_implementation',
+        type=str,
+        default='sdpa',
+        help='GPT-2 attention kernel. sdpa uses PyTorch flash/mem-efficient kernels on Ada.',
+    )
+    parser.add_argument(
         '--wandb_project',
         type=str,
         default='anticipation-asap',
@@ -1120,6 +1305,18 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.seed is not None:
+        import random as _random
+        _random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        try:
+            from accelerate.utils import set_seed as _set_seed
+            _set_seed(args.seed)
+        except Exception:
+            pass
+        print(f"seeded everything with {args.seed}")
     if args.original_weight_l2 < 0:
         raise ValueError("--original_weight_l2 must be non-negative.")
     if args.eval_num_workers < 0:
@@ -1130,6 +1327,8 @@ def main():
 
     validate_selected_cuda_device_or_raise(force_cpu=args.force_cpu)
     report_runtime_device(force_cpu=args.force_cpu)
+    if torch.cuda.is_available() and not args.force_cpu:
+        enable_fast_kernels()
     print(f"Per-rank effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"Final device confirmation: {device}")
     
@@ -1206,11 +1405,28 @@ def main():
             onset_jitter_std=args.onset_jitter_std,
             dur_jitter_range=args.dur_jitter_range,
             mask_prob=args.mask_prob,
+            rand_replace_prob=args.rand_replace_prob,
+            rand_replace_whole_vocab=args.rand_replace_whole_vocab,
+            loss_mask_first_score_slots=(0 if args.dagger_file
+                                         else args.loss_mask_first_score_slots),
             transpose_range_semitones=args.transpose_range_semitones,
             tempo_scale_range=args.tempo_scale_range,
             loss_mask_performance_tokens=args.loss_mask_performance_tokens,
             is_training=True,
         )
+        if args.dagger_file:
+            # DAgger aggregate D0 u Dnew: clean GT windows (unmasked loss)
+            # concatenated with dirty-context DAgger windows whose overlap
+            # loss is masked (model output as context, GT as target).
+            from torch.utils.data import ConcatDataset
+            dagger_dataset = TokenizedDataset(
+                args.dagger_file,
+                loss_mask_first_score_slots=args.loss_mask_first_score_slots,
+                is_training=True,
+            )
+            print(f"DAgger aggregate: {len(train_dataset)} clean + "
+                  f"{len(dagger_dataset)} dagger windows")
+            train_dataset = ConcatDataset([train_dataset, dagger_dataset])
         if len(train_dataset) == 0:
             raise ValueError(
                 "Training dataset is empty. Check the tokenized training file and rerun tokenization if needed."
@@ -1246,23 +1462,19 @@ def main():
         
         # Load model with memory optimizations
         print(f"Loading model {args.model_name}...")
-        model_kwargs = {
-            "trust_remote_code": True,
-            "use_cache": False,  # Important for training
-        }
-        
+        extra_kwargs = {}
         if args.reduce_memory and torch.cuda.is_available():
             print("Using memory reduction techniques...")
-            # BF16 is more stable than FP16
-            model_kwargs.update({
+            extra_kwargs.update({
                 "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 "low_cpu_mem_usage": True,
             })
-        
+
         try:
-            model = AutoModelForCausalLM.from_pretrained(
+            model = load_causal_lm(
                 args.model_name,
-                **model_kwargs
+                args.attn_implementation,
+                extra_kwargs=extra_kwargs or None,
             )
         except Exception as e:
             print(f"Error loading model with advanced options: {e}")
@@ -1281,6 +1493,10 @@ def main():
             print("Model embeddings resized successfully")
         else:
             print(f"Model vocabulary size matches tokenization ({VOCAB_SIZE})")
+        print(
+            "Attention implementation: "
+            f"{getattr(model.config, '_attn_implementation', None)}"
+        )
         
         # Check memory after loading model
         print("GPU memory after loading model:")
@@ -1289,21 +1505,51 @@ def main():
         # DON'T manually move model to device - let accelerator handle it!
         # This is critical for multi-GPU training
         
+        compile_on = bool(args.compile) and torch.cuda.is_available() and not args.force_cpu
+        model = compile_causal_lm(model, compile_on, args.compile_mode)
+
         # Setup optimizer with gradient clipping to prevent exploding gradients
         # Using a lower learning rate and better epsilon value for numerical stability
-        optimizer = AdamW(
-            model.parameters(), 
-            lr=args.learning_rate,
-            eps=1e-6,  # More stable epsilon
-            weight_decay=0.01,
-            betas=(0.9, 0.999),  # Stable default betas
-        )
+        if args.optimizer == "muon":
+            from muon import build_muon_for_causal_lm
+            optimizer = build_muon_for_causal_lm(
+                model, muon_lr=args.muon_lr, muon_wd=args.muon_wd,
+                adam_lr=args.learning_rate, emb_wd=args.emb_wd)
+        else:
+            optimizer = make_adamw(model.parameters(), args.learning_rate)
         
         # Prepare for training with accelerate - this handles device placement
         model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
         print(f"After accelerator preparation, model device: {next(model.parameters()).device}")
 
-        base_model = accelerator.unwrap_model(model)
+        # Fisher SAM (Kim et al., ICML 2022) wraps the PREPARED optimizer instead of
+        # replacing it: accelerate and the LR scheduler keep talking to the same AdamW,
+        # and only the ascent/restore machinery lives in the wrapper. `sam is None`
+        # leaves the adamw and muon paths on exactly the code they ran before.
+        sam = None
+        if args.optimizer == "fisher_sam":
+            from sam import FisherSAM
+            if accelerator.num_processes > 1:
+                raise ValueError(
+                    "--optimizer fisher_sam is single-process only: the m-sharpness "
+                    "gradient accumulator is rank-local, so DDP ranks would step on "
+                    "different gradients and silently diverge. Run one GPU "
+                    "(batch_size 8 x gradient_accumulation_steps 8 = effective 64)."
+                )
+            sam = FisherSAM(
+                model.parameters(),
+                optimizer,
+                rho=args.sam_rho,
+                eta=args.sam_eta,
+            )
+            if accelerator.is_main_process:
+                print(f"Fisher SAM enabled: {sam!r}")
+                print(
+                    "Fisher SAM does TWO forward/backward passes per micro-batch "
+                    "(expect ~2x the usual s/it)."
+                )
+
+        base_model = saveable_model(model)
         original_weight_references = {}
         if args.original_weight_l2 > 0:
             (
@@ -1491,14 +1737,22 @@ def main():
                         with accelerator.accumulate(model):
                             # Forward pass with gradient scaling
                             outputs = forward_batch(model, batch)
-                            loss = outputs.loss
+                            ce_loss = outputs.loss
+                            loss = ce_loss
                             l2_penalty = None
-                            if original_weight_references:
+                            # Weights are frozen during accumulation, so one L2
+                            # evaluation on the last microbatch (scaled by accum)
+                            # matches adding the penalty on every microbatch.
+                            if original_weight_references and accelerator.sync_gradients:
                                 l2_penalty = _compute_original_weight_l2_penalty(
                                     base_model,
                                     original_weight_references,
                                 )
-                                loss = loss + args.original_weight_l2 * l2_penalty
+                                loss = ce_loss + l2_anchor_loss_addend(
+                                    l2_penalty,
+                                    args.original_weight_l2,
+                                    args.gradient_accumulation_steps,
+                                )
                             
                             # Keep NaN/Inf recovery in lockstep across ranks to avoid DDP hangs.
                             local_invalid_loss = bool(torch.isnan(loss).any() or torch.isinf(loss).any())
@@ -1510,13 +1764,71 @@ def main():
                                         f"{accelerator.num_processes} rank(s); skipping this synchronized step."
                                     )
                                 optimizer.zero_grad()
+                                if sam is not None:
+                                    sam.zero_param_grads()
+                                    sam.reset_accumulation()
                                 continue
                                 
                             # Backward pass
-                            accelerator.backward(loss)
+                            if sam is None:
+                                accelerator.backward(loss)
+                            else:
+                                # --- Fisher SAM, per-micro-batch (m-sharpness) ---
+                                # (i) a REAL zero: AcceleratedOptimizer.zero_grad() is a
+                                # no-op while sync_gradients is False, and the ascent
+                                # direction must be built from THIS micro-batch alone.
+                                sam.zero_param_grads(set_to_none=False)
+                                # (ii) g_i at w
+                                accelerator.backward(loss)
+                                # (iii) w <- w + e_w. grad_scale undoes the 1/N that
+                                # accelerator.backward applied: plain SAM is scale
+                                # invariant but the Fisher metric 1+eta*g^2 is not.
+                                sam.first_step(
+                                    grad_scale=args.gradient_accumulation_steps
+                                )
+                                # (iv) drop g_i; only the perturbation is carried over
+                                sam.zero_param_grads(set_to_none=False)
+                                # (v) g'_i at w + e_w, on the SAME micro-batch
+                                sam_outputs = forward_batch(model, batch)
+                                sam_loss = sam_outputs.loss
+                                if l2_penalty is not None:
+                                    # The anchor must be re-evaluated at the perturbed
+                                    # point: the first pass's graph is already freed.
+                                    sam_loss = sam_loss + l2_anchor_loss_addend(
+                                        _compute_original_weight_l2_penalty(
+                                            base_model,
+                                            original_weight_references,
+                                        ),
+                                        args.original_weight_l2,
+                                        args.gradient_accumulation_steps,
+                                    )
+                                sam_loss_invalid = bool(
+                                    torch.isnan(sam_loss).any()
+                                    or torch.isinf(sam_loss).any()
+                                )
+                                # Always run the backward (uniform DDP/hook path);
+                                # a poisoned micro-batch is dropped at (vii) instead.
+                                accelerator.backward(sam_loss)
+                                # (vi) w <- w, bitwise
+                                sam.restore()
+                                # (vii) hand-accumulate g'_i. p.grad cannot double as
+                                # the accumulator because step (i) has to clear it.
+                                if sam_loss_invalid:
+                                    if accelerator.is_main_process:
+                                        print(
+                                            "WARNING: NaN or Inf loss at the SAM-perturbed "
+                                            "point; dropping this micro-batch's gradient."
+                                        )
+                                else:
+                                    sam.accumulate_grads()
                             
                             # Only update optimizer and scheduler when gradients are synchronized
                             if accelerator.sync_gradients:
+                                if sam is not None:
+                                    # Publish the accumulated perturbed gradient into
+                                    # .grad, so the NaN guard, the clipping and the base
+                                    # optimizer all act on the gradient actually applied.
+                                    sam.write_accumulated_grads()
                                 invalid_grad_name = _find_invalid_gradient_parameter(model)
                                 invalid_grad_processes = _count_flagged_processes(
                                     accelerator,
@@ -1530,6 +1842,9 @@ def main():
                                             f"{accelerator.num_processes} rank(s); skipping optimizer step.{detail}"
                                         )
                                     optimizer.zero_grad()
+                                    if sam is not None:
+                                        sam.zero_param_grads()
+                                        sam.reset_accumulation()
                                     continue
 
                                 # Gradient clipping - industry standard value
@@ -1539,8 +1854,11 @@ def main():
                                 optimizer.step()
                                 scheduler.step()
                                 optimizer.zero_grad()
+                                log_loss = ce_loss
+                                if l2_penalty is not None:
+                                    log_loss = ce_loss + args.original_weight_l2 * l2_penalty
                                 reduced_loss = accelerator.reduce(
-                                    loss.detach().to(device=accelerator.device, dtype=torch.float64),
+                                    log_loss.detach().to(device=accelerator.device, dtype=torch.float64),
                                     reduction="mean",
                                 ).item()
                                 reduced_l2_penalty = None
@@ -1604,8 +1922,7 @@ def main():
                                         os.makedirs(checkpoint_dir, exist_ok=True)
                                     accelerator.wait_for_everyone()
                                     
-                                    # Unwrap model before saving
-                                    unwrapped_model = accelerator.unwrap_model(model)
+                                    unwrapped_model = saveable_model(model)
                                     unwrapped_model.save_pretrained(
                                         checkpoint_dir,
                                         is_main_process=accelerator.is_main_process,
@@ -1639,6 +1956,11 @@ def main():
                                 print("Distributed run detected; aborting instead of skipping locally to avoid rank desync.")
                                 raise
                             print("Trying to recover by skipping this batch...")
+                            if sam is not None and sam.is_perturbed:
+                                # never resume training from the ascent point
+                                sam.restore()
+                                sam.zero_param_grads()
+                                sam.reset_accumulation()
                             optimizer.zero_grad()
                             continue
                         else:
@@ -1669,7 +1991,7 @@ def main():
                     if accelerator.is_main_process:
                         os.makedirs(final_dir, exist_ok=True)
                     accelerator.wait_for_everyone()
-                    unwrapped_model = accelerator.unwrap_model(model)
+                    unwrapped_model = saveable_model(model)
                     unwrapped_model.save_pretrained(
                         final_dir,
                         is_main_process=accelerator.is_main_process,

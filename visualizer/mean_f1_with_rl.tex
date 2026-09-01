@@ -1,0 +1,58 @@
+\documentclass[border=14pt]{standalone}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[table]{xcolor}
+
+\definecolor{headerblue}{HTML}{EAF2F8}
+\definecolor{ruleblue}{HTML}{386A8C}
+\definecolor{bandgrey}{HTML}{F7F9FB}
+\definecolor{muted}{HTML}{4C5661}
+
+\begin{document}
+\begin{minipage}{15.4cm}
+  \centering
+  {\Large\bfseries Mean Note-Level F1 Across 24 Pieces\par}
+  \vspace{3pt}
+  {\small\color{muted}SUBMean Note-Level F1 Across 24 Pieces\par}
+  \vspace{10pt}
+
+  \renewcommand{\arraystretch}{1.35}
+  \setlength{\tabcolsep}{12pt}
+  \begin{tabular}{>{\raggedright\arraybackslash}p{2.5cm}
+                  >{\raggedright\arraybackslash}p{4.5cm} r r r}
+    \arrayrulecolor{ruleblue}
+    \toprule
+    \rowcolor{headerblue}
+    \textbf{Model} &
+    \textbf{Checkpoint} &
+    \textbf{Onset + pitch} &
+    \textbf{+ duration} &
+    \textbf{$\boldsymbol{\pm 1}$ bin} \\
+    \midrule
+    Ours (FT)    & best val loss \textcolor{muted}{(ckpt 2500)} & 18.9\% & 11.1\% & 22.7\% \\
+    \rowcolor{bandgrey}
+                 & best AR pitch \textcolor{muted}{(ckpt 7500)} & 18.8\% & 13.5\% & 23.6\% \\
+    Ours (LoRA)  & best val loss \textcolor{muted}{(ckpt 10000)} & 19.5\% & 12.4\% & 23.6\% \\
+    \rowcolor{bandgrey}
+                 & best AR pitch \textcolor{muted}{(ckpt 15000)} & 17.0\% & 10.9\% & 19.1\% \\
+    \midrule
+    Ours (GRPO)  & best val reward \textcolor{muted}{(step 250)} & 17.2\% & 10.4\% & 21.0\% \\
+    Ours (PPO)   & best val reward \textcolor{muted}{(step 775)} & 18.6\% & 11.0\% & 21.8\% \\
+    \midrule
+    Paper 1      & Zeng+ \textcolor{muted}{(joint-apt-epr)} & 11.6\% & 7.6\% & 17.4\% \\
+    Paper 2      & Beyer \& Dai \textcolor{muted}{(MIDI2ScoreTF)} & \textbf{21.5\%} & \textbf{15.9\%} & \textbf{28.8\%} \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{8pt}
+  {\footnotesize\color{muted}
+    Macro-average over pieces. ``$\pm 1$ bin'' permits an onset error of at most
+    one 10\,ms score-grid bin while requiring an exact pitch match.
+    Shaded rows are the checkpoint chosen by autoregressive pitch accuracy.
+    GRPO and PPO are post-trained from Ours (FT) best val loss and selected by
+    validation reward (exact-match onset + duration + pitch).\par}
+\end{minipage}
+\end{document}

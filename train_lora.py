@@ -1210,6 +1210,39 @@ def main():
         dest='lora_train_embeddings',
         help='Freeze the resized embeddings / LM head instead of training them.',
     )
+    # ---- Bayesian LoRA (mean-field variational inference over the lora_B matrices) ----
+    parser.add_argument(
+        '--bayesian',
+        action='store_true',
+        help=(
+            'Train the LoRA adapter with mean-field variational inference (Bayes-by-Backprop): '
+            'each lora_B entry gets a Gaussian posterior N(mu, softplus(rho)^2), sampled with the '
+            'reparameterization trick during training and replaced by its mean mu at eval time. '
+            'Adds KL(q || N(0, prior_std^2)) / num_batches to the loss. Off by default; without '
+            'this flag training is bit-for-bit the ordinary deterministic LoRA run.'
+        ),
+    )
+    parser.add_argument(
+        '--kl_weight',
+        type=float,
+        default=1.0,
+        help='Multiplier on the (already 1/num_batches-scaled) KL term of the ELBO.',
+    )
+    parser.add_argument(
+        '--prior_std',
+        type=float,
+        default=0.1,
+        help='Standard deviation of the zero-mean Gaussian prior over the lora_B entries.',
+    )
+    parser.add_argument(
+        '--init_sigma',
+        type=float,
+        default=1e-4,
+        help=(
+            'Initial posterior standard deviation for every lora_B entry (rho is initialised to '
+            'softplus^-1(init_sigma)). Small by default so training starts at the deterministic LoRA.'
+        ),
+    )
     parser.add_argument(
         '--wandb_project',
         type=str,
@@ -1235,6 +1268,13 @@ def main():
         raise ValueError("--original_weight_l2 must be non-negative.")
     if args.eval_num_workers < 0:
         raise ValueError("--eval_num_workers must be non-negative.")
+    if args.bayesian:
+        if args.prior_std <= 0:
+            raise ValueError("--prior_std must be positive.")
+        if args.init_sigma <= 0:
+            raise ValueError("--init_sigma must be positive.")
+        if args.kl_weight < 0:
+            raise ValueError("--kl_weight must be non-negative.")
     if wandb is None and args.wandb_mode != 'disabled':
         print("WARNING: wandb is not installed; falling back to --wandb_mode disabled.")
         args.wandb_mode = 'disabled'
@@ -1427,6 +1467,31 @@ def main():
         )
         model.print_trainable_parameters()
 
+        # ---- Optional: turn the adapter into a mean-field Bayesian LoRA ----
+        # Bayes-by-Backprop (Blundell et al. 2015) over the lora_B matrices only:
+        # each B entry gets q(B) = N(mu, softplus(rho)^2), sampled fresh every
+        # training forward and replaced by mu in eval(). B (not A) carries the
+        # posterior because Delta_W = (alpha/r) B A is invariant to (A, B) ->
+        # (cA, B/c), so putting a posterior on both factors is non-identifiable;
+        # B is also the zero-initialised factor, so a tiny init_sigma starts
+        # training at the deterministic LoRA solution. mu IS lora_B.weight, so
+        # checkpoints / merge_and_unload() see the posterior mean unchanged.
+        bayes_info = None
+        if args.bayesian:
+            from bayes_lora import make_lora_bayesian, lora_kl, lora_sigma_stats
+            bayes_info = make_lora_bayesian(
+                model,
+                prior_std=args.prior_std,
+                init_sigma=args.init_sigma,
+            )
+            print(
+                f"Bayesian LoRA enabled: {bayes_info['num_modules']} lora_B posteriors, "
+                f"{bayes_info['num_parameters']:,} variational (rho) parameters, "
+                f"prior_std={args.prior_std}, init_sigma={args.init_sigma}, "
+                f"kl_weight={args.kl_weight}"
+            )
+            model.print_trainable_parameters()
+
         # Check memory after loading model
         print("GPU memory after loading model:")
         print_gpu_memory_stats()
@@ -1439,8 +1504,28 @@ def main():
         # Only the LoRA adapters (and any modules_to_save copies) are trainable;
         # the frozen base weights are excluded from the optimizer entirely.
         trainable_params = [p for p in model.parameters() if p.requires_grad]
+        optimizer_params = trainable_params
+        if args.bayesian:
+            # Decoupled weight decay is a MAP prior on the parameter itself; applying it
+            # to rho would pull the posterior width toward softplus(0) = 0.69 for no
+            # reason. The prior over sigma is already expressed by the KL term, so the
+            # variational parameters get weight_decay=0 (mu keeps the usual decay).
+            rho_params = [
+                p for n, p in model.named_parameters()
+                if p.requires_grad and n.split('.')[-1] == 'rho'
+            ]
+            rho_ids = {id(p) for p in rho_params}
+            other_params = [p for p in trainable_params if id(p) not in rho_ids]
+            optimizer_params = [
+                {"params": other_params},
+                {"params": rho_params, "weight_decay": 0.0},
+            ]
+            print(
+                f"Optimizer param groups: {len(other_params)} decayed tensors, "
+                f"{len(rho_params)} rho tensors with weight_decay=0"
+            )
         optimizer = AdamW(
-            trainable_params,
+            optimizer_params,
             lr=args.learning_rate,
             eps=1e-6,  # More stable epsilon
             weight_decay=0.01,
@@ -1472,6 +1557,21 @@ def main():
         elif accelerator.is_main_process:
             print("Original-weight L2 regularization disabled.")
         
+        # Minibatch weighting for the ELBO's KL term. The standard Bayes-by-Backprop
+        # objective is sum_i CE_i + KL, split over the M minibatches of one epoch as
+        # CE_batch + KL/M. Here one "minibatch" is one *optimizer* step (the effective
+        # batch = batch_size x grad_accum x world_size), so M = optimizer steps per
+        # epoch. accelerator.backward() divides each micro-batch loss by grad_accum, so
+        # adding kl_weight * KL / M to every micro-batch loss contributes exactly
+        # kl_weight * KL / M per optimizer step.
+        num_kl_batches = max(1, len(train_dataloader) // args.gradient_accumulation_steps)
+        if args.bayesian and accelerator.is_main_process:
+            print(
+                f"ELBO KL scaling: 1/{num_kl_batches} "
+                f"(optimizer steps per epoch; {len(train_dataloader)} micro-batches / "
+                f"{args.gradient_accumulation_steps} accumulation steps)"
+            )
+
         # Learning rate scheduler - cosine decay from 3e-5 to 3e-6 (no warmup)
         initial_lr = args.learning_rate  # 3e-5
         final_lr = 3e-6
@@ -1524,6 +1624,8 @@ def main():
         # Keep progress/logging on the main process so multi-GPU runs don't spam duplicate output.
         progress_bar = tqdm(total=args.max_steps, desc="Training", disable=not accelerator.is_main_process)
         training_failed = False
+        # One-shot KL-vs-CE magnitude report at the first optimizer micro-batch.
+        logged_initial_kl = False
 
         def run_validation(validation_label):
             validation_step = int(completed_steps)
@@ -1640,6 +1742,7 @@ def main():
                             # Forward pass with gradient scaling
                             outputs = forward_batch(model, batch)
                             loss = outputs.loss
+                            ce_loss_detached = loss.detach() if args.bayesian else None
                             l2_penalty = None
                             if original_weight_references:
                                 l2_penalty = _compute_original_weight_l2_penalty(
@@ -1647,7 +1750,36 @@ def main():
                                     original_weight_references,
                                 )
                                 loss = loss + args.original_weight_l2 * l2_penalty
-                            
+
+                            # Variational (Bayes-by-Backprop) KL term of the ELBO.
+                            kl_raw = None
+                            if args.bayesian:
+                                kl_raw = lora_kl(model)
+                                loss = loss + args.kl_weight * kl_raw / num_kl_batches
+                                if not logged_initial_kl and accelerator.is_main_process:
+                                    logged_initial_kl = True
+                                    ce_loss_value = float(ce_loss_detached.item())
+                                    kl_term_value = (
+                                        args.kl_weight * float(kl_raw.detach().item()) / num_kl_batches
+                                    )
+                                    ratio = kl_term_value / max(ce_loss_value, 1e-12)
+                                    print(
+                                        f"[bayes] step 0 magnitudes: CE={ce_loss_value:.4f}, "
+                                        f"KL_raw={float(kl_raw.detach().item()):.4e}, "
+                                        f"KL_term=kl_weight*KL/{num_kl_batches}={kl_term_value:.4e}, "
+                                        f"KL_term/CE={ratio:.3e}"
+                                    )
+                                    if ratio > 10.0:
+                                        print(
+                                            "[bayes] WARNING: the KL term dominates the cross-entropy by "
+                                            f"{ratio:.3e}x at step 0. The ELBO will be optimized almost "
+                                            "entirely by driving q toward the prior (mu -> 0, "
+                                            f"sigma -> prior_std={args.prior_std}), which destroys the "
+                                            "adapter. Consider a much smaller --kl_weight "
+                                            f"(~{args.kl_weight / ratio:.2e} makes the two terms comparable)."
+                                        )
+
+
                             # Keep NaN/Inf recovery in lockstep across ranks to avoid DDP hangs.
                             local_invalid_loss = bool(torch.isnan(loss).any() or torch.isinf(loss).any())
                             invalid_loss_processes = _count_flagged_processes(accelerator, local_invalid_loss)
@@ -1699,7 +1831,16 @@ def main():
                                         reduction="mean",
                                     ).item()
                                     reduced_anchor_term = args.original_weight_l2 * reduced_l2_penalty
-                                
+                                reduced_kl = None
+                                if kl_raw is not None:
+                                    # Every rank holds the same (replicated) posterior, so this
+                                    # reduce is a no-op numerically; it keeps the logging path
+                                    # identical to the other reduced scalars.
+                                    reduced_kl = accelerator.reduce(
+                                        kl_raw.detach().to(device=accelerator.device, dtype=torch.float64),
+                                        reduction="mean",
+                                    ).item()
+
                                 # Only update step counters when we actually update weights
                                 completed_steps += 1
                                 progress_bar.update(1)
@@ -1715,6 +1856,23 @@ def main():
                                         if reduced_l2_penalty is not None:
                                             train_log["train/anchor_l2"] = reduced_l2_penalty
                                             train_log["train/anchor_term"] = reduced_anchor_term
+                                        if reduced_kl is not None:
+                                            # Posterior diagnostics: kl_term is what actually
+                                            # enters the loss; sigma_mean going to 0 means the
+                                            # posterior has collapsed to a point estimate.
+                                            sigma_stats = lora_sigma_stats(model)
+                                            train_log["train/kl"] = reduced_kl
+                                            train_log["train/kl_term"] = (
+                                                args.kl_weight * reduced_kl / num_kl_batches
+                                            )
+                                            train_log["train/ce_loss"] = (
+                                                reduced_loss
+                                                - args.kl_weight * reduced_kl / num_kl_batches
+                                            )
+                                            train_log["train/posterior_sigma_mean"] = sigma_stats["sigma_mean"]
+                                            train_log["train/posterior_sigma_min"] = sigma_stats["sigma_min"]
+                                            train_log["train/posterior_sigma_max"] = sigma_stats["sigma_max"]
+                                            train_log["train/posterior_mu_abs_mean"] = sigma_stats["mu_abs_mean"]
                                         wandb.log(train_log, step=completed_steps)
 
                                     # Print more precise learning rate
@@ -1724,9 +1882,17 @@ def main():
                                             f", AnchorL2: {reduced_l2_penalty:.6e}, "
                                             f"AnchorTerm: {reduced_anchor_term:.6e}"
                                         )
+                                    bayes_detail = ""
+                                    if reduced_kl is not None:
+                                        bayes_stats = lora_sigma_stats(model)
+                                        bayes_detail = (
+                                            f", KL: {reduced_kl:.6e}, "
+                                            f"KLterm: {args.kl_weight * reduced_kl / num_kl_batches:.6e}, "
+                                            f"sigma_mean: {bayes_stats['sigma_mean']:.4e}"
+                                        )
                                     print(
                                         f"Step: {completed_steps}/{args.max_steps}, Loss: {reduced_loss:.4f}, "
-                                        f"LR: {current_lr:.8e}{l2_detail}"
+                                        f"LR: {current_lr:.8e}{l2_detail}{bayes_detail}"
                                     )
 
                                     # Check for NaN parameters periodically

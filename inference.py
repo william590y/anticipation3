@@ -209,6 +209,8 @@ def batched_autoregressive_generate_score(
     device: str,
     constrain_score_tokens: bool = True,
     ground_truth_score_tokens_to_feed: int = 1,
+    fast=None,
+    decoder=None,
 ) -> torch.Tensor:
     """Batched version of ``autoregressive_generate_score``.
 
@@ -224,9 +226,43 @@ def batched_autoregressive_generate_score(
     from the batch shape rather than per row.
 
     Returns the generated context, shape ``(batch, length)``, on ``device``.
+
+    ``fast`` opts into ``anticipation.fast_decode.rollout_score_slots_fast`` --
+    same decode, without the per-step Python and kernel-launch overhead (see
+    that module). Off by default so no existing caller changes behaviour; when
+    on it is verified bit-identical on greedy decode by
+    ``bench/check_identical.py``. It only applies to the plain rollout, i.e.
+    ``constrain_score_tokens=True`` and ``ground_truth_score_tokens_to_feed=0``
+    -- which is what ``train.py``/``train_lora.py`` validation and
+    ``eval_base_score_ppl.py`` all pass. Any other combination silently falling
+    back would hide a config mistake, so it raises instead.
     """
     if ground_truth_score_tokens_to_feed < 0:
         raise ValueError("ground_truth_score_tokens_to_feed must be non-negative")
+
+    if fast:
+        if ground_truth_score_tokens_to_feed != 0 or not constrain_score_tokens:
+            raise ValueError(
+                "fast decode supports only constrain_score_tokens=True with "
+                "ground_truth_score_tokens_to_feed=0"
+            )
+        if score_start_idx != ALTERNATING_START:
+            raise ValueError(
+                f"fast decode assumes the packed body starts at {ALTERNATING_START}"
+            )
+        from anticipation.fast_decode import rollout_score_slots_fast
+
+        options = fast if isinstance(fast, dict) else {}
+        return rollout_score_slots_fast(
+            model,
+            tokens_batch.to(device),
+            temperature=0.0,
+            constrain=True,
+            collect_logprobs=False,
+            collect_gt_ce=False,
+            decoder=decoder,
+            **options,
+        )["rolled"]
 
     tokens_batch = tokens_batch.to(device)
     length = tokens_batch.shape[1]
